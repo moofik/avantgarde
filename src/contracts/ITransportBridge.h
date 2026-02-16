@@ -1,0 +1,8 @@
+//
+// Created by Alexander Orlovsky on 17.02.2026.
+//
+
+#ifndef AVANTGARDE_ITRANSPORTBRIDGE_H
+#define AVANTGARDE_ITRANSPORTBRIDGE_H
+
+#endif //AVANTGARDE_ITRANSPORTBRIDGE_H
