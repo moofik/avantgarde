@@ -25,6 +25,8 @@
 17. Пример привязки движка к платформенному аудио
 18. Аудио-рекордер
 19. Аудио‑граф и ноды (контракты)
+20. RT-хуки (`IRtExtension.h`)
+21) Cэмплер/Клип-рекордер (`IClipTrack.h`)
 
 ---
 
@@ -773,3 +775,159 @@ namespace avantgarde {
 
 Статус: стабильная спецификация v1.0. Реализации размещаются в `src/runtime/`, `src/control/`, `src/service/`, `src/platform/` и `src/graph/`, тесты — в `test/` с моками по контрактам. Реализации размещаются в `src/runtime/`, `src/control/`, `src/service/`, `src/platform/` и тесты — в `test/` с моками по контрактам.
 
+
+## 20) `IRtExtension.h` — RT-хуки
+```cpp
+// include/contracts/IRtExtension.h
+#pragma once
+#include "types.h"
+
+namespace avantgarde {
+
+struct IRtExtension {
+virtual ~IRtExtension() = default;
+virtual void onBlockBegin(const AudioProcessContext& ctx) noexcept = 0;
+virtual void onBlockEnd(const AudioProcessContext& ctx) noexcept = 0;
+};
+
+} // namespace avantgarde
+```
+
+## 21) `IClipTrack.h` — базовые типы и структуры
+```cpp
+#pragma once
+#include "ITrack.h"
+#include <cstdint>
+
+namespace avantgarde {
+
+/**
+ * IClipTrack
+ *
+ * Capability-интерфейс для трека, который содержит фиксированное
+ * количество клип-слотов (Clip Slots) и умеет:
+ *   - хранить аудиоматериал в слотах
+ *   - воспроизводить его (через RT-команды)
+ *   - записывать входной сигнал в слот
+ *
+ * ВАЖНО:
+ *  - Все методы этого интерфейса вызываются ВНЕ RT.
+ *  - Реальное воспроизведение / запись управляются через onRtCommand().
+ *  - Память под слоты должна быть выделена вне RT.
+ */
+    struct IClipTrack : ITrack {
+        virtual ~IClipTrack() = default;
+
+        /**
+         * Возвращает фиксированное количество слотов у трека.
+         *
+         * Требования:
+         *  - Значение не должно меняться во время работы аудио.
+         *  - Используется UI и ProjectStore для сериализации.
+         *
+         * RT-safe: да (но обычно вызывается вне RT).
+         */
+        virtual uint32_t numSlots() const noexcept = 0;
+
+        /**
+         * Загружает аудиофайл в указанный слот.
+         *
+         * Поведение:
+         *  - Декодирование файла выполняется вне RT.
+         *  - Память под аудиобуфер выделяется вне RT.
+         *  - Старое содержимое слота (если было) освобождается.
+         *
+         * Ограничения:
+         *  - Не должно вызываться во время активного воспроизведения
+         *    этого слота (или реализация должна безопасно остановить его).
+         *
+         * @param slot индекс слота [0 .. numSlots()-1]
+         * @param path путь к аудиофайлу
+         *
+         * @return true если загрузка успешна
+         */
+        virtual bool loadSlotFromFile(uint32_t slot, const char* path) = 0;
+
+        /**
+         * Очищает слот.
+         *
+         * Поведение:
+         *  - Удаляет аудиоданные.
+         *  - Сбрасывает состояние воспроизведения/записи.
+         *
+         * RT:
+         *  - Не вызывается из RT.
+         *
+         * @param slot индекс слота
+         * @return true если слот успешно очищен
+         */
+        virtual bool clearSlot(uint32_t slot) = 0;
+
+        /**
+         * Подготавливает слот к записи.
+         *
+         * Это НЕ запускает запись.
+         *
+         * Поведение:
+         *  - Выделяет/подготавливает буфер записи.
+         *  - Помечает слот как "armed".
+         *  - Реальный старт записи происходит через RT-команду
+         *    (например CmdId::ClipRecordToggle).
+         *
+         * Используется для:
+         *  - подготовки памяти
+         *  - проверки доступных ресурсов
+         *
+         * @param slot индекс слота
+         * @param on   true — подготовить к записи, false — снять arm
+         *
+         * @return true если операция успешна
+         */
+        virtual bool armRecordSlot(uint32_t slot, bool on) = 0;
+
+        /**
+         * Устанавливает длину клипа в тактах (барах).
+         *
+         * Используется для:
+         *  - записи фиксированной длины (например 4 бара)
+         *  - синхронизации с транспортом
+         *
+         * Требует:
+         *  - наличия Transport (BPM + time signature)
+         *
+         * Поведение:
+         *  - Пересчитывает ожидаемую длину в семплах
+         *    (на основе текущего sampleRate и BPM).
+         *
+         * RT:
+         *  - Только вне RT.
+         *
+         * @param slot индекс слота
+         * @param bars количество тактов (>=1)
+         *
+         * @return true если значение принято
+         */
+        virtual bool setSlotLengthInBars(uint32_t slot, uint32_t bars) = 0;
+
+        /**
+         * Устанавливает режим воспроизведения слота.
+         *
+         * loop = true  → клип зацикливается
+         * loop = false → one-shot (проигрывается один раз)
+         *
+         * Влияние:
+         *  - Определяет поведение при достижении конца буфера.
+         *
+         * RT:
+         *  - Только вне RT.
+         *
+         * @param slot индекс слота
+         * @param loop режим зацикливания
+         *
+         * @return true если операция успешна
+         */
+        virtual bool setSlotLooping(uint32_t slot, bool loop) = 0;
+    };
+
+} // namespace avantgarde
+```
