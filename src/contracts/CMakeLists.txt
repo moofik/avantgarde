@@ -9,7 +9,7 @@ file(GLOB_RECURSE CONTRACT_HEADERS CONFIGURE_DEPENDS
 add_library(avantgarde_contracts INTERFACE
         IRtExtension.h
         IClipTrack.h
-        ITransportBridge.h)
+        ITransport.h)
 
 # Дадим IDE явный файлсет заголовков и базовый include-root = src/
 # (CMake ≥ 3.23: FILE_SET HEADERS поддерживается IDE, CLion точно это любит)

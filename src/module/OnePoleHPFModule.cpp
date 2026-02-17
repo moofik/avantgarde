@@ -74,7 +74,7 @@ namespace avantgarde {
             }
         }
 
-        const ParamMeta& getParamMeta(std::size_t idx) const override { return meta_[idx]; }3
+        const ParamMeta& getParamMeta(std::size_t idx) const override { return meta_[idx]; }
 
         // удобный шорткат, если хочешь обращаться напрямую
         void setCutoff01(float v) noexcept { setParam(kParamCutoff, v); }
@@ -88,7 +88,8 @@ namespace avantgarde {
         float mapNormToHz_(float t) const noexcept {
             const float nyq45 = float(0.45 * fs_);
             const float fmax  = std::min(HPF_MAX_HZ, nyq45 > 10.f ? nyq45 : HPF_MAX_HZ);
-            const float fmin  = std::max(1.0f, std::min(HPF_MIN_HZ, fmax * 0.5f));
+            const float fmin  = std::max(1.0f, std::min(
+                    HPF_MIN_HZ, fmax * 0.5f));
             const float lnMin = std::log(fmin);
             const float lnMax = std::log(fmax);
             const float lnF   = lnMin + (lnMax - lnMin) * std::clamp(t, 0.0f, 1.0f);

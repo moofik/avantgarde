@@ -1,6 +1,9 @@
 #pragma once
 #include <memory>
 #include "ITrack.h"
+#include "IRtExtension.h"
+#include "IAudioRecorder.h"
+#include "ITransport.h"
 #include "types.h"
 
 /**
@@ -39,7 +42,11 @@ namespace avantgarde {
 
 // Регистрация RT-хуков
         virtual void addRtExtension(IRtExtension* ext) noexcept = 0; // регистрируем до старта стрима
-    };
 
+        virtual void setMasterRecordSink(IRtRecordSink* sink) noexcept = 0;
+
+        virtual void setTransportBridge(ITransportBridge* t) noexcept = 0;
+
+    };
 
 } // namespace avantgarde
