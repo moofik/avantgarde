@@ -145,8 +145,8 @@ struct MockTransportBridge : ITransportBridge {
     void advanceSampleTime(uint64_t frames) noexcept override {
         advanced += frames;
         if (phase) {
-            REQUIRE(*phase == 20); // сразу после swapBuffers
-            *phase = 21;
+            REQUIRE(*phase == 50); // сразу после swapBuffers
+            *phase = 55;
         }
     }
 
@@ -158,13 +158,26 @@ namespace avantgarde {
     std::unique_ptr<IAudioEngine> MakeAudioEngine(IRtCommandQueue*, IParamBridge*);
 }
 
-// Helpers
-static AudioProcessContext makeCtx(int frames = 256) {
+struct TestCtx {
+    std::vector<float> out0;
+    std::vector<float> out1;
+    float* outs[2]{};
     AudioProcessContext ctx{};
-    ctx.nframes = static_cast<std::size_t>(frames);
-    ctx.in  = nullptr;
-    ctx.out = nullptr;
-    return ctx;
+
+    explicit TestCtx(int numFrames)
+            : out0((size_t)numFrames, 0.0f)
+            , out1((size_t)numFrames, 0.0f)
+    {
+        outs[0] = out0.data();
+        outs[1] = out1.data();
+        ctx.in = nullptr;
+        ctx.out = outs;
+        ctx.nframes = (std::size_t)numFrames;
+    }
+};
+
+static TestCtx makeCtx(int numFrames = 256) {
+    return TestCtx(numFrames);
 }
 
 // --- Tests ---
@@ -176,7 +189,7 @@ TEST_CASE("Register/Process No-Crash") {
     eng->setSampleRate(48000.0);
 
     auto ctx = makeCtx();
-    REQUIRE_NOTHROW(eng->processBlock(ctx));
+    REQUIRE_NOTHROW(eng->processBlock(ctx.ctx));
 }
 
 TEST_CASE("SingleTrack -> process() is called") {
@@ -190,7 +203,7 @@ TEST_CASE("SingleTrack -> process() is called") {
     eng->registerTrack(std::move(t));
 
     auto ctx = makeCtx();
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
     REQUIRE(tPtr->calls == 1);
 }
 
@@ -201,7 +214,7 @@ TEST_CASE("ParamBridge::swapBuffers() is called in prologue") {
     eng->setSampleRate(48000.0);
 
     auto ctx = makeCtx();
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
 
     REQUIRE(p.swaps == 1);
 }
@@ -215,7 +228,7 @@ TEST_CASE("TransportBridge::swapBuffers() and advanceSampleTime() are called in 
     eng->setTransportBridge(&tr);
 
     auto ctx = makeCtx(256);
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
 
     REQUIRE(tr.swaps == 1);
     REQUIRE(tr.advanced == 256);
@@ -230,7 +243,7 @@ TEST_CASE("TransportBridge is not called when nullptr") {
     eng->setTransportBridge(nullptr);
 
     auto ctx = makeCtx(256);
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
 
     REQUIRE(tr.swaps == 0);
     REQUIRE(tr.advanced == 0);
@@ -247,7 +260,7 @@ TEST_CASE("onCommand() routes to RT queue; RT pops in processBlock") {
     REQUIRE(q.size() == 1);
 
     auto ctx = makeCtx();
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
 
     REQUIRE(q.size() == 0);
 }
@@ -284,7 +297,7 @@ TEST_CASE("ParamSet is routed into track->onRtCommand") {
     q.push(rc);
 
     auto ctx = makeCtx();
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
 
     REQUIRE(tp->seen.size() == 1);
     REQUIRE(tp->seen[0].index == 3);
@@ -302,7 +315,7 @@ TEST_CASE("IRtExtension hooks are called (begin/end once per block)") {
     eng->addRtExtension(&ext);
 
     auto ctx = makeCtx();
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
 
     REQUIRE(ext.beginCalls == 1);
     REQUIRE(ext.endCalls == 1);
@@ -354,7 +367,7 @@ TEST_CASE("IRtExtension ordering: begin -> tracks -> end") {
     eng->registerTrack(std::move(t));
 
     auto ctx = makeCtx();
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
 
     REQUIRE(ext.beginCalls == 1);
     REQUIRE(tp->calls == 1);
@@ -363,8 +376,10 @@ TEST_CASE("IRtExtension ordering: begin -> tracks -> end") {
 }
 
 // --- setMasterRecordSink ---
+#include <cstdio>
 
 TEST_CASE("MasterRecordSink: writes ctx.out + nframes when set") {
+    std::puts("T0");
     MockRtQueue q;
     MockParamBridge p;
     auto eng = avantgarde::MakeAudioEngine(&q, &p);
@@ -373,10 +388,22 @@ TEST_CASE("MasterRecordSink: writes ctx.out + nframes when set") {
     eng->setMasterRecordSink(&sink);
 
     auto ctx = makeCtx(512);
-    eng->processBlock(ctx);
+
+    std::puts("T1 before REQUIRE out");
+    REQUIRE(ctx.ctx.out != nullptr);
+
+    std::puts("T2 before REQUIRE out[0]");
+    REQUIRE(ctx.ctx.out[0] != nullptr);
+
+    std::puts("T3 before REQUIRE out[1]");
+    REQUIRE(ctx.ctx.out[1] != nullptr);
+
+    std::puts("T4 before processBlock");
+    eng->processBlock(ctx.ctx);
+    std::puts("T5 after processBlock");
 
     REQUIRE(sink.writes == 1);
-    REQUIRE(sink.lastCh == ctx.out);
+    REQUIRE(sink.lastCh == ctx.ctx.out);
     REQUIRE(sink.lastFrames == 512);
 }
 
@@ -389,7 +416,7 @@ TEST_CASE("MasterRecordSink: no writes when sink is nullptr") {
     eng->setMasterRecordSink(nullptr);
 
     auto ctx = makeCtx();
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
 
     REQUIRE(sink.writes == 0);
 }
@@ -414,7 +441,7 @@ TEST_CASE("Full ordering: ParamBridge -> Transport -> RtExtension(begin) -> Trac
         void onBlockBegin(const AudioProcessContext&) noexcept override {
             ++beginCalls;
             REQUIRE(phase != nullptr);
-            REQUIRE(*phase == 21); // transport advanced
+            REQUIRE(*phase == 20); // transport advanced
             *phase = 30;
         }
 
@@ -451,7 +478,7 @@ TEST_CASE("Full ordering: ParamBridge -> Transport -> RtExtension(begin) -> Trac
         bool writeBlock(const float* const*, int) noexcept override {
             ++writes;
             REQUIRE(phase != nullptr);
-            REQUIRE(*phase == 50);
+            REQUIRE(*phase == 55);
             *phase = 60;
             return true;
         }
@@ -463,7 +490,7 @@ TEST_CASE("Full ordering: ParamBridge -> Transport -> RtExtension(begin) -> Trac
     eng->setMasterRecordSink(&sink);
 
     auto ctx = makeCtx(128);
-    eng->processBlock(ctx);
+    eng->processBlock(ctx.ctx);
 
     REQUIRE(p.swaps == 1);
     REQUIRE(tr.swaps == 1);

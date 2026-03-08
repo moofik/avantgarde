@@ -10,7 +10,8 @@ if (RUNTIME_SOURCES)
 else()
     add_library(avantgarde_runtime INTERFACE
             ParamBridgeDualBuffer.cpp
-            AudioEngine.cpp)
+            AudioEngine.cpp
+            ClipTrack.cpp)
     set(_iface INTERFACE)
 endif()
 

@@ -2,19 +2,34 @@ file(GLOB_RECURSE PLATFORM_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_LIST_DIR}/*.cpp
         ${CMAKE_CURRENT_LIST_DIR}/*.cxx
         ${CMAKE_CURRENT_LIST_DIR}/*.cc
+        ${CMAKE_CURRENT_LIST_DIR}/*.mm
+        ${CMAKE_CURRENT_LIST_DIR}/*.m
 )
 
-if (PLATFORM_SOURCES)
-    add_library(avantgarde_platform STATIC ${PLATFORM_SOURCES})
-    set(_iface PUBLIC)
-else()
-    add_library(avantgarde_platform INTERFACE)
-    set(_iface INTERFACE)
-endif()
+add_library(avantgarde_platform STATIC ${PLATFORM_SOURCES})
 
 target_link_libraries(avantgarde_platform
-        ${_iface} avantgarde_contracts
+        PUBLIC avantgarde_contracts
 )
+
 target_include_directories(avantgarde_platform
-        ${_iface} ${CMAKE_CURRENT_LIST_DIR}/..
+        PUBLIC ${CMAKE_CURRENT_LIST_DIR}/..
 )
+
+# 👇 ВАЖНО: если CLion CMake ломается на OBJCXX
+# принудительно компилируем .mm как C++ с режимом objective-c++
+set_source_files_properties(
+        ${CMAKE_CURRENT_LIST_DIR}/macos/MacAudioHost.mm
+        PROPERTIES
+        LANGUAGE CXX
+        COMPILE_OPTIONS "-x;objective-c++"
+)
+
+if(APPLE)
+    target_link_libraries(avantgarde_platform PRIVATE
+            "-framework AudioToolbox"
+            "-framework AudioUnit"
+            "-framework CoreAudio"
+            "-framework CoreFoundation"
+    )
+endif()

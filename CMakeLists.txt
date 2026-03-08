@@ -89,6 +89,7 @@ target_link_libraries(avantgarde
         avantgarde_platform
         avantgarde_module
 )
+
 target_include_directories(avantgarde
         PRIVATE ${CMAKE_SOURCE_DIR}/src
 )

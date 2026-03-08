@@ -7,11 +7,14 @@
 
 ## Добавлено
 
-### 1) ITransportBridge + TransportRtSnapshot (глобальное музыкальное время)
+### 1) ITransport (contracts/ITransport.h) — глобальный музыкальный транспорт
+
+Добавлен новый контракт `ITransport.h`, содержащий интерфейс транспорта и RT-снапшот музыкального времени.
 
 Введена отдельная подсистема транспорта для представления глобального музыкального времени в RT.
 
 **Новые компоненты:**
+
 - `TransportRtSnapshot` (POD, RT-safe)
   - `playing`
   - `tsNum`, `tsDen`
@@ -20,43 +23,77 @@
   - `quant`
   - `swing`
   - `sampleTime` (RT-владение, монотонно растёт в семплах)
-- `ITransportBridge`
-  - Control-методы (`setTempo`, `setPlaying`, `setTimeSignature`, `setQuantize`, `setSwing`)
-  - RT-метод `swapBuffers()`
-  - RT-доступ к снапшоту через `rt()`
-  - `advanceSampleTime(frames)` — увеличение playhead строго в RT
 
-**Интеграция в движок:**
-- Добавлен метод `IAudioEngine::setTransportBridge(ITransportBridge* t) noexcept`
-- В `AudioEngine::processBlock()` транспорт вызывается в прологе:
-  - `transport_->swapBuffers()`
-  - `transport_->advanceSampleTime(ctx.nframes)`
+- `ITransportBridge`
+  - Control-методы:
+    - `setTempo(...)`
+    - `setPlaying(...)`
+    - `setTimeSignature(...)`
+    - `setQuantize(...)`
+    - `setSwing(...)`
+  - RT-методы:
+    - `swapBuffers()`
+    - `rt()`
+    - `advanceSampleTime(frames)`
+
+**Назначение:**
+- Темп, размер, квантизация и playhead вынесены в отдельную подсистему.
+- Глобальное музыкальное время больше не относится к параметрам модулей.
+- `sampleTime` становится RT-owned источником истины.
 
 ---
 
-### 2) IRtExtension (RT-хуки расширения)
+### 2) Интеграция транспорта в движок
+
+Добавлен метод:
+
+- `IAudioEngine::setTransportBridge(ITransportBridge* t) noexcept`
+
+**Интеграция в `AudioEngine::processBlock()`:**
+
+В прологе блока выполняется:
+
+1. `transport_->swapBuffers()`
+2. `transport_->advanceSampleTime(ctx.nframes)`
+
+Таким образом:
+- playhead продвигается строго в RT
+- transport участвует в каждом аудио-блоке
+
+---
+
+### 3) IRtExtension (RT-хуки расширения)
 
 Добавлен управляемый RT-hook слой для расширения аудио-пайплайна без разрастания `AudioEngine`.
 
 **Новый интерфейс:**
+
 - `IRtExtension`
   - `onBlockBegin(const AudioProcessContext&) noexcept`
   - `onBlockEnd(const AudioProcessContext&) noexcept`
 
 **Интеграция в движок:**
+
 - `IAudioEngine::addRtExtension(IRtExtension*) noexcept`
 - В `AudioEngine` хранится фиксированный массив расширений (без аллокаций)
 - Вызов хуков в `processBlock()`:
   - пролог (до треков)
   - эпилог (после треков)
 
+Назначение:
+- Scheduler
+- Step sequencer
+- Глобальная квантизация
+- Будущая синхронизация клипов
+
 ---
 
-### 3) IClipTrack (контракт клипового трека со слотами)
+### 4) IClipTrack (контракт клипового трека со слотами)
 
-Добавлен явный контракт клиповой модели трека (слоты клипов).
+Добавлен явный контракт клиповой модели трека.
 
 **Новый интерфейс:**
+
 - `IClipTrack : ITrack`
   - `numSlots()`
   - `loadSlotFromFile(slot, path)`
@@ -66,81 +103,92 @@
   - `setSlotLooping(slot, loop)`
 
 **Принципы:**
+
 - Slot = фиксированная ячейка клипа внутри трека
 - Управление данными — вне RT
 - Управление воспроизведением/записью — через RT-команды (`onRtCommand`)
+- Подготовка к клиповому секвенсору
 
 ---
 
-### 4) Запись Master Out (MVP) — без tap/resample
+### 5) Запись Master Out (MVP) — без tap/resample
 
-Добавлена минимальная запись мастер-выхода без сложной маршрутизации и ресемпла.
+Добавлена минимальная запись мастер-выхода.
 
 **Новый метод:**
+
 - `IAudioEngine::setMasterRecordSink(IRtRecordSink*) noexcept`
 
-**Интеграция в движок:**
-- В `AudioEngine::processBlock()` после треков/эпилога:
+**Интеграция:**
+
+- После обработки треков и RT-расширений:
   - `masterSink_->writeBlock(ctx.out, ctx.nframes)` (если sink установлен)
 - `sink == nullptr` отключает запись
 
+Tap/resample и маршрутизация отложены.
+
 ---
 
-## Обновлено / Зафиксировано
+## Порядок выполнения в AudioEngine::processBlock()
 
-### 5) IParamBridge (атомарный своп параметров в прологе блока)
+Фактический порядок RT-пайплайна после изменений:
 
-Подсистема параметров закреплена как “прологовая” синхронизация control→RT.
-
-**Контракт:**
-- `IParamBridge::swapBuffers()` вызывается строго в прологе `processBlock()`
-
-**Порядок в AudioEngine::processBlock():**
 1. pop всех RT-команд из `IRtCommandQueue`
 2. `paramBridge_->swapBuffers()` (если задан)
-3. `transport_->swapBuffers()` + `transport_->advanceSampleTime(ctx.nframes)` (если задан)
-4. `IRtExtension::onBlockBegin(...)`
-5. `track->process(...)` по всем трекам
-6. `IRtExtension::onBlockEnd(...)`
-7. `masterSink_->writeBlock(...)` (если задан)
+3. `transport_->swapBuffers()` (если задан)
+4. `transport_->advanceSampleTime(ctx.nframes)` (если задан)
+5. `IRtExtension::onBlockBegin(...)`
+6. `track->process(...)` по всем трекам
+7. `IRtExtension::onBlockEnd(...)`
+8. `masterSink_->writeBlock(...)` (если задан)
 
 ---
 
 ## Тесты
 
-- Переписаны/дополнены тесты AudioEngine под:
-  - `IRtExtension` (вызовы + порядок begin/end относительно треков)
-  - `setMasterRecordSink` (вызов + порядок)
-  - `setTransportBridge` (swap/advance + порядок)
-  - подтверждён вызов `IParamBridge::swapBuffers()` в прологе
-- Catch2: все тесты проходят локально (включая большие нагрузки на assert в других тестах репозитория)
+- Добавлены тесты для:
+  - `setTransportBridge`
+  - вызова `swapBuffers()` и `advanceSampleTime()`
+  - порядка Transport → Extensions → Tracks → RecordSink
+  - `IRtExtension` begin/end
+  - `setMasterRecordSink`
+
+Все тесты проходят локально (Catch2).
 
 ---
 
 ## Архитектурные решения
 
-### ✔ Transport отделён от параметров
-Глобальное музыкальное время (темп/размер/квантизация/playhead) живёт отдельно от `IParamBridge` и модульных параметров.
+### ✔ Transport вынесен в отдельный контракт
+
+Глобальное музыкальное время полностью отделено от:
+- параметров модулей
+- треков
+- аудио-движка
 
 ### ✔ RT-расширяемость через IRtExtension
-Scheduler / step sequencer / глобальная квантизация подключаются как расширение RT-пайплайна, без внедрения логики в engine/track.
 
-### ✔ IClipTrack как “основа девайса”
-Закрепили клиповую модель трека контрактом (слоты), без преждевременного разделения на отдельные Recorder/Sampler интерфейсы.
+Step sequencer и scheduler не будут вшиты в engine —
+они подключаются как RT-расширения.
 
-### ✔ Без tap/resample в MVP
-Сложная маршрутизация отложена. Сейчас — только master-out запись через sink.
+### ✔ Клип-модель закреплена контрактом
+
+`IClipTrack` формализует клиповую архитектуру устройства.
+
+### ✔ Минимальный MVP записи
+
+Без tap/resample и без усложнения маршрутизации.
 
 ---
 
 ## Summary
 
-v0.0.2 делает архитектуру “музыкально осмысленной” и готовой к step sequencing:
+v0.0.2 переводит Avantgarde из “аудио-движка” в “музыкальную систему”:
 
-- Появилась настоящая ось времени (`ITransportBridge` + RT playhead)
-- Появились RT-хуки расширения (`IRtExtension`) как фундамент для scheduler/sequencer
-- Клип-модель трека зафиксирована (`IClipTrack`)
-- Добавлена запись master-out (`setMasterRecordSink`) без усложнения
-- `IParamBridge` закреплён как атомарный прологовый механизм параметров
+- Появилась глобальная ось времени (`ITransport`)
+- Появился фундамент для step sequencing
+- Появился RT-extension слой
+- Зафиксирована клиповая модель трека
+- Добавлена запись master-out
 
-База для квантизации, клип-лупера и будущего step-секвенсора заложена без переусложнения.
+Архитектура готова к внедрению scheduler / quantization / step sequencer без рефакторинга движка.

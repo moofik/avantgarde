@@ -47,6 +47,8 @@ namespace avantgarde {
 
         virtual void setTransportBridge(ITransportBridge* t) noexcept = 0;
 
+        virtual void setNumOutput(uint32_t n) noexcept = 0;
+
     };
 
 } // namespace avantgarde

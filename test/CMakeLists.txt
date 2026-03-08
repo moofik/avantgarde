@@ -23,7 +23,8 @@ if (TEST_SOURCES)
             ParamBridgeDualBufferTests.cpp
             AudioEngineTests.cpp
             GainSlewModuleTests.cpp
-            OnePoleHPFModuleTests.cpp)
+            OnePoleHPFModuleTests.cpp
+            ClipTrackTests.cpp)
 
     target_link_libraries(avantgarde_tests PRIVATE
             Catch2::Catch2WithMain      # тянет инклюды Catch2 транзитивно

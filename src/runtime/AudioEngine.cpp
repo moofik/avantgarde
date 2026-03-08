@@ -25,6 +25,8 @@ namespace avantgarde {
 
         ~AudioEngine() override = default;
 
+        void setNumOutput(uint32_t n) noexcept override { numOut_ = (n > 0 ? n : 1); }
+
         // --- вне RT ---
         void registerTrack(std::unique_ptr<ITrack> track) override {
             tracks_.push_back(std::move(track));
@@ -93,10 +95,14 @@ namespace avantgarde {
         void setMasterRecordSink(IRtRecordSink* sink) noexcept override {
             masterSink_ = sink;
         }
-
-        // --- RT-путь ---
         void processBlock(const AudioProcessContext& ctx) override {
-            // 1) Считываем все накопившиеся RT-команды.
+            // 0) очистка master out перед миксом
+            // (по контракту ctx.out должен быть валидным, но можно добавить guard если хочешь)
+            for (uint32_t ch = 0; ch < numOut_; ++ch) {
+                std::memset(ctx.out[ch], 0, ctx.nframes * sizeof(float));
+            }
+
+            // 1) Drain RT-команд (то, что пришло с control thread до начала блока)
             RtCommand rc{};
             while (rtQueue_ && rtQueue_->pop(rc)) {
                 handleRtCommand(rc);
@@ -107,30 +113,41 @@ namespace avantgarde {
                 paramBridge_->swapBuffers();
             }
 
-            // 3) Транспорт — строго в прологе блока (после параметров).
-            //    RT читает снапшот, затем увеличивает sampleTime.
+            // 3) Транспорт — в прологе делаем swap снапшота,
+            //    но НЕ увеличиваем sampleTime до extensions/треков.
+            //    Иначе extensions будут видеть время "конца блока", а не "начала блока".
             if (transport_) {
                 transport_->swapBuffers();
-                transport_->advanceSampleTime(static_cast<uint64_t>(ctx.nframes));
             }
 
-            // 4) RT extensions — пролог блока (квантизация/секвенсор потом сюда).
+            // 4) RT extensions — пролог блока (секвенсор/квантизация генерят события)
             for (uint32_t i = 0; i < rtExtCount_; ++i) {
                 rtExt_[i]->onBlockBegin(ctx);
             }
 
-            // 5) Последовательно обрабатываем треки. Никаких аллокаций здесь.
+            // 4.5) Второй drain: применяем команды, которые extensions могли запушить в rtQueue_
+            //      (чтобы они вступили в силу в ЭТОМ же блоке)
+            while (rtQueue_ && rtQueue_->pop(rc)) {
+                handleRtCommand(rc);
+            }
+
+            // 5) Треки: генерят/миксят в ctx.out
             for (auto& t : tracks_) {
                 t->process(ctx);
             }
 
-            // 6) RT extensions — эпилог блока.
+            // 6) RT extensions — эпилог блока
             for (uint32_t i = 0; i < rtExtCount_; ++i) {
                 rtExt_[i]->onBlockEnd(ctx);
             }
 
-            // 7) Запись master out (если подключен sink).
-            // Важно: предполагаем, что ctx.out указывает на итоговый мастер-буфер.
+            // 6.5) Теперь можно продвинуть transport sampleTime на размер блока:
+            //      "время" соответствует началу следующего блока.
+            if (transport_) {
+                transport_->advanceSampleTime(static_cast<uint64_t>(ctx.nframes));
+            }
+
+            // 7) Запись master out (если подключен sink)
             if (masterSink_) {
                 (void)masterSink_->writeBlock(ctx.out, static_cast<int>(ctx.nframes));
             }
@@ -148,18 +165,19 @@ namespace avantgarde {
         }
 
     private:
+        uint32_t numOut_{2};
         static constexpr uint32_t kMaxRtExtensions = 8;
 
-        std::vector<std::unique_ptr<ITrack>> tracks_; // Только вне RT
-        IRtCommandQueue* rtQueue_{nullptr};           // Владеет внешний код
-        IParamBridge*    paramBridge_{nullptr};       // Владеет внешний код
-        ITransportBridge* transport_{nullptr};        // NEW: транспорт (не владеем)
+        std::vector<std::unique_ptr<ITrack>> tracks_; // “DSP-юниты”, которые в RT генерируют/миксят звук в master буфер.
+        IRtCommandQueue* rtQueue_{nullptr};           // почта команд Control→RT.
+        IParamBridge*    paramBridge_{nullptr};       // “витрина параметров” (для p-lock/макросов)
+        ITransportBridge* transport_{nullptr};        // единый источник музыкального времени
 
         std::shared_ptr<void> audioHost_;
         double sampleRate_{48000.0};
 
-        // NEW: RT extensions (фиксированный массив, без аллокаций)
-        IRtExtension* rtExt_[kMaxRtExtensions]{};
+        // “RT-хуки”, которые вшивают музыкальную логику в пролог/эпилог блока
+        IRtExtension* rtExt_[kMaxRtExtensions]{}; //
         uint32_t rtExtCount_{0};
 
         // NEW: мастер-синк для записи (не владеем)
