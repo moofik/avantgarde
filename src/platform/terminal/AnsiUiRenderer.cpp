@@ -29,12 +29,13 @@ const char* trackStateToStr(UiTrackState s) {
 void AnsiUiRenderer::render(const UiState& state) {
     std::printf("\x1b[2J\x1b[H");
     std::printf("Avantgarde UI v0 (desktop preview)\n");
-    std::printf("Transport: %s | BPM %.2f | %u/%u | quant=%s | sample=%llu\n",
+    std::printf("Transport: %s | BPM %.2f | %u/%u | quant=%s | active=T%u | sample=%llu\n",
                 state.transport.playing ? "PLAY" : "STOP",
                 state.transport.bpm,
                 static_cast<unsigned>(state.transport.tsNum),
                 static_cast<unsigned>(state.transport.tsDen),
                 quantToStr(state.transport.quant),
+                static_cast<unsigned>(state.transport.activeTrack),
                 static_cast<unsigned long long>(state.transport.sampleTime));
     std::printf("Telemetry: callbacks=%llu | xruns=%llu | queue_overflow=%s\n\n",
                 static_cast<unsigned long long>(state.telemetry.totalCallbacks),
@@ -42,8 +43,9 @@ void AnsiUiRenderer::render(const UiState& state) {
                 state.telemetry.rtQueueOverflow ? "yes" : "no");
 
     for (const auto& tr : state.tracks) {
-        std::printf("Track %u: %-9s | clip=%s | bars=%u | stretch=%.3f | gain=%.2f | loop=%s | fx=%u\n",
+        std::printf("Track %u%s: %-9s | clip=%s | bars=%u | speed=%.3f | gain=%.2f | loop=%s | fx=%u\n",
                     static_cast<unsigned>(tr.id),
+                    tr.id == state.transport.activeTrack ? "*" : " ",
                     trackStateToStr(tr.state),
                     tr.clipName.empty() ? "-" : tr.clipName.c_str(),
                     tr.bars,
@@ -53,7 +55,7 @@ void AnsiUiRenderer::render(const UiState& state) {
                     static_cast<unsigned>(tr.fxCount));
     }
 
-    std::printf("\nPress Enter to stop.\n");
+    std::printf("\nKeys: [1/2 select track] [p play] [s stop] [- slower] [+/= faster] [z/x/c quant] [[ and ] bpm] [q quit]\n");
     std::fflush(stdout);
 }
 

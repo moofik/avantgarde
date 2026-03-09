@@ -2,6 +2,8 @@
 #pragma once
 
 #include <atomic>
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -120,7 +122,6 @@ namespace avantgarde {
             const uint32_t bytesPerFrame = fmt.blockAlign;
             const uint32_t totalFrames = (uint32_t)(dataBytes.size() / bytesPerFrame);
             if (totalFrames == 0) return false;
-            printf("Frames: %d\n", totalFrames);
             outSampleRate = (int)fmt.sampleRate;
             outChannels   = (int)fmt.numChannels;
             outFrames     = (int)totalFrames;
@@ -191,11 +192,67 @@ namespace avantgarde {
 
     } // namespace detail_wav
 
+    namespace detail_interp {
+
+        static inline float clampf(float x, float lo, float hi) noexcept {
+            return std::min(std::max(x, lo), hi);
+        }
+
+        static inline int wrapIndex(int idx, int len) noexcept {
+            while (idx < 0) idx += len;
+            while (idx >= len) idx -= len;
+            return idx;
+        }
+
+        static inline float cubicHermite(float y0, float y1, float y2, float y3, float t) noexcept {
+            const float c0 = y1;
+            const float c1 = 0.5f * (y2 - y0);
+            const float c2 = y0 - 2.5f * y1 + 2.0f * y2 - 0.5f * y3;
+            const float c3 = 0.5f * (y3 - y0) + 1.5f * (y1 - y2);
+            return ((c3 * t + c2) * t + c1) * t + c0;
+        }
+
+        static inline float sampleCubic(const float* src, int len, double phase, bool loop) noexcept {
+            if (!src || len <= 0) return 0.0f;
+            if (len == 1) return src[0];
+
+            double ph = phase;
+            if (loop) {
+                while (ph < 0.0) ph += static_cast<double>(len);
+                while (ph >= static_cast<double>(len)) ph -= static_cast<double>(len);
+            } else {
+                if (ph <= 0.0) return src[0];
+                const double maxPh = static_cast<double>(len - 1);
+                if (ph >= maxPh) return src[len - 1];
+            }
+
+            const int i1 = static_cast<int>(ph);
+            const float frac = static_cast<float>(ph - static_cast<double>(i1));
+
+            int i0 = i1 - 1;
+            int i2 = i1 + 1;
+            int i3 = i1 + 2;
+
+            if (loop) {
+                i0 = wrapIndex(i0, len);
+                i2 = wrapIndex(i2, len);
+                i3 = wrapIndex(i3, len);
+            } else {
+                i0 = std::max(0, i0);
+                i2 = std::min(len - 1, i2);
+                i3 = std::min(len - 1, i3);
+            }
+
+            return cubicHermite(src[i0], src[i1], src[i2], src[i3], frac);
+        }
+
+    } // namespace detail_interp
+
 // ============================================================
 // ClipTrackImpl (MVP)
 // - 1 slot
 // - Play/Stop via onRtCommand
-// - gain/loop via ParamSet (index 0/1) OR via control methods
+// - gain/loop/speed via ParamSet (index 0/1/2) OR via control methods
 // ============================================================
 
     class ClipTrackImpl final : public IClipTrack {
@@ -232,40 +289,41 @@ namespace avantgarde {
             const float* c0 = clip->ch[0];
             const float* c1 = (clip->channels == 2) ? clip->ch[1] : nullptr;
 
-            uint64_t ph = rt_.playhead;
-            const uint64_t len = (uint64_t)clip->frames;
+            double ph = rt_.playhead;
+            const int len = clip->frames;
+            const double lenD = static_cast<double>(len);
             const float g = rt_.gain;
             const bool loop = rt_.loop;
+            const double inc = static_cast<double>(detail_interp::clampf(rt_.playbackInc, 0.05f, 8.0f));
             const int n = (int)ctx.nframes;
 
             // Mix (adds into out)
             for (int i = 0; i < n; ++i) {
-                if (ph >= len) {
-                    if (loop) {
-                        ph = 0;
-                    } else {
-                        rt_.playing = false;
-                        ph = 0;
-                        break;
-                    }
+                if (!loop && ph >= lenD) {
+                    rt_.playing = false;
+                    ph = 0.0;
+                    break;
                 }
 
-                const float s0 = c0[(size_t)ph] * g;
+                while (loop && ph >= lenD) ph -= lenD;
+
+                const float src0 = detail_interp::sampleCubic(c0, len, ph, loop);
+                const float s0 = src0 * g;
                 out0[i] += s0;
 
                 if (out1) {
-                    const float s1 = c1 ? (c1[(size_t)ph] * g) : s0; // mono -> dual mono
+                    const float src1 = c1 ? detail_interp::sampleCubic(c1, len, ph, loop) : src0;
+                    const float s1 = src1 * g; // mono -> dual mono
                     out1[i] += s1;
                 }
 
-                ++ph;
+                ph += inc;
             }
 
             rt_.playhead = ph;
         }
 
         void onRtCommand(const RtCommand& cmd) noexcept override {
-            printf("Play command received\n");
             rtApplyPending_();
 
             const CmdId cid = static_cast<CmdId>(cmd.id);
@@ -279,14 +337,14 @@ namespace avantgarde {
             switch (cid) {
                 case CmdId::Play: {
                     if (rt_.clip && rt_.clip->frames > 0) {
-                        rt_.playhead = 0;
+                        rt_.playhead = 0.0;
                         rt_.playing = true;
                     }
                 } break;
 
                 case CmdId::Stop: {
                     rt_.playing = false;
-                    rt_.playhead = 0;
+                    rt_.playhead = 0.0;
                 } break;
 
                 case CmdId::ParamSet: {
@@ -294,10 +352,13 @@ namespace avantgarde {
                     // значения параметров по договору нормализованы [0..1]
                     if (cmd.index == 0) {
                         // gain (0..1) — MVP
-                        rt_.gain = cmd.value;
+                        rt_.gain = detail_interp::clampf(cmd.value, 0.0f, 1.0f);
                     } else if (cmd.index == 1) {
                         // loop bool
                         rt_.loop = (cmd.value >= 0.5f);
+                    } else if (cmd.index == 2) {
+                        // varispeed playback increment (1.0 = normal)
+                        rt_.playbackInc = detail_interp::clampf(cmd.value, 0.05f, 8.0f);
                     }
                 } break;
 
@@ -360,8 +421,8 @@ namespace avantgarde {
             if (slot != 0u) return false;
             if (bars < 1u) return false;
 
-            // MVP: сохраняем, но не используем (понадобится при clip-rec + transport)
             slotBars_.store(bars, std::memory_order_relaxed);
+            pendingPlaybackInc_.store(computePlaybackIncForBars_(), std::memory_order_release);
             return true;
         }
 
@@ -386,13 +447,38 @@ namespace avantgarde {
 
         struct RtState {
             const ClipBuffer* clip = nullptr;
-            uint64_t playhead = 0;
+            double playhead = 0.0;
+            float playbackInc = 1.0f;
             float gain = 1.0f;     // normalized 0..1 (MVP)
             bool playing = false;
             bool loop = false;
         };
 
     private:
+        float computePlaybackIncForBars_() const noexcept {
+            const ClipBuffer* clip = clipCtl_.get();
+            if (!clip || clip->frames <= 0 || clip->sampleRate <= 0) {
+                return 1.0f;
+            }
+
+            const uint32_t bars = std::max<uint32_t>(1, slotBars_.load(std::memory_order_relaxed));
+            const float bpm = 120.0f;
+            const uint8_t tsNum = 4;
+            const uint8_t tsDen = 4;
+
+            const double beatsPerBar = static_cast<double>(tsNum) * 4.0 / static_cast<double>(tsDen);
+            const double targetFrames =
+                    static_cast<double>(bars) * beatsPerBar * (60.0 / static_cast<double>(bpm)) *
+                    static_cast<double>(clip->sampleRate);
+
+            if (targetFrames <= 1.0) {
+                return 1.0f;
+            }
+
+            const float inc = static_cast<float>(static_cast<double>(clip->frames) / targetFrames);
+            return detail_interp::clampf(inc, 0.05f, 8.0f);
+        }
+
         void publishClip_(std::shared_ptr<ClipBuffer>&& b) {
             // control thread only
             clipCtl_ = std::move(b);
@@ -405,21 +491,25 @@ namespace avantgarde {
             if (pendingClear_.exchange(false, std::memory_order_acq_rel)) {
                 rt_.clip = nullptr;
                 rt_.playing = false;
-                rt_.playhead = 0;
+                rt_.playhead = 0.0;
             }
 
             // Apply pending clip publish
             if (const ClipBuffer* p = pendingClip_.exchange(nullptr, std::memory_order_acq_rel)) {
-                printf("New clip applied\n");
                 rt_.clip = p;
                 rt_.playing = false;  // безопасно: при смене клипа останавливаем
-                rt_.playhead = 0;
+                rt_.playhead = 0.0;
             }
 
             // Apply pending loop set (from control method)
             const uint32_t pl = pendingLoop_.exchange(0xFFFFFFFFu, std::memory_order_acq_rel);
             if (pl != 0xFFFFFFFFu) {
                 rt_.loop = (pl != 0u);
+            }
+
+            const float pendingInc = pendingPlaybackInc_.exchange(-1.0f, std::memory_order_acq_rel);
+            if (pendingInc > 0.0f) {
+                rt_.playbackInc = detail_interp::clampf(pendingInc, 0.05f, 8.0f);
             }
         }
 
@@ -437,6 +527,7 @@ namespace avantgarde {
 
         // 0xFFFFFFFF = "ничего не менять"; иначе 0/1
         std::atomic<uint32_t> pendingLoop_{0xFFFFFFFFu}; // В RT ждёт обновление параметра loop
+        std::atomic<float> pendingPlaybackInc_{-1.0f};
 
         // record-arm (MVP)
         std::atomic<bool> recArmed_{false};

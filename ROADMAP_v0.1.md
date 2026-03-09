@@ -19,10 +19,10 @@ Exit criteria:
 - all tests green
 
 ## Milestone 2: Transport and quantized scheduler
-- [ ] Implement `TransportBridge` double-buffer runtime object.
-- [ ] Add scheduler to execute clip/transport commands on quantized boundaries.
-- [ ] Support `QuantizeMode::{None, Beat, Bar}` in RT-safe path.
-- [ ] Add deterministic tests for command timing at block boundaries.
+- [x] Implement `TransportBridge` double-buffer runtime object.
+- [x] Add scheduler to execute clip/transport commands on quantized boundaries.
+- [x] Support `QuantizeMode::{None, Beat, Bar}` in RT-safe path.
+- [x] Add deterministic tests for command timing at block boundaries.
 
 Exit criteria:
 - repeatable quantized start/stop behavior in tests
@@ -47,8 +47,8 @@ Exit criteria:
 ## Milestone 5: Portable UI layer
 - [x] Introduce UI state DTO + renderer interface.
 - [x] Introduce desktop ANSI renderer preview.
-- [ ] Add service-side state composer from runtime telemetry + transport + track state.
-- [ ] Add tiny input layer for transport/clip triggers.
+- [x] Add service-side state composer from runtime telemetry + transport + track state.
+- [x] Add tiny input layer for transport/clip triggers.
 - [ ] Add low-res renderer backend (RPi target adapter).
 
 Exit criteria:

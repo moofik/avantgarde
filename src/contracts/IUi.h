@@ -21,6 +21,7 @@ struct UiTransportState {
     uint8_t tsNum{4};
     uint8_t tsDen{4};
     QuantizeMode quant{QuantizeMode::Bar};
+    uint8_t activeTrack{0};
     uint64_t sampleTime{0};
 };
 

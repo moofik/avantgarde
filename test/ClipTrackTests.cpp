@@ -331,6 +331,40 @@ TEST_CASE("ClipTrack: ParamSet controls gain (index=0) and loop (index=1)") {
     REQUIRE(absf(t8.out0[5]) > 0.01f); // wrapped region
 }
 
+TEST_CASE("ClipTrack: ParamSet index=2 controls playback speed") {
+    avantgarde::ClipTrackImpl tr;
+
+    const int sr = 48000;
+    std::vector<int16_t> pcm = { 32767,32767,32767,32767,32767,32767,32767,32767 };
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_test_speed.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLooping(0, false) == true);
+
+    auto t = make_ctx(8);
+
+    // normal speed
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/0, /*index*/2, /*value*/1.0f);
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+    clear_out(t);
+    tr.process(t.ctx);
+    float sumNormal = 0.0f;
+    for (float v : t.out0) sumNormal += absf(v);
+    REQUIRE(sumNormal > 4.0f);
+
+    // faster speed: clip is consumed sooner, so output energy in same block is lower
+    send_cmd(tr, avantgarde::CmdId::Stop, 0);
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/0, /*index*/2, /*value*/2.0f);
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+    clear_out(t);
+    tr.process(t.ctx);
+    float sumFast = 0.0f;
+    for (float v : t.out0) sumFast += absf(v);
+
+    REQUIRE(sumFast < sumNormal * 0.7f);
+    REQUIRE(sumFast > sumNormal * 0.3f);
+}
+
 TEST_CASE("ClipTrack: clearSlot resets audio (no playback after clear)") {
     avantgarde::ClipTrackImpl tr;
 

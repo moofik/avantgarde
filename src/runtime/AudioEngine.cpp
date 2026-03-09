@@ -12,6 +12,7 @@
 #include "contracts/ids.h"
 #include <utility>
 #include <cstdint>
+#include <cstring>
 
 namespace avantgarde {
 
