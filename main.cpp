@@ -1,24 +1,30 @@
 // main.cpp
 #include <cstdio>
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <memory>
 #include <string>
 #include <thread>
 #include <atomic>
+#include <string_view>
 
 #include "contracts/types.h"
+#include "contracts/IDisplay.h"
 #include "contracts/IPlatform.h"
 #include "contracts/IAudioEngine.h"
 #include "contracts/IRtExtension.h"
 #include "contracts/IClipTrack.h"
+#include "contracts/IParameterized.h"
 #include "contracts/IUi.h"
 #include "contracts/ids.h"   // где у тебя CmdId enum (или include из contracts)
 
 #include "control/ControlCommandDispatcher.h"
 #include "control/TerminalUiInput.h"
 #include "platform/macos/MacAudioHost.mm"   // твой
+#include "platform/lowres/LowResUiRenderer.h"
 #include "platform/terminal/AnsiUiRenderer.h"
+#include "platform/terminal/TerminalCharDisplay.h"
 #include "runtime/QuantizedSchedulerRtExtension.h"
 #include "runtime/AudioEngine.cpp"       // твой
 #include "runtime/ClipTrack.cpp"  // твой
@@ -30,18 +36,83 @@
 
 using namespace avantgarde;
 
+namespace {
+std::array<ITrack*, 2> gParamTracks{};
+enum class UiMode {
+    Ansi,
+    LowRes
+};
+
+bool parseUiMode(std::string_view raw, UiMode& out) noexcept {
+    if (raw == "ansi") {
+        out = UiMode::Ansi;
+        return true;
+    }
+    if (raw == "lowres") {
+        out = UiMode::LowRes;
+        return true;
+    }
+    return false;
+}
+
+IParameterized* ResolveParamTarget(Target target) noexcept {
+    if (target.trackId < 0 || static_cast<std::size_t>(target.trackId) >= gParamTracks.size()) {
+        return nullptr;
+    }
+    if (target.slotId < 0) {
+        return nullptr;
+    }
+    ITrack* tr = gParamTracks[static_cast<std::size_t>(target.trackId)];
+    if (!tr) {
+        return nullptr;
+    }
+    return tr->getModule(static_cast<std::size_t>(target.slotId));
+}
+} // namespace
+
 static void RenderThunk(AudioProcessContext& ctx, void* user) noexcept {
     auto* engine = static_cast<IAudioEngine*>(user);
     engine->processBlock(ctx);
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        std::printf("Usage: %s /path/to/track1.wav [/path/to/track2.wav]\n", argv[0]);
+    UiMode uiMode = UiMode::Ansi;
+    int argi = 1;
+    while (argi < argc) {
+        const std::string arg = argv[argi];
+        if (arg.rfind("--ui=", 0) == 0) {
+            if (!parseUiMode(std::string_view(arg).substr(5), uiMode)) {
+                std::printf("Unsupported UI mode: %s\n", arg.c_str());
+                return 1;
+            }
+            ++argi;
+            continue;
+        }
+        if (arg == "--ui" && (argi + 1) < argc) {
+            if (!parseUiMode(argv[argi + 1], uiMode)) {
+                std::printf("Unsupported UI mode: %s\n", argv[argi + 1]);
+                return 1;
+            }
+            argi += 2;
+            continue;
+        }
+        if (arg == "--ui") {
+            std::printf("Missing value for --ui (expected: ansi|lowres)\n");
+            return 1;
+        }
+        if (arg.rfind("--", 0) == 0) {
+            std::printf("Unknown option: %s\n", arg.c_str());
+            return 1;
+        }
+        break;
+    }
+
+    if (argi >= argc) {
+        std::printf("Usage: %s [--ui=ansi|lowres] /path/to/track1.wav [/path/to/track2.wav]\n", argv[0]);
         return 1;
     }
-    const char* wavPath0 = argv[1];
-    const char* wavPath1 = (argc >= 3) ? argv[2] : nullptr;
+    const char* wavPath0 = argv[argi];
+    const char* wavPath1 = (argi + 1 < argc) ? argv[argi + 1] : nullptr;
 
     std::string clipName0 = wavPath0;
     if (const std::size_t pos = clipName0.find_last_of("/\\"); pos != std::string::npos) {
@@ -90,10 +161,21 @@ int main(int argc, char** argv) {
         }
     }
 
+    gParamTracks[0] = clipPtr0;
+    gParamTracks[1] = clipPtr1;
+    pb.setResolver(&ResolveParamTarget);
+
     // UI state (service-side)
     UiStateStore uiStore;
     UiStateComposer uiComposer;
-    AnsiUiRenderer uiRenderer;
+    std::unique_ptr<IDisplay> uiDisplay;
+    std::unique_ptr<IUiRenderer> uiRenderer;
+    if (uiMode == UiMode::LowRes) {
+        uiDisplay = std::make_unique<TerminalCharDisplay>(64, 16);
+        uiRenderer = std::make_unique<LowResUiRenderer>(*uiDisplay);
+    } else {
+        uiRenderer = std::make_unique<AnsiUiRenderer>();
+    }
 
     UiTransportState trUi{};
     trUi.playing = false;
@@ -142,6 +224,8 @@ int main(int argc, char** argv) {
 
     // Set initial quantization mode via UI command path.
     (void)controlDispatcher.setQuantizeMode(QuantizeMode::Bar);
+    (void)controlDispatcher.setTempoBpm(trUi.bpm);
+    (void)controlDispatcher.setTimeSignature(trUi.tsNum, trUi.tsDen);
 
     // 7) Run audio
     StreamConfig cfg{ .sampleRate=48000, .blockFrames=256, .numInput=0, .numOutput=2 };
@@ -210,13 +294,13 @@ int main(int argc, char** argv) {
                 case UiInputAction::TrackSpeedUp: {
                     const uint8_t t = trCtl.activeTrack > 1 ? 1 : trCtl.activeTrack;
                     tracksCtl[t].stretchRatio = std::clamp(tracksCtl[t].stretchRatio + 0.05f, 0.25f, 4.0f);
-                    (void)controlDispatcher.sendParamSet(static_cast<int16_t>(t), 0, 2, tracksCtl[t].stretchRatio);
+                    (void)controlDispatcher.sendParamSet(static_cast<int16_t>(t), -1, 2, tracksCtl[t].stretchRatio);
                     uiStore.setTrack(t, tracksCtl[t]);
                 } break;
                 case UiInputAction::TrackSpeedDown: {
                     const uint8_t t = trCtl.activeTrack > 1 ? 1 : trCtl.activeTrack;
                     tracksCtl[t].stretchRatio = std::clamp(tracksCtl[t].stretchRatio - 0.05f, 0.25f, 4.0f);
-                    (void)controlDispatcher.sendParamSet(static_cast<int16_t>(t), 0, 2, tracksCtl[t].stretchRatio);
+                    (void)controlDispatcher.sendParamSet(static_cast<int16_t>(t), -1, 2, tracksCtl[t].stretchRatio);
                     uiStore.setTrack(t, tracksCtl[t]);
                 } break;
                 case UiInputAction::QuantNone:
@@ -236,11 +320,13 @@ int main(int argc, char** argv) {
                     break;
                 case UiInputAction::BpmUp:
                     trCtl.bpm = std::clamp(trCtl.bpm + 1.0f, 20.0f, 300.0f);
+                    (void)controlDispatcher.setTempoBpm(trCtl.bpm);
                     transport.setTempo(trCtl.bpm);
                     uiStore.setTransport(trCtl);
                     break;
                 case UiInputAction::BpmDown:
                     trCtl.bpm = std::clamp(trCtl.bpm - 1.0f, 20.0f, 300.0f);
+                    (void)controlDispatcher.setTempoBpm(trCtl.bpm);
                     transport.setTempo(trCtl.bpm);
                     uiStore.setTransport(trCtl);
                     break;
@@ -261,7 +347,7 @@ int main(int argc, char** argv) {
             telemetry.blockFrames = static_cast<uint32_t>(stream->blockFrames());
 
             const UiState state = uiComposer.compose(uiStore.snapshot(), telemetry);
-            uiRenderer.render(state);
+            uiRenderer->render(state);
             std::this_thread::sleep_for(std::chrono::milliseconds(120));
         }
     });

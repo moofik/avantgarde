@@ -28,18 +28,18 @@ Exit criteria:
 - repeatable quantized start/stop behavior in tests
 
 ## Milestone 3: Clip stretch-to-bars
-- [ ] Implement clip `targetSamples` from `bars + bpm + time signature + sampleRate`.
-- [ ] Implement varispeed playback increment (`srcFrames / targetFrames`) with interpolation.
-- [ ] Wire `setSlotLengthInBars()` into real playback behavior.
-- [ ] Add tests for expected rendered length in samples.
+- [x] Implement clip `targetSamples` from `bars + bpm + time signature + sampleRate`.
+- [x] Implement varispeed playback increment (`srcFrames / targetFrames`) with interpolation.
+- [x] Wire `setSlotLengthInBars()` into real playback behavior.
+- [x] Add tests for expected rendered length in samples.
 
 Exit criteria:
 - clip aligns to requested bar length under fixed BPM
 
 ## Milestone 4: Per-track FX stack
-- [ ] Enable track-owned ordered `IAudioModule` chain per track.
-- [ ] Route parameter updates via `ParamBridge` to track/slot targets.
-- [ ] Add integration test: two tracks with different FX chains.
+- [x] Enable track-owned ordered `IAudioModule` chain per track.
+- [x] Route parameter updates via `ParamBridge` to track/slot targets.
+- [x] Add integration test: two tracks with different FX chains.
 
 Exit criteria:
 - stable dual-track playback with active FX chains
@@ -49,7 +49,7 @@ Exit criteria:
 - [x] Introduce desktop ANSI renderer preview.
 - [x] Add service-side state composer from runtime telemetry + transport + track state.
 - [x] Add tiny input layer for transport/clip triggers.
-- [ ] Add low-res renderer backend (RPi target adapter).
+- [x] Add low-res renderer backend (RPi target adapter).
 
 Exit criteria:
 - same `UiState` drives desktop preview and RPi backend renderer
@@ -59,3 +59,6 @@ Exit criteria:
 - Added `src/service/UiStateStore.{h,cpp}`
 - Added `src/platform/terminal/AnsiUiRenderer.{h,cpp}`
 - Wired live status rendering into `main.cpp`
+- Added `src/contracts/IDisplay.h`
+- Added `src/platform/lowres/LowResUiRenderer.{h,cpp}`
+- Added `src/platform/terminal/TerminalCharDisplay.{h,cpp}` (desktop low-res adapter)

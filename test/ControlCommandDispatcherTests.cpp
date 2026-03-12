@@ -47,6 +47,27 @@ TEST_CASE("ControlCommandDispatcher: quantize mode command goes to rtQueue") {
     REQUIRE(q.pushed[0].value == Catch::Approx(1.0f));
 }
 
+TEST_CASE("ControlCommandDispatcher: tempo and time signature go to rtQueue as global commands") {
+    MockQueue q;
+    ControlCommandDispatcher d(&q);
+
+    REQUIRE(d.setTempoBpm(133.0f));
+    REQUIRE(d.setTimeSignature(7, 8));
+
+    REQUIRE(q.pushCalls == 2);
+
+    REQUIRE(q.pushed[0].id == static_cast<uint16_t>(CmdId::SetTempoBpm));
+    REQUIRE(q.pushed[0].track == -1);
+    REQUIRE(q.pushed[0].slot == -1);
+    REQUIRE(q.pushed[0].value == Catch::Approx(133.0f));
+
+    REQUIRE(q.pushed[1].id == static_cast<uint16_t>(CmdId::SetTimeSig));
+    REQUIRE(q.pushed[1].track == -1);
+    REQUIRE(q.pushed[1].slot == -1);
+    REQUIRE(q.pushed[1].index == 8);
+    REQUIRE(q.pushed[1].value == Catch::Approx(7.0f));
+}
+
 TEST_CASE("ControlCommandDispatcher: param set goes to rtQueue with index") {
     MockQueue q;
     ControlCommandDispatcher d(&q);

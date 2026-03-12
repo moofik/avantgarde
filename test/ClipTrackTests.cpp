@@ -135,6 +135,16 @@ namespace {
 
     static float absf(float x) { return x < 0 ? -x : x; }
 
+    static int count_non_zero(const std::vector<float>& v, float eps = 1e-4f) {
+        int n = 0;
+        for (float x : v) {
+            if (absf(x) > eps) {
+                ++n;
+            }
+        }
+        return n;
+    }
+
 } // namespace
 
 // -------------------------
@@ -363,6 +373,62 @@ TEST_CASE("ClipTrack: ParamSet index=2 controls playback speed") {
 
     REQUIRE(sumFast < sumNormal * 0.7f);
     REQUIRE(sumFast > sumNormal * 0.3f);
+}
+
+TEST_CASE("ClipTrack: setSlotLengthInBars stretches playback length to target bars") {
+    avantgarde::ClipTrackImpl tr;
+
+    // 8 frames at 8 Hz => 1 second source clip.
+    const int sr = 8;
+    std::vector<int16_t> pcm = { 32767,32767,32767,32767,32767,32767,32767,32767 };
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_test_bars.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLooping(0, false) == true);
+
+    // Auto-stretch to 1 bar at default 120 BPM, 4/4:
+    // 1 bar = 2 sec => 16 frames at 8 Hz.
+    REQUIRE(tr.setSlotLengthInBars(0, 1) == true);
+
+    auto t = make_ctx(16);
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+    clear_out(t);
+    tr.process(t.ctx);
+
+    const int nz = count_non_zero(t.out0);
+    REQUIRE(nz >= 15);
+}
+
+TEST_CASE("ClipTrack: auto-stretch responds to transport tempo changes") {
+    avantgarde::ClipTrackImpl tr;
+
+    const int sr = 8;
+    std::vector<int16_t> pcm = { 32767,32767,32767,32767,32767,32767,32767,32767 };
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_test_tempo_stretch.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLooping(0, false) == true);
+    REQUIRE(tr.setSlotLengthInBars(0, 1) == true);
+
+    // Start from 120 BPM.
+    send_cmd(tr, avantgarde::CmdId::SetTempoBpm, 0, 0, 120.0f);
+    auto t120 = make_ctx(16);
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+    clear_out(t120);
+    tr.process(t120.ctx);
+    const int nz120 = count_non_zero(t120.out0);
+
+    // Increase tempo to 240 BPM => target bar duration halves.
+    send_cmd(tr, avantgarde::CmdId::SetTempoBpm, 0, 0, 240.0f);
+    auto t240 = make_ctx(16);
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+    clear_out(t240);
+    tr.process(t240.ctx);
+    const int nz240 = count_non_zero(t240.out0);
+
+    REQUIRE(nz120 >= 15);
+    REQUIRE(nz240 <= 9);
+    REQUIRE(nz240 < nz120);
 }
 
 TEST_CASE("ClipTrack: clearSlot resets audio (no playback after clear)") {

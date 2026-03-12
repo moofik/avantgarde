@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -261,12 +262,17 @@ namespace avantgarde {
         ~ClipTrackImpl() override = default;
 
         // ---- ITrack ----
-        void addModule(std::unique_ptr<IAudioModule> /*mod*/) override {
-            // MVP: ClipTrack без FX-цепочки. Можно позже добавить хранение модулей.
+        void addModule(std::unique_ptr<IAudioModule> mod) override {
+            if (!mod) return;
+            // outside-RT: module is fully prepared here
+            mod->init(moduleSampleRate_, kFxScratchFrames);
+            mod->reset();
+            modules_.push_back(std::move(mod));
         }
 
-        IAudioModule* getModule(std::size_t /*index*/) override {
-            return nullptr;
+        IAudioModule* getModule(std::size_t index) override {
+            if (index >= modules_.size()) return nullptr;
+            return modules_[index].get();
         }
 
         void process(const AudioProcessContext& ctx) override {
@@ -295,29 +301,62 @@ namespace avantgarde {
             const float g = rt_.gain;
             const bool loop = rt_.loop;
             const double inc = static_cast<double>(detail_interp::clampf(rt_.playbackInc, 0.05f, 8.0f));
-            const int n = (int)ctx.nframes;
 
-            // Mix (adds into out)
-            for (int i = 0; i < n; ++i) {
-                if (!loop && ph >= lenD) {
-                    rt_.playing = false;
-                    ph = 0.0;
+            const bool hasFx = !modules_.empty();
+            if (hasFx) {
+                for (auto& mod : modules_) {
+                    mod->beginBlock();
+                }
+            }
+
+            std::size_t offset = 0;
+            while (offset < ctx.nframes && rt_.playing) {
+                const std::size_t chunk = std::min(kFxScratchFrames, ctx.nframes - offset);
+                const std::size_t produced = renderClipChunk_(chunk, c0, c1, len, lenD, loop, g, inc, ph);
+                if (produced == 0) {
                     break;
                 }
 
-                while (loop && ph >= lenD) ph -= lenD;
+                const float* mix0 = fxA0_.data();
+                const float* mix1 = fxA1_.data();
 
-                const float src0 = detail_interp::sampleCubic(c0, len, ph, loop);
-                const float s0 = src0 * g;
-                out0[i] += s0;
+                if (hasFx) {
+                    bool useAasInput = true;
+                    for (auto& mod : modules_) {
+                        const float* inPtrs[2];
+                        float* outPtrs[2];
+                        if (useAasInput) {
+                            inPtrs[0] = fxA0_.data();
+                            inPtrs[1] = fxA1_.data();
+                            outPtrs[0] = fxB0_.data();
+                            outPtrs[1] = fxB1_.data();
+                        } else {
+                            inPtrs[0] = fxB0_.data();
+                            inPtrs[1] = fxB1_.data();
+                            outPtrs[0] = fxA0_.data();
+                            outPtrs[1] = fxA1_.data();
+                        }
+                        AudioProcessContext modCtx{};
+                        modCtx.in = inPtrs;
+                        modCtx.out = outPtrs;
+                        modCtx.nframes = produced;
+                        mod->process(modCtx);
+                        useAasInput = !useAasInput;
+                    }
 
-                if (out1) {
-                    const float src1 = c1 ? detail_interp::sampleCubic(c1, len, ph, loop) : src0;
-                    const float s1 = src1 * g; // mono -> dual mono
-                    out1[i] += s1;
+                    // after N modules: true -> final in A, false -> final in B
+                    mix0 = useAasInput ? fxA0_.data() : fxB0_.data();
+                    mix1 = useAasInput ? fxA1_.data() : fxB1_.data();
                 }
 
-                ph += inc;
+                for (std::size_t i = 0; i < produced; ++i) {
+                    out0[offset + i] += mix0[i];
+                    if (out1) {
+                        out1[offset + i] += mix1[i];
+                    }
+                }
+
+                offset += produced;
             }
 
             rt_.playhead = ph;
@@ -328,14 +367,10 @@ namespace avantgarde {
 
             const CmdId cid = static_cast<CmdId>(cmd.id);
 
-            // В RtCommand есть поля track/slot:
-            // - engine обычно маршрутизирует по track, но на всякий случай считаем:
-            //   если cmd.slot == -1 -> применяем к слоту 0 (MVP).
-            const uint32_t slot = (cmd.slot < 0) ? 0u : (uint32_t)cmd.slot;
-            if (slot != 0u) return; // MVP: один слот
-
             switch (cid) {
                 case CmdId::Play: {
+                    const uint32_t clipSlot = (cmd.slot < 0) ? 0u : static_cast<uint32_t>(cmd.slot);
+                    if (clipSlot != 0u) break;
                     if (rt_.clip && rt_.clip->frames > 0) {
                         rt_.playhead = 0.0;
                         rt_.playing = true;
@@ -343,11 +378,21 @@ namespace avantgarde {
                 } break;
 
                 case CmdId::Stop: {
+                    const uint32_t clipSlot = (cmd.slot < 0) ? 0u : static_cast<uint32_t>(cmd.slot);
+                    if (clipSlot != 0u) break;
                     rt_.playing = false;
                     rt_.playhead = 0.0;
                 } break;
 
                 case CmdId::ParamSet: {
+                    if (cmd.slot >= 0) {
+                        const std::size_t fxSlot = static_cast<std::size_t>(cmd.slot);
+                        if (fxSlot < modules_.size()) {
+                            modules_[fxSlot]->setParam(cmd.index, detail_interp::clampf(cmd.value, 0.0f, 1.0f));
+                            break;
+                        }
+                    }
+
                     // контракт: RtCommand.index + RtCommand.value
                     // значения параметров по договору нормализованы [0..1]
                     if (cmd.index == 0) {
@@ -359,6 +404,25 @@ namespace avantgarde {
                     } else if (cmd.index == 2) {
                         // varispeed playback increment (1.0 = normal)
                         rt_.playbackInc = detail_interp::clampf(cmd.value, 0.05f, 8.0f);
+                        rt_.stretchToBars = false;
+                    }
+                } break;
+
+                case CmdId::SetTempoBpm: {
+                    const float bpm = detail_interp::clampf(cmd.value, 20.0f, 300.0f);
+                    rt_.transportBpm = bpm;
+                    if (rt_.stretchToBars) {
+                        rt_.playbackInc = computeAutoPlaybackIncRt_();
+                    }
+                } break;
+
+                case CmdId::SetTimeSig: {
+                    const uint8_t num = sanitizeTsNum_(static_cast<int>(std::lround(cmd.value)));
+                    const uint8_t den = sanitizeTsDen_(static_cast<int>(cmd.index));
+                    rt_.transportTsNum = num;
+                    rt_.transportTsDen = den;
+                    if (rt_.stretchToBars) {
+                        rt_.playbackInc = computeAutoPlaybackIncRt_();
                     }
                 } break;
 
@@ -398,6 +462,11 @@ namespace avantgarde {
             // Контракт: если слот был в воспроизведении, реализация должна безопасно остановить.
             // Мы останавливаем RT на границе блока через pendingPublish_.
             publishClip_(std::move(b));
+            moduleSampleRate_ = (sr > 0) ? static_cast<double>(sr) : moduleSampleRate_;
+            for (auto& mod : modules_) {
+                mod->init(moduleSampleRate_, kFxScratchFrames);
+                mod->reset();
+            }
             return true;
         }
 
@@ -422,7 +491,8 @@ namespace avantgarde {
             if (bars < 1u) return false;
 
             slotBars_.store(bars, std::memory_order_relaxed);
-            pendingPlaybackInc_.store(computePlaybackIncForBars_(), std::memory_order_release);
+            pendingStretchMode_.store(1, std::memory_order_release);
+            pendingStretchRecalc_.store(true, std::memory_order_release);
             return true;
         }
 
@@ -435,6 +505,37 @@ namespace avantgarde {
         }
 
     private:
+        static constexpr std::size_t kFxScratchFrames = 2048;
+
+        std::size_t renderClipChunk_(std::size_t maxFrames,
+                                     const float* c0,
+                                     const float* c1,
+                                     int len,
+                                     double lenD,
+                                     bool loop,
+                                     float gain,
+                                     double inc,
+                                     double& ph) noexcept {
+            std::size_t produced = 0;
+            for (; produced < maxFrames; ++produced) {
+                if (!loop && ph >= lenD) {
+                    rt_.playing = false;
+                    ph = 0.0;
+                    break;
+                }
+
+                while (loop && ph >= lenD) ph -= lenD;
+
+                const float src0 = detail_interp::sampleCubic(c0, len, ph, loop);
+                const float src1 = c1 ? detail_interp::sampleCubic(c1, len, ph, loop) : src0;
+
+                fxA0_[produced] = src0 * gain;
+                fxA1_[produced] = src1 * gain;
+                ph += inc;
+            }
+            return produced;
+        }
+
         struct ClipBuffer {
             int sampleRate = 0;
             int channels = 0; // 1 or 2
@@ -449,22 +550,38 @@ namespace avantgarde {
             const ClipBuffer* clip = nullptr;
             double playhead = 0.0;
             float playbackInc = 1.0f;
+            float transportBpm = 120.0f;
+            uint8_t transportTsNum = 4;
+            uint8_t transportTsDen = 4;
+            bool stretchToBars = false;
             float gain = 1.0f;     // normalized 0..1 (MVP)
             bool playing = false;
             bool loop = false;
         };
 
     private:
-        float computePlaybackIncForBars_() const noexcept {
-            const ClipBuffer* clip = clipCtl_.get();
+        static uint8_t sanitizeTsNum_(int num) noexcept {
+            if (num < 1 || num > 32) return 4;
+            return static_cast<uint8_t>(num);
+        }
+
+        static uint8_t sanitizeTsDen_(int den) noexcept {
+            if (den == 1 || den == 2 || den == 4 || den == 8 || den == 16 || den == 32) {
+                return static_cast<uint8_t>(den);
+            }
+            return 4;
+        }
+
+        float computeAutoPlaybackIncRt_() const noexcept {
+            const ClipBuffer* clip = rt_.clip;
             if (!clip || clip->frames <= 0 || clip->sampleRate <= 0) {
                 return 1.0f;
             }
 
             const uint32_t bars = std::max<uint32_t>(1, slotBars_.load(std::memory_order_relaxed));
-            const float bpm = 120.0f;
-            const uint8_t tsNum = 4;
-            const uint8_t tsDen = 4;
+            const float bpm = detail_interp::clampf(rt_.transportBpm, 20.0f, 300.0f);
+            const uint8_t tsNum = sanitizeTsNum_(rt_.transportTsNum);
+            const uint8_t tsDen = sanitizeTsDen_(rt_.transportTsDen);
 
             const double beatsPerBar = static_cast<double>(tsNum) * 4.0 / static_cast<double>(tsDen);
             const double targetFrames =
@@ -487,6 +604,8 @@ namespace avantgarde {
         }
 
         void rtApplyPending_() noexcept {
+            bool clipChanged = false;
+
             // Apply pending clear
             if (pendingClear_.exchange(false, std::memory_order_acq_rel)) {
                 rt_.clip = nullptr;
@@ -499,6 +618,7 @@ namespace avantgarde {
                 rt_.clip = p;
                 rt_.playing = false;  // безопасно: при смене клипа останавливаем
                 rt_.playhead = 0.0;
+                clipChanged = true;
             }
 
             // Apply pending loop set (from control method)
@@ -507,13 +627,28 @@ namespace avantgarde {
                 rt_.loop = (pl != 0u);
             }
 
-            const float pendingInc = pendingPlaybackInc_.exchange(-1.0f, std::memory_order_acq_rel);
-            if (pendingInc > 0.0f) {
-                rt_.playbackInc = detail_interp::clampf(pendingInc, 0.05f, 8.0f);
+            const int stretchMode = pendingStretchMode_.exchange(-1, std::memory_order_acq_rel);
+            if (stretchMode == 0) {
+                rt_.stretchToBars = false;
+            } else if (stretchMode == 1) {
+                rt_.stretchToBars = true;
+            }
+
+            const bool stretchRecalc = pendingStretchRecalc_.exchange(false, std::memory_order_acq_rel);
+            if ((stretchRecalc || clipChanged) && rt_.stretchToBars) {
+                rt_.playbackInc = computeAutoPlaybackIncRt_();
             }
         }
 
     private:
+        std::vector<std::unique_ptr<IAudioModule>> modules_;
+        double moduleSampleRate_{48000.0};
+
+        std::array<float, kFxScratchFrames> fxA0_{};
+        std::array<float, kFxScratchFrames> fxA1_{};
+        std::array<float, kFxScratchFrames> fxB0_{};
+        std::array<float, kFxScratchFrames> fxB1_{};
+
         std::shared_ptr<ClipBuffer> clipCtl_; // “флешка с аудио”, которую держит control-мир.
 
         // В RT ждёт новый клип, который надо сделать текущим источником аудио
@@ -527,7 +662,8 @@ namespace avantgarde {
 
         // 0xFFFFFFFF = "ничего не менять"; иначе 0/1
         std::atomic<uint32_t> pendingLoop_{0xFFFFFFFFu}; // В RT ждёт обновление параметра loop
-        std::atomic<float> pendingPlaybackInc_{-1.0f};
+        std::atomic<int> pendingStretchMode_{-1}; // -1 keep, 0 off, 1 on
+        std::atomic<bool> pendingStretchRecalc_{false};
 
         // record-arm (MVP)
         std::atomic<bool> recArmed_{false};

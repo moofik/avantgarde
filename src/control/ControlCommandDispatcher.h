@@ -13,6 +13,8 @@ public:
     explicit ControlCommandDispatcher(IRtCommandQueue* rtQueue) noexcept;
 
     bool setQuantizeMode(QuantizeMode mode) noexcept;
+    bool setTempoBpm(float bpm) noexcept;
+    bool setTimeSignature(uint8_t num, uint8_t den) noexcept;
     bool sendPlay(int16_t track, int16_t slot) noexcept;
     bool sendStop(int16_t track, int16_t slot) noexcept;
     bool sendParamSet(int16_t track, int16_t slot, uint16_t index, float value) noexcept;

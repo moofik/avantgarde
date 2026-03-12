@@ -13,6 +13,18 @@ bool ControlCommandDispatcher::setQuantizeMode(QuantizeMode mode) noexcept {
                     static_cast<float>(static_cast<uint8_t>(mode)));
 }
 
+bool ControlCommandDispatcher::setTempoBpm(float bpm) noexcept {
+    return dispatch(CmdId::SetTempoBpm, /*track=*/-1, /*slot=*/-1, /*index=*/0, bpm);
+}
+
+bool ControlCommandDispatcher::setTimeSignature(uint8_t num, uint8_t den) noexcept {
+    return dispatch(CmdId::SetTimeSig,
+                    /*track=*/-1,
+                    /*slot=*/-1,
+                    /*index=*/static_cast<uint16_t>(den),
+                    static_cast<float>(num));
+}
+
 bool ControlCommandDispatcher::sendPlay(int16_t track, int16_t slot) noexcept {
     return dispatch(CmdId::Play, track, slot, /*index=*/0, 1.0f);
 }

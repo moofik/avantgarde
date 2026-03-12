@@ -304,6 +304,42 @@ TEST_CASE("ParamSet is routed into track->onRtCommand") {
     REQUIRE(tp->seen[0].value == Catch::Approx(0.75f));
 }
 
+TEST_CASE("Global SetTempoBpm and SetTimeSig are broadcast to all tracks") {
+    MockRtQueue q;
+    MockParamBridge p;
+    auto eng = avantgarde::MakeAudioEngine(&q, &p);
+
+    auto t0 = std::make_unique<MockTrack>();
+    auto* tp0 = t0.get();
+    auto t1 = std::make_unique<MockTrack>();
+    auto* tp1 = t1.get();
+    eng->registerTrack(std::move(t0));
+    eng->registerTrack(std::move(t1));
+
+    RtCommand tempo{};
+    tempo.id = static_cast<uint16_t>(CmdId::SetTempoBpm);
+    tempo.track = -1;
+    tempo.slot = -1;
+    tempo.value = 130.0f;
+    q.push(tempo);
+
+    RtCommand ts{};
+    ts.id = static_cast<uint16_t>(CmdId::SetTimeSig);
+    ts.track = -1;
+    ts.slot = -1;
+    ts.index = 8;
+    ts.value = 7.0f;
+    q.push(ts);
+
+    auto ctx = makeCtx();
+    eng->processBlock(ctx.ctx);
+
+    REQUIRE(tp0->seen.size() == 2);
+    REQUIRE(tp1->seen.size() == 2);
+    REQUIRE(tp0->seen[0].id == static_cast<uint16_t>(CmdId::SetTempoBpm));
+    REQUIRE(tp0->seen[1].id == static_cast<uint16_t>(CmdId::SetTimeSig));
+}
+
 // --- IRtExtension ---
 
 TEST_CASE("IRtExtension hooks are called (begin/end once per block)") {
@@ -503,4 +539,3 @@ TEST_CASE("Full ordering: ParamBridge -> Transport -> RtExtension(begin) -> Trac
     REQUIRE(sink.writes == 1);
     REQUIRE(phase == 60);
 }
-

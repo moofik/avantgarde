@@ -161,7 +161,16 @@ namespace avantgarde {
             if (t >= 0 && static_cast<std::size_t>(t) < tracks_.size()) {
                 tracks_[t]->onRtCommand(rc); // RT-чисто, без аллокаций
             } else {
-                // TODO: master / глобальные команды (track == -1) — обработать здесь или в MasterTrack
+                // Глобальные transport-команды прокидываем всем трекам, которым это важно
+                // (например, auto stretch-to-bars в ClipTrack).
+                if (t == -1) {
+                    const CmdId id = static_cast<CmdId>(rc.id);
+                    if (id == CmdId::SetTempoBpm || id == CmdId::SetTimeSig) {
+                        for (auto& tr : tracks_) {
+                            tr->onRtCommand(rc);
+                        }
+                    }
+                }
             }
         }
 
