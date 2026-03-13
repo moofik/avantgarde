@@ -25,11 +25,21 @@ set_source_files_properties(
         COMPILE_OPTIONS "-x;objective-c++"
 )
 
+if (EXISTS ${CMAKE_CURRENT_LIST_DIR}/macos/MacGbWindowRenderer.mm)
+    set_source_files_properties(
+            ${CMAKE_CURRENT_LIST_DIR}/macos/MacGbWindowRenderer.mm
+            PROPERTIES
+            LANGUAGE CXX
+            COMPILE_OPTIONS "-x;objective-c++"
+    )
+endif()
+
 if(APPLE)
     target_link_libraries(avantgarde_platform PRIVATE
             "-framework AudioToolbox"
             "-framework AudioUnit"
             "-framework CoreAudio"
             "-framework CoreFoundation"
+            "-framework AppKit"
     )
 endif()

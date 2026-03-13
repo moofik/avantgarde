@@ -54,6 +54,17 @@ Exit criteria:
 Exit criteria:
 - same `UiState` drives desktop preview and RPi backend renderer
 
+## Milestone 6: Gothic GameBoy-like UI
+- [x] Add `--ui=gb` terminal preview renderer with non-scrolling frame redraw.
+- [x] Add muted gothic black-pink palette theme (`--theme=gothic`).
+- [x] Add dedicated macOS preview window mode (`--ui=gb-window`).
+- [x] Add optional Gothic Core font pipeline from `assets/fonts` for macOS preview.
+- [ ] Add pixel-surface backend to map same renderer to real 2.8" SPI display.
+- [ ] Add direct UI controls for track gain/fx params (beyond speed).
+
+Exit criteria:
+- stable real-time control UX in preview and same visual style on device display
+
 ## First implementation slice delivered now
 - Added `src/contracts/IUi.h`
 - Added `src/service/UiStateStore.{h,cpp}`

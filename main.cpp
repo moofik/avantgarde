@@ -17,13 +17,16 @@
 #include "contracts/IClipTrack.h"
 #include "contracts/IParameterized.h"
 #include "contracts/IUi.h"
+#include "contracts/UiTheme.h"
 #include "contracts/ids.h"   // где у тебя CmdId enum (или include из contracts)
 
 #include "control/ControlCommandDispatcher.h"
 #include "control/TerminalUiInput.h"
 #include "platform/macos/MacAudioHost.mm"   // твой
+#include "platform/macos/MacGbWindowRenderer.h"
 #include "platform/lowres/LowResUiRenderer.h"
 #include "platform/terminal/AnsiUiRenderer.h"
+#include "platform/terminal/GothicGbUiRenderer.h"
 #include "platform/terminal/TerminalCharDisplay.h"
 #include "runtime/QuantizedSchedulerRtExtension.h"
 #include "runtime/AudioEngine.cpp"       // твой
@@ -40,7 +43,9 @@ namespace {
 std::array<ITrack*, 2> gParamTracks{};
 enum class UiMode {
     Ansi,
-    LowRes
+    LowRes,
+    Gb,
+    GbWindow
 };
 
 bool parseUiMode(std::string_view raw, UiMode& out) noexcept {
@@ -50,6 +55,14 @@ bool parseUiMode(std::string_view raw, UiMode& out) noexcept {
     }
     if (raw == "lowres") {
         out = UiMode::LowRes;
+        return true;
+    }
+    if (raw == "gb") {
+        out = UiMode::Gb;
+        return true;
+    }
+    if (raw == "gb-window") {
+        out = UiMode::GbWindow;
         return true;
     }
     return false;
@@ -77,6 +90,8 @@ static void RenderThunk(AudioProcessContext& ctx, void* user) noexcept {
 
 int main(int argc, char** argv) {
     UiMode uiMode = UiMode::Ansi;
+    UiTheme uiTheme = UiTheme::Default;
+    bool uiThemeProvided = false;
     int argi = 1;
     while (argi < argc) {
         const std::string arg = argv[argi];
@@ -96,8 +111,30 @@ int main(int argc, char** argv) {
             argi += 2;
             continue;
         }
+        if (arg.rfind("--theme=", 0) == 0) {
+            if (!parseUiTheme(std::string_view(arg).substr(8), uiTheme)) {
+                std::printf("Unsupported theme: %s\n", arg.c_str());
+                return 1;
+            }
+            uiThemeProvided = true;
+            ++argi;
+            continue;
+        }
+        if (arg == "--theme" && (argi + 1) < argc) {
+            if (!parseUiTheme(argv[argi + 1], uiTheme)) {
+                std::printf("Unsupported theme: %s\n", argv[argi + 1]);
+                return 1;
+            }
+            uiThemeProvided = true;
+            argi += 2;
+            continue;
+        }
         if (arg == "--ui") {
-            std::printf("Missing value for --ui (expected: ansi|lowres)\n");
+            std::printf("Missing value for --ui (expected: ansi|lowres|gb|gb-window)\n");
+            return 1;
+        }
+        if (arg == "--theme") {
+            std::printf("Missing value for --theme (expected: gothic)\n");
             return 1;
         }
         if (arg.rfind("--", 0) == 0) {
@@ -108,7 +145,7 @@ int main(int argc, char** argv) {
     }
 
     if (argi >= argc) {
-        std::printf("Usage: %s [--ui=ansi|lowres] /path/to/track1.wav [/path/to/track2.wav]\n", argv[0]);
+        std::printf("Usage: %s [--ui=ansi|lowres|gb|gb-window] [--theme=gothic] /path/to/track1.wav [/path/to/track2.wav]\n", argv[0]);
         return 1;
     }
     const char* wavPath0 = argv[argi];
@@ -170,9 +207,16 @@ int main(int argc, char** argv) {
     UiStateComposer uiComposer;
     std::unique_ptr<IDisplay> uiDisplay;
     std::unique_ptr<IUiRenderer> uiRenderer;
+    const UiTheme effectiveGbTheme = uiThemeProvided ? uiTheme : UiTheme::Gothic;
+    // Single tuning knob for the GB frame width in both terminal and window UI modes.
+    static constexpr uint16_t kGbTextWidth = 60;
     if (uiMode == UiMode::LowRes) {
         uiDisplay = std::make_unique<TerminalCharDisplay>(64, 16);
         uiRenderer = std::make_unique<LowResUiRenderer>(*uiDisplay);
+    } else if (uiMode == UiMode::GbWindow) {
+        uiRenderer = std::make_unique<MacGbWindowRenderer>(effectiveGbTheme, kGbTextWidth);
+    } else if (uiMode == UiMode::Gb) {
+        uiRenderer = std::make_unique<GothicGbUiRenderer>(effectiveGbTheme, kGbTextWidth);
     } else {
         uiRenderer = std::make_unique<AnsiUiRenderer>();
     }
@@ -353,6 +397,9 @@ int main(int argc, char** argv) {
     });
 
     while (!stopUi.load(std::memory_order_acquire)) {
+        if (auto* windowRenderer = dynamic_cast<MacGbWindowRenderer*>(uiRenderer.get())) {
+            windowRenderer->pumpEvents();
+        }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
