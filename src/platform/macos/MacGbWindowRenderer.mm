@@ -1,5 +1,5 @@
 #include "platform/macos/MacGbWindowRenderer.h"
-#include "platform/terminal/GothicGbUiRenderer.h"
+#include "service/ui/GbFrameComposer.h"
 
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
@@ -292,7 +292,7 @@ void MacGbWindowRenderer::render(const UiState& state) {
         return;
     }
 
-    const std::string frame = GothicGbUiRenderer::buildMonochromeFrame(state, textWidth_);
+    const std::string frame = GbFrameComposer::buildMonochromeFrame(state, textWidth_);
     NSString* text = [NSString stringWithUTF8String:frame.c_str()];
     if (!text) {
         return;
