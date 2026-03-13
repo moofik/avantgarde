@@ -169,6 +169,7 @@ std::string GothicGbUiRenderer::buildMonochromeFrame(const UiState& state, uint1
 
     std::ostringstream out;
     out << "╔" << repeatUtf8("═", inner) << "╗\n";
+    out << "║" << padRight(" ", inner) << "║\n";
     out << "║" << padRight(" AVANTGARDE ", inner) << "║\n";
 
     char line[256]{};

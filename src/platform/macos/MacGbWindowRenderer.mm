@@ -256,9 +256,10 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
     [impl_->headerOverlay sizeToFit];
 
     const CGFloat cellW = std::max<CGFloat>(glyphWidth(impl_->bodyFont, @"M"), 1.0);
+    const CGFloat lineH = std::max<CGFloat>([[impl_->textView layoutManager] defaultLineHeightForFont:impl_->bodyFont], 1.0);
     const NSSize inset = [impl_->textView textContainerInset];
     const CGFloat leading = inset.width + (cellW * 2.0) + kHeaderOverlayXBias;
-    const CGFloat top = inset.height + kHeaderOverlayYBias;
+    const CGFloat top = inset.height + lineH + kHeaderOverlayYBias;
 
     [impl_->headerOverlay setTranslatesAutoresizingMaskIntoConstraints:NO];
     [impl_->textView addSubview:impl_->headerOverlay positioned:NSWindowAbove relativeTo:nil];
