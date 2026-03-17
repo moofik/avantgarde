@@ -8,6 +8,8 @@
 #include <thread>
 #include <atomic>
 #include <string_view>
+#include <deque>
+#include <mutex>
 
 #include "contracts/types.h"
 #include "contracts/IDisplay.h"
@@ -36,6 +38,8 @@
 #include "runtime/TransportBridgeDualBuffer.h"
 #include "service/UiStateComposer.h"
 #include "service/UiStateStore.h"
+#include "service/ui/ManagerWidget.h"
+#include "service/ui/UiSceneHost.h"
 
 using namespace avantgarde;
 
@@ -81,6 +85,33 @@ IParameterized* ResolveParamTarget(Target target) noexcept {
     }
     return tr->getModule(static_cast<std::size_t>(target.slotId));
 }
+
+// Minimal input queue for cross-thread event handoff.
+// Kept local to main.cpp to avoid extra global UI surface area.
+struct InputEventQueue final {
+    void push(const UiInputEvent& ev) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (queue_.size() >= 1024U) {
+            queue_.pop_front();
+        }
+        queue_.push_back(ev);
+    }
+
+    bool tryPop(UiInputEvent& out) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (queue_.empty()) {
+            out.action = UiInputAction::None;
+            return false;
+        }
+        out = queue_.front();
+        queue_.pop_front();
+        return true;
+    }
+
+private:
+    std::mutex mutex_{};
+    std::deque<UiInputEvent> queue_{};
+};
 } // namespace
 
 static void RenderThunk(AudioProcessContext& ctx, void* user) noexcept {
@@ -180,6 +211,8 @@ int main(int argc, char** argv) {
     IClipTrack* clipPtr0 = clip0.get();
     auto clip1 = std::make_unique<ClipTrackImpl>();
     IClipTrack* clipPtr1 = clip1.get();
+    auto previewClip = std::make_unique<ClipTrackImpl>();
+    IClipTrack* previewClipPtr = previewClip.get();
 
     // 4) Load sample (non-RT!)
     if (!clipPtr0->loadSlotFromFile(0, wavPath0)) {
@@ -256,20 +289,37 @@ int main(int argc, char** argv) {
     track1.clipName = track1Loaded ? clipName1 : std::string{};
     uiStore.setTrack(1, track1);
 
+    std::array<IClipTrack*, 2> clipCtl{clipPtr0, clipPtr1};
+
     // 5) Register track (non-RT)
     engine.registerTrack(std::move(clip0));
     engine.registerTrack(std::move(clip1));
+    engine.registerTrack(std::move(previewClip)); // hidden preview voice (track index 2)
 
     // 6) Transport + quantized scheduler
     engine.setTransportBridge(&transport);
     QuantizedSchedulerRtExtension scheduler(&qUi, &qRt, &transport, 48000.0);
     engine.addRtExtension(&scheduler);
     ControlCommandDispatcher controlDispatcher(&qUi);
+    ControlCommandDispatcher immediateDispatcher(&qRt); // bypass quantized scheduler (preview path)
 
     // Set initial quantization mode via UI command path.
     (void)controlDispatcher.setQuantizeMode(QuantizeMode::Bar);
     (void)controlDispatcher.setTempoBpm(trUi.bpm);
     (void)controlDispatcher.setTimeSignature(trUi.tsNum, trUi.tsDen);
+    (void)immediateDispatcher.sendParamSet(/*track=*/2, /*slot=*/-1, /*gain index=*/0, /*-12dB*/0.25f);
+    (void)immediateDispatcher.sendParamSet(/*track=*/2, /*slot=*/-1, /*loop index=*/1, /*off*/0.0f);
+
+    UiSceneHost sceneHost;
+    (void)sceneHost.registerWidget(UiScene::Manager, std::make_unique<ManagerWidget>(kGbTextWidth));
+    sceneHost.setScene(UiScene::Tracks);
+    sceneHost.nav().selectedTrack = trUi.activeTrack;
+
+    std::atomic<UiScene> activeUiScene{UiScene::Tracks};
+    std::mutex customFrameMutex;
+    std::string customFrame;
+    auto* windowUiInput = dynamic_cast<MacGbWindowRenderer*>(uiRenderer.get());
+    InputEventQueue inputQueue;
 
     // 7) Run audio
     StreamConfig cfg{ .sampleRate=48000, .blockFrames=256, .numInput=0, .numOutput=2 };
@@ -286,32 +336,127 @@ int main(int argc, char** argv) {
     }
 
     std::atomic<bool> stopUi{false};
-    std::thread controlThread([&]() {
+    std::thread terminalInputThread([&]() {
         TerminalUiInput input;
+        while (!stopUi.load(std::memory_order_acquire)) {
+            UiInputEvent ev{};
+            if (input.poll(ev)) {
+                inputQueue.push(ev);
+                continue;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+
+    std::thread controlThread([&]() {
         std::array<UiTrackStateView, 2> tracksCtl{track0, track1};
         UiTransportState trCtl = trUi;
+        auto refreshManagerFrame = [&]() {
+            UiTextBuffer buf{};
+            if (!sceneHost.renderActive(buf, uiStore.snapshot())) {
+                return;
+            }
+            std::string frame;
+            for (const std::string& line : buf.lines) {
+                frame += line;
+                frame.push_back('\n');
+            }
+            std::lock_guard<std::mutex> lock(customFrameMutex);
+            customFrame = std::move(frame);
+        };
+        auto handleIntent = [&](const UiIntent& intent) {
+            switch (intent.type) {
+                case UiIntentType::LoadSampleToTrack: {
+                    const uint8_t t = std::min<uint8_t>(intent.track, 1);
+                    if (intent.path.empty() || !clipCtl[t]) {
+                        break;
+                    }
+                    if (!clipCtl[t]->loadSlotFromFile(0, intent.path.c_str())) {
+                        break;
+                    }
+                    (void)clipCtl[t]->setSlotLooping(0, true);
+                    tracksCtl[t].clipName = intent.path;
+                    if (const std::size_t pos = tracksCtl[t].clipName.find_last_of("/\\"); pos != std::string::npos) {
+                        tracksCtl[t].clipName = tracksCtl[t].clipName.substr(pos + 1);
+                    }
+                    if (tracksCtl[t].state == UiTrackState::Empty) {
+                        tracksCtl[t].state = UiTrackState::Stopped;
+                    }
+                    tracksCtl[t].loop = true;
+                    uiStore.setTrack(t, tracksCtl[t]);
+                } break;
+                case UiIntentType::PreviewRequest:
+                    (void)immediateDispatcher.sendStop(2, 0);
+                    if (!intent.path.empty() && previewClipPtr->loadSlotFromFile(0, intent.path.c_str())) {
+                        (void)previewClipPtr->setSlotLooping(0, false);
+                        (void)immediateDispatcher.sendPlay(2, 0);
+                    }
+                    break;
+                case UiIntentType::PreviewStop:
+                    (void)immediateDispatcher.sendStop(2, 0);
+                    break;
+                case UiIntentType::OpenScene:
+                case UiIntentType::Back:
+                case UiIntentType::None:
+                case UiIntentType::AddFxToTrack:
+                case UiIntentType::RemoveFxFromTrack:
+                case UiIntentType::OpenFxEditor:
+                case UiIntentType::SetFxParam:
+                case UiIntentType::EnginePlayTrack:
+                case UiIntentType::EngineStopTrack:
+                case UiIntentType::EngineSetQuant:
+                case UiIntentType::EngineSetBpm:
+                case UiIntentType::EngineSetTrackSpeed:
+                default:
+                    break;
+            }
+        };
         const auto recomputePlaying = [&]() noexcept {
             return tracksCtl[0].state == UiTrackState::Playing || tracksCtl[1].state == UiTrackState::Playing;
         };
 
         while (!stopUi.load(std::memory_order_acquire)) {
             UiInputEvent ev{};
-            if (!input.poll(ev)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (!inputQueue.tryPop(ev)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
 
+            if (ev.action == UiInputAction::Quit) {
+                stopUi.store(true, std::memory_order_release);
+                break;
+            }
+
+            if (ev.action == UiInputAction::SelectTrack0 || ev.action == UiInputAction::SelectTrack1) {
+                trCtl.activeTrack = (ev.action == UiInputAction::SelectTrack0) ? 0 : 1;
+                sceneHost.nav().selectedTrack = trCtl.activeTrack;
+                uiStore.setTransport(trCtl);
+            }
+
+            const WidgetOutput widgetOut = sceneHost.handleInput(ev.action, uiStore.snapshot());
+            for (const UiIntent& intent : widgetOut.intents) {
+                handleIntent(intent);
+            }
+
+            if (sceneHost.scene() == UiScene::Manager) {
+                activeUiScene.store(UiScene::Manager, std::memory_order_release);
+                refreshManagerFrame();
+                continue;
+            }
+
+            activeUiScene.store(UiScene::Tracks, std::memory_order_release);
+
             switch (ev.action) {
-                case UiInputAction::Quit:
-                    stopUi.store(true, std::memory_order_release);
-                    break;
                 case UiInputAction::SelectTrack0:
-                    trCtl.activeTrack = 0;
-                    uiStore.setTransport(trCtl);
-                    break;
                 case UiInputAction::SelectTrack1:
-                    trCtl.activeTrack = 1;
-                    uiStore.setTransport(trCtl);
+                case UiInputAction::OpenManager:
+                case UiInputAction::BackScene:
+                case UiInputAction::ListUp:
+                case UiInputAction::ListDown:
+                case UiInputAction::ListEnter:
+                case UiInputAction::ListParent:
+                case UiInputAction::PreviewPlay:
+                case UiInputAction::PreviewAutoToggle:
                     break;
                 case UiInputAction::PlayActiveTrack: {
                     const uint8_t t = trCtl.activeTrack > 1 ? 1 : trCtl.activeTrack;
@@ -379,33 +524,73 @@ int main(int argc, char** argv) {
                     break;
             }
         }
+        (void)immediateDispatcher.sendStop(2, 0);
     });
 
-    std::thread uiThread([&]() {
-        while (!stopUi.load(std::memory_order_acquire)) {
-            UiRuntimeTelemetryView telemetry{};
-            telemetry.totalCallbacks = stream->totalCallbacks();
-            telemetry.xruns = stream->xruns();
-            telemetry.rtQueueOverflow =
-                    qUi.overflowFlagAndReset() || qRt.overflowFlagAndReset() || scheduler.overflowFlagAndReset();
-            telemetry.blockFrames = static_cast<uint32_t>(stream->blockFrames());
+    const auto renderUiOnce = [&]() {
+        UiRuntimeTelemetryView telemetry{};
+        telemetry.totalCallbacks = stream->totalCallbacks();
+        telemetry.xruns = stream->xruns();
+        telemetry.rtQueueOverflow =
+                qUi.overflowFlagAndReset() || qRt.overflowFlagAndReset() || scheduler.overflowFlagAndReset();
+        telemetry.blockFrames = static_cast<uint32_t>(stream->blockFrames());
 
-            const UiState state = uiComposer.compose(uiStore.snapshot(), telemetry);
+        const UiState state = uiComposer.compose(uiStore.snapshot(), telemetry);
+        const UiScene scene = activeUiScene.load(std::memory_order_acquire);
+        if (scene == UiScene::Manager) {
+            std::string frame;
+            {
+                std::lock_guard<std::mutex> lock(customFrameMutex);
+                frame = customFrame;
+            }
+            if (!frame.empty()) {
+                if (auto* windowRenderer = dynamic_cast<MacGbWindowRenderer*>(uiRenderer.get())) {
+                    windowRenderer->renderCustomFrame(frame, /*showHeaderOverlay=*/false);
+                } else if (auto* gbRenderer = dynamic_cast<GothicGbUiRenderer*>(uiRenderer.get())) {
+                    gbRenderer->renderCustomFrame(frame);
+                } else {
+                    uiRenderer->render(state);
+                }
+            } else {
+                uiRenderer->render(state);
+            }
+        } else {
             uiRenderer->render(state);
-            std::this_thread::sleep_for(std::chrono::milliseconds(120));
         }
-    });
+    };
+
+    std::thread uiThread;
+    const bool renderOnMainThread = (windowUiInput != nullptr);
+    if (!renderOnMainThread) {
+        uiThread = std::thread([&]() {
+            while (!stopUi.load(std::memory_order_acquire)) {
+                renderUiOnce();
+                std::this_thread::sleep_for(std::chrono::milliseconds(120));
+            }
+        });
+    }
 
     while (!stopUi.load(std::memory_order_acquire)) {
-        if (auto* windowRenderer = dynamic_cast<MacGbWindowRenderer*>(uiRenderer.get())) {
-            windowRenderer->pumpEvents();
+        if (windowUiInput) {
+            windowUiInput->pumpEvents();
+            UiInputEvent ev{};
+            while (windowUiInput->pollInput(ev)) {
+                inputQueue.push(ev);
+            }
+            // macOS AppKit render on main thread for deterministic input latency.
+            renderUiOnce();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
 
     stopUi.store(true, std::memory_order_release);
     if (controlThread.joinable()) {
         controlThread.join();
+    }
+    if (terminalInputThread.joinable()) {
+        terminalInputThread.join();
     }
     if (uiThread.joinable()) {
         uiThread.join();

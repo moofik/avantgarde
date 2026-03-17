@@ -23,6 +23,10 @@ enum class UiIntentType : uint8_t {
     OpenFxEditor,
     // Установить конкретный параметр эффекта.
     SetFxParam,
+    // Запрос на предпрослушку выбранного файла (preview voice).
+    PreviewRequest,
+    // Остановка предпрослушки.
+    PreviewStop,
     // Intent-обертки над текущими transport/track действиями движка.
     EnginePlayTrack,
     EngineStopTrack,

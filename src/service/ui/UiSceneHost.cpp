@@ -48,6 +48,20 @@ WidgetOutput UiSceneHost::handleInput(UiInputAction action, const UiState& rtSta
         nav_.selectedTrack = 1;
         return WidgetOutput{true, {}};
     }
+    if (action == UiInputAction::OpenManager) {
+        if (widgets_[sceneIndex_(UiScene::Manager)]) {
+            nav_.scene = UiScene::Manager;
+            return WidgetOutput{true, {UiIntent{UiIntentType::OpenScene}}};
+        }
+        return {};
+    }
+    if (action == UiInputAction::BackScene) {
+        if (nav_.scene != UiScene::Tracks) {
+            nav_.scene = UiScene::Tracks;
+            return WidgetOutput{true, {UiIntent{UiIntentType::Back}}};
+        }
+        return {};
+    }
 
     auto& widget = widgets_[sceneIndex_(nav_.scene)];
     if (!widget) {

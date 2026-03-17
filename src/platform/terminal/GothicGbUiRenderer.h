@@ -17,6 +17,7 @@ public:
     ~GothicGbUiRenderer() override;
 
     void render(const UiState& state) override;
+    void renderCustomFrame(const std::string& monoFrame);
 
     static std::string buildMonochromeFrame(const UiState& state, uint16_t width);
 

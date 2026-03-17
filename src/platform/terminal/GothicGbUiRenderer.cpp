@@ -90,8 +90,13 @@ void GothicGbUiRenderer::render(const UiState& state) {
     ensureTerminalReady_();
 
     const std::string mono = buildMonochromeFrame(state, width_);
-    const std::string frame = ansiCapable_ ? colorizeFrame_(state, mono) : mono;
+    renderCustomFrame(mono);
+}
 
+void GothicGbUiRenderer::renderCustomFrame(const std::string& monoFrame) {
+    ensureTerminalReady_();
+
+    const std::string frame = ansiCapable_ ? colorizeFrame_(UiState{}, monoFrame) : monoFrame;
     if (frame == lastFrame_) {
         return;
     }

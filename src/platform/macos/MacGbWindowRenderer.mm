@@ -8,6 +8,8 @@
 
 #include <cstdio>
 #include <cmath>
+#include <deque>
+#include <mutex>
 #include <string>
 
 namespace avantgarde {
@@ -134,6 +136,65 @@ bool hasStableFrameMetrics(NSFont* font) {
     return true;
 }
 
+UiInputAction mapWindowKeyCode(unsigned short keyCode) noexcept {
+    switch (keyCode) {
+        case 53: return UiInputAction::BackScene;       // Esc
+        case 12: return UiInputAction::Quit;            // Q
+        case 18: return UiInputAction::SelectTrack0;    // 1
+        case 19: return UiInputAction::SelectTrack1;    // 2
+        case 46: return UiInputAction::OpenManager;     // M
+        case 38: return UiInputAction::ListDown;        // J
+        case 40: return UiInputAction::ListUp;          // K
+        case 36: return UiInputAction::ListEnter;       // Enter
+        case 4:  return UiInputAction::ListParent;      // H
+        case 51: return UiInputAction::ListParent;      // Backspace
+        case 49: return UiInputAction::PreviewPlay;     // Space
+        case 0:  return UiInputAction::PreviewAutoToggle; // A
+        case 35: return UiInputAction::PlayActiveTrack; // P
+        case 1:  return UiInputAction::StopActiveTrack; // S
+        case 24: return UiInputAction::TrackSpeedUp;    // =
+        case 27: return UiInputAction::TrackSpeedDown;  // -
+        case 6:  return UiInputAction::QuantNone;       // Z
+        case 7:  return UiInputAction::QuantBeat;       // X
+        case 8:  return UiInputAction::QuantBar;        // C
+        case 30: return UiInputAction::BpmUp;           // ]
+        case 33: return UiInputAction::BpmDown;         // [
+        default: break;
+    }
+    return UiInputAction::None;
+}
+
+UiInputAction mapWindowChars(NSString* chars) noexcept {
+    if (!chars || [chars length] == 0) {
+        return UiInputAction::None;
+    }
+    const unichar ch = [chars characterAtIndex:0];
+    switch (ch) {
+        case 27: return UiInputAction::BackScene;
+        case '\r':
+        case '\n':
+            return UiInputAction::ListEnter;
+        case 8:
+        case 127:
+            return UiInputAction::ListParent;
+        case ' ':
+            return UiInputAction::PreviewPlay;
+        default:
+            return UiInputAction::None;
+    }
+}
+
+UiInputAction mapWindowEvent(NSEvent* event) noexcept {
+    if (!event || [event type] != NSEventTypeKeyDown) {
+        return UiInputAction::None;
+    }
+    const UiInputAction byKeyCode = mapWindowKeyCode([event keyCode]);
+    if (byKeyCode != UiInputAction::None) {
+        return byKeyCode;
+    }
+    return mapWindowChars([event charactersIgnoringModifiers]);
+}
+
 } // namespace
 
 struct MacGbWindowRenderer::Impl {
@@ -148,6 +209,9 @@ struct MacGbWindowRenderer::Impl {
     NSColor* mid{nil};
     NSColor* text{nil};
     UiTheme theme{UiTheme::Gothic};
+    std::mutex inputMutex{};
+    std::deque<UiInputAction> inputQueue{};
+    id keyMonitor{nil};
 
     explicit Impl(UiTheme t) : theme(t) {}
 };
@@ -159,6 +223,7 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
 
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+    [NSApp finishLaunching];
 
     const NSRect frame = NSMakeRect(120.0, 120.0, 780.0, 560.0);
     impl_->window = [[NSWindow alloc] initWithContentRect:frame
@@ -190,6 +255,7 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
     [impl_->textView setRichText:YES];
     [impl_->textView setUsesFontPanel:NO];
     [impl_->textView setTextContainerInset:NSMakeSize(8.0, 10.0)];
+    [impl_->textView setSelectable:YES];
 
     impl_->headerFont = assetFonts.count > 0
                         ? pickFirstFont(assetFonts, 28.0, nil)
@@ -270,6 +336,25 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
 
     [scroll setDocumentView:impl_->textView];
     [[impl_->window contentView] addSubview:scroll];
+
+    [impl_->window makeFirstResponder:impl_->textView];
+    [impl_->window makeKeyWindow];
+    [impl_->window orderFrontRegardless];
+
+    __block Impl* weakImpl = impl_;
+    impl_->keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+                                                               handler:^NSEvent* _Nullable(NSEvent* _Nonnull event) {
+        if (!weakImpl) {
+            return event;
+        }
+        const UiInputAction action = mapWindowEvent(event);
+        if (action == UiInputAction::None) {
+            return event;
+        }
+        std::lock_guard<std::mutex> lock(weakImpl->inputMutex);
+        weakImpl->inputQueue.push_back(action);
+        return nil; // consume mapped hotkey in window mode
+    }];
 }
 
 MacGbWindowRenderer::~MacGbWindowRenderer() {
@@ -278,6 +363,10 @@ MacGbWindowRenderer::~MacGbWindowRenderer() {
             [impl_->window orderOut:nil];
             [impl_->window close];
             impl_->window = nil;
+        }
+        if (impl_->keyMonitor) {
+            [NSEvent removeMonitor:impl_->keyMonitor];
+            impl_->keyMonitor = nil;
         }
         impl_->headerOverlay = nil;
         impl_->textView = nil;
@@ -288,12 +377,20 @@ MacGbWindowRenderer::~MacGbWindowRenderer() {
 }
 
 void MacGbWindowRenderer::render(const UiState& state) {
+    const std::string frame = GbFrameComposer::buildMonochromeFrame(state, textWidth_);
+    renderCustomFrame(frame, /*showHeaderOverlay=*/true);
+}
+
+void MacGbWindowRenderer::renderCustomFrame(const std::string& monoFrame, bool showHeaderOverlay) {
     if (!impl_ || !impl_->textView) {
         return;
     }
 
-    const std::string frame = GbFrameComposer::buildMonochromeFrame(state, textWidth_);
-    NSString* text = [NSString stringWithUTF8String:frame.c_str()];
+    if (impl_->headerOverlay) {
+        [impl_->headerOverlay setHidden:!showHeaderOverlay];
+    }
+
+    NSString* text = [NSString stringWithUTF8String:monoFrame.c_str()];
     if (!text) {
         return;
     }
@@ -342,7 +439,7 @@ void MacGbWindowRenderer::render(const UiState& state) {
             } range:lineRange];
 
             NSRange titleLocal = [line rangeOfString:@"AVANTGARDE"];
-            if (titleLocal.location != NSNotFound) {
+            if (showHeaderOverlay && titleLocal.location != NSNotFound) {
                 NSRange titleGlobal = NSMakeRange(offset + titleLocal.location, titleLocal.length);
                 [attr addAttributes:@{
                     NSForegroundColorAttributeName: [NSColor clearColor]
@@ -372,6 +469,20 @@ void MacGbWindowRenderer::pumpEvents() noexcept {
         [NSApp sendEvent:event];
     }
     [NSApp updateWindows];
+}
+
+bool MacGbWindowRenderer::pollInput(UiInputEvent& out) noexcept {
+    out.action = UiInputAction::None;
+    if (!impl_) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(impl_->inputMutex);
+    if (impl_->inputQueue.empty()) {
+        return false;
+    }
+    out.action = impl_->inputQueue.front();
+    impl_->inputQueue.pop_front();
+    return true;
 }
 
 } // namespace avantgarde

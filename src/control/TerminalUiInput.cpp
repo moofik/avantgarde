@@ -58,6 +58,8 @@ TerminalUiInput::~TerminalUiInput() {
 
 UiInputAction TerminalUiInput::mapKey(char ch) noexcept {
     switch (ch) {
+        case 27:  // ESC
+            return UiInputAction::BackScene;
         case 'q':
         case 'Q':
             return UiInputAction::Quit;
@@ -65,6 +67,28 @@ UiInputAction TerminalUiInput::mapKey(char ch) noexcept {
             return UiInputAction::SelectTrack0;
         case '2':
             return UiInputAction::SelectTrack1;
+        case 'm':
+        case 'M':
+            return UiInputAction::OpenManager;
+        case 'j':
+        case 'J':
+            return UiInputAction::ListDown;
+        case 'k':
+        case 'K':
+            return UiInputAction::ListUp;
+        case '\r':
+        case '\n':
+            return UiInputAction::ListEnter;
+        case 8:    // ctrl+h / backspace on some terminals
+        case 127:  // backspace
+        case 'h':
+        case 'H':
+            return UiInputAction::ListParent;
+        case ' ':
+            return UiInputAction::PreviewPlay;
+        case 'a':
+        case 'A':
+            return UiInputAction::PreviewAutoToggle;
         case 'p':
         case 'P':
             return UiInputAction::PlayActiveTrack;
