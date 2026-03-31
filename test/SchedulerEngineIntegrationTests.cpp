@@ -76,19 +76,25 @@ AudioProcessContext makeCtx(std::size_t nframes) {
 
 RtCommand makeCmd(CmdId id, int16_t track, float value = 0.0f) {
     RtCommand cmd{};
-    cmd.id = static_cast<uint16_t>(id);
+    cmd.id = toWireCmdId(id);
     cmd.track = track;
-    cmd.slot = 0;
+    if (id == CmdId::QuantizeMode || id == CmdId::SetTempoBpm || id == CmdId::SetTimeSig) {
+        cmd.slot = kRtSlotTrackParams;
+    } else {
+        cmd.slot = kRtClipSlot0;
+    }
+    cmd.index = kRtIndexUnused;
     cmd.value = value;
     return cmd;
 }
 
 RtCommand makePlay() {
     RtCommand cmd{};
-    cmd.id = static_cast<uint16_t>(CmdId::Play);
+    cmd.id = toWireCmdId(CmdId::Play);
     cmd.track = 0;
-    cmd.slot = 0;
-    cmd.value = 1.0f;
+    cmd.slot = kRtClipSlot0;
+    cmd.index = kRtIndexUnused;
+    cmd.value = kRtValueOn;
     return cmd;
 }
 
@@ -131,6 +137,6 @@ TEST_CASE("Engine + QuantizedScheduler: beat-quantized command reaches track on 
     }
 
     REQUIRE(trPtr->seen.size() == 1);
-    REQUIRE(trPtr->seen[0].id == static_cast<uint16_t>(CmdId::Play));
+    REQUIRE(trPtr->seen[0].id == toWireCmdId(CmdId::Play));
     REQUIRE(trPtr->commandBlock == 89);
 }

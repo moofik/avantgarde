@@ -45,10 +45,10 @@ namespace avantgarde {
             if (!rtQueue_) return;
             const CmdId id = parseCmdId(cmd.name);
             RtCommand rtc{};
-            rtc.id    = static_cast<uint16_t>(id);
+            rtc.id    = toWireCmdId(id);
             rtc.track = static_cast<int16_t>(cmd.target.trackId);
             rtc.slot  = static_cast<int16_t>(cmd.target.slotId);
-            rtc.index = 0;      // (для NoteOn/Off и др. при необходимости будем заполнять выше по стеку)
+            rtc.index = kRtIndexUnused;      // (для NoteOn/Off и др. при необходимости будем заполнять выше по стеку)
             rtc.value = cmd.value;
             (void)rtQueue_->push(rtc);
         }
@@ -163,8 +163,8 @@ namespace avantgarde {
             } else {
                 // Глобальные transport-команды прокидываем всем трекам, которым это важно
                 // (например, auto stretch-to-bars в ClipTrack).
-                if (t == -1) {
-                    const CmdId id = static_cast<CmdId>(rc.id);
+                if (t == kRtTrackGlobal) {
+                    const CmdId id = fromWireCmdId(rc.id);
                     if (id == CmdId::SetTempoBpm || id == CmdId::SetTimeSig) {
                         for (auto& tr : tracks_) {
                             tr->onRtCommand(rc);

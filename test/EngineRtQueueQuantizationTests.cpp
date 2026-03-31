@@ -55,7 +55,7 @@ struct ProbeTrack final : ITrack {
     void process(const AudioProcessContext&) override {}
 
     void onRtCommand(const RtCommand& cmd) noexcept override {
-        if (cmd.id == static_cast<uint16_t>(CmdId::Play)) {
+        if (cmd.id == toWireCmdId(CmdId::Play)) {
             ++seenPlay;
             if (currentBlock) {
                 commandBlock = *currentBlock;
@@ -78,10 +78,14 @@ AudioProcessContext makeCtx(std::size_t nframes) {
 
 RtCommand makeCmd(CmdId id, int16_t track, float value = 0.0f) {
     RtCommand cmd{};
-    cmd.id = static_cast<uint16_t>(id);
+    cmd.id = toWireCmdId(id);
     cmd.track = track;
-    cmd.slot = 0;
-    cmd.index = 0;
+    if (id == CmdId::QuantizeMode || id == CmdId::SetTempoBpm || id == CmdId::SetTimeSig) {
+        cmd.slot = kRtSlotTrackParams;
+    } else {
+        cmd.slot = kRtClipSlot0;
+    }
+    cmd.index = kRtIndexUnused;
     cmd.value = value;
     return cmd;
 }

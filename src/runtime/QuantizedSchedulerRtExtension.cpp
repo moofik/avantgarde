@@ -96,25 +96,28 @@ uint64_t QuantizedSchedulerRtExtension::computeDueSample(uint64_t now,
 QuantizeMode QuantizedSchedulerRtExtension::decodeQuantizeMode(const RtCommand& cmd) noexcept {
     const int v = static_cast<int>(std::lround(cmd.value));
     switch (v) {
-        case 1: return QuantizeMode::Beat;
-        case 2: return QuantizeMode::Bar;
-        case 0:
+        case static_cast<int>(QuantizeCmdValue::Beat): return QuantizeMode::Beat;
+        case static_cast<int>(QuantizeCmdValue::Bar): return QuantizeMode::Bar;
+        case static_cast<int>(QuantizeCmdValue::None):
         default:
             return QuantizeMode::None;
     }
 }
 
 bool QuantizedSchedulerRtExtension::isQuantizable(const RtCommand& cmd) noexcept {
-    const CmdId id = static_cast<CmdId>(cmd.id);
+    const CmdId id = fromWireCmdId(cmd.id);
     return id == CmdId::Play || id == CmdId::StopQuantized;
 }
 
 void QuantizedSchedulerRtExtension::drainIncoming(const TransportRtSnapshot& snap, uint64_t now) noexcept {
     RtCommand cmd{};
     while (inQueue_->pop(cmd)) {
-        const CmdId id = static_cast<CmdId>(cmd.id);
+        const CmdId id = fromWireCmdId(cmd.id);
 
-        if (id == CmdId::QuantizeMode && cmd.track < 0) {
+        if (id == CmdId::QuantizeMode &&
+            cmd.track == kRtTrackGlobal &&
+            cmd.slot == kRtSlotTrackParams &&
+            cmd.index == kRtQuantizeModeIndex) {
             quantMode_ = decodeQuantizeMode(cmd);
             continue;
         }

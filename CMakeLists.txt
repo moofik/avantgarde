@@ -78,7 +78,11 @@ endif()
 # -------------------------------------------------------
 # Executable in repo root
 # -------------------------------------------------------
-add_executable(avantgarde ${CMAKE_SOURCE_DIR}/main.cpp
+add_executable(avantgarde
+        ${CMAKE_SOURCE_DIR}/main.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/SamplerApplication.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/SamplerEngineLayer.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/SamplerIoLayer.cpp
         src/module/GainSlewModule.cpp)
 target_link_libraries(avantgarde
         PRIVATE

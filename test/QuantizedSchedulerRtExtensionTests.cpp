@@ -44,10 +44,14 @@ AudioProcessContext makeCtx(std::size_t nframes) {
 
 RtCommand makeCmd(CmdId id, int16_t track, float value = 0.0f) {
     RtCommand cmd{};
-    cmd.id = static_cast<uint16_t>(id);
+    cmd.id = toWireCmdId(id);
     cmd.track = track;
-    cmd.slot = 0;
-    cmd.index = 0;
+    if (id == CmdId::QuantizeMode || id == CmdId::SetTempoBpm || id == CmdId::SetTimeSig) {
+        cmd.slot = kRtSlotTrackParams;
+    } else {
+        cmd.slot = kRtClipSlot0;
+    }
+    cmd.index = kRtIndexUnused;
     cmd.value = value;
     return cmd;
 }
@@ -68,7 +72,7 @@ TEST_CASE("QuantizedScheduler: passes through non-quantized commands") {
     scheduler.onBlockBegin(ctx);
 
     REQUIRE(outQ.size() == 1);
-    CHECK(outQ.q[0].id == static_cast<uint16_t>(CmdId::Play));
+    CHECK(outQ.q[0].id == toWireCmdId(CmdId::Play));
 }
 
 TEST_CASE("QuantizedScheduler: QuantizeMode command sets internal mode") {
@@ -149,5 +153,5 @@ TEST_CASE("QuantizedScheduler: Stop is immediate even when quantization mode is 
     scheduler.onBlockBegin(ctx);
 
     REQUIRE(outQ.size() == 1);
-    CHECK(outQ.q[0].id == static_cast<uint16_t>(CmdId::Stop));
+    CHECK(outQ.q[0].id == toWireCmdId(CmdId::Stop));
 }

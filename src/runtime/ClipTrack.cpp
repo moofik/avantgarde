@@ -253,7 +253,7 @@ namespace avantgarde {
 // ClipTrackImpl (MVP)
 // - 1 slot
 // - Play/Stop via onRtCommand
-// - gain/loop/speed via ParamSet (index 0/1/2) OR via control methods
+// - gain/loop/speed via ParamSet (TrackParamId) OR via control methods
 // ============================================================
 
     class ClipTrackImpl final : public IClipTrack {
@@ -365,7 +365,7 @@ namespace avantgarde {
         void onRtCommand(const RtCommand& cmd) noexcept override {
             rtApplyPending_();
 
-            const CmdId cid = static_cast<CmdId>(cmd.id);
+            const CmdId cid = fromWireCmdId(cmd.id);
 
             switch (cid) {
                 case CmdId::Play: {
@@ -395,13 +395,13 @@ namespace avantgarde {
 
                     // контракт: RtCommand.index + RtCommand.value
                     // значения параметров по договору нормализованы [0..1]
-                    if (cmd.index == 0) {
+                    if (cmd.index == toParamIndex(TrackParamId::Gain01)) {
                         // gain (0..1) — MVP
                         rt_.gain = detail_interp::clampf(cmd.value, 0.0f, 1.0f);
-                    } else if (cmd.index == 1) {
+                    } else if (cmd.index == toParamIndex(TrackParamId::LoopEnabled)) {
                         // loop bool
                         rt_.loop = (cmd.value >= 0.5f);
-                    } else if (cmd.index == 2) {
+                    } else if (cmd.index == toParamIndex(TrackParamId::PlaybackInc)) {
                         // varispeed playback increment (1.0 = normal)
                         rt_.playbackInc = detail_interp::clampf(cmd.value, 0.05f, 8.0f);
                         rt_.stretchToBars = false;

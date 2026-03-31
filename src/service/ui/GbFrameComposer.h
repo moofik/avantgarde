@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 
 #include "contracts/IUi.h"
 
@@ -13,7 +14,9 @@ class GbFrameComposer {
 public:
     // Build deterministic monochrome frame from runtime snapshot.
     // width is total character width including left/right frame borders.
-    static std::string buildMonochromeFrame(const UiState& state, uint16_t width);
+    static std::string buildMonochromeFrame(const UiState& state,
+                                            uint16_t width,
+                                            std::string_view headerTitle = "AVANTGARDE");
 };
 
 } // namespace avantgarde

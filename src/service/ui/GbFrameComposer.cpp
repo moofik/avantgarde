@@ -109,7 +109,9 @@ float speedTo01(float speed) noexcept {
 
 } // namespace
 
-std::string GbFrameComposer::buildMonochromeFrame(const UiState& state, uint16_t width) {
+std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
+                                                  uint16_t width,
+                                                  std::string_view headerTitle) {
     if (width < 4) {
         return {};
     }
@@ -121,7 +123,10 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state, uint16_t
     std::ostringstream out;
     out << "╔" << repeatUtf8("═", inner) << "╗\n";
     out << "║" << padRight(" ", inner) << "║\n";
-    out << "║" << padRight(" AVANTGARDE ", inner) << "║\n";
+    std::string titleLine = " ";
+    titleLine += headerTitle;
+    titleLine += " ";
+    out << "║" << padRight(titleLine, inner) << "║\n";
 
     char line[256]{};
     std::snprintf(line, sizeof(line), " TRN:%s BPM:%5.1f TS:%u/%u Q:%s OVF:%c ",
@@ -179,4 +184,3 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state, uint16_t
 }
 
 } // namespace avantgarde
-

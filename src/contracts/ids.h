@@ -1,12 +1,12 @@
 #pragma once
 #include <cstdint>
+#include <string_view>
 
 
 namespace avantgarde {
 
 
-// Команды RT‑ядра (используются в RtCommand.id)
-    // Команды RT-ядра (используются в RtCommand.id)
+// Команды RT-ядра (используются в RtCommand.id)
     enum class CmdId : uint16_t {
         Play = 1,
         Stop = 2,
@@ -27,6 +27,40 @@ namespace avantgarde {
         NoteOff       = 15, // track, index=key
         ClipTrigger   = 16  // track, index=clipId
     };
+
+    // Базовые значения wire-протокола RtCommand.
+    constexpr int16_t kRtTrackGlobal = -1;
+    constexpr int16_t kRtSlotTrackParams = -1;
+    constexpr int16_t kRtClipSlot0 = 0;
+    constexpr uint16_t kRtIndexUnused = 0;
+    constexpr float kRtValueOff = 0.0f;
+    constexpr float kRtValueOn = 1.0f;
+    constexpr uint16_t kRtQuantizeModeIndex = kRtIndexUnused;
+
+    // Индексы параметров трека для CmdId::ParamSet при slot = kRtSlotTrackParams.
+    enum class TrackParamId : uint16_t {
+        Gain01 = 0,
+        LoopEnabled = 1,
+        PlaybackInc = 2
+    };
+
+    enum class QuantizeCmdValue : uint8_t {
+        None = 0,
+        Beat = 1,
+        Bar = 2
+    };
+
+    constexpr uint16_t toParamIndex(TrackParamId id) noexcept {
+        return static_cast<uint16_t>(id);
+    }
+
+    constexpr uint16_t toWireCmdId(CmdId id) noexcept {
+        return static_cast<uint16_t>(id);
+    }
+
+    constexpr CmdId fromWireCmdId(uint16_t raw) noexcept {
+        return static_cast<CmdId>(raw);
+    }
 
     // Темы сервисной шины (используются в EventBus.TopicId)
     enum class Topic : uint32_t {
