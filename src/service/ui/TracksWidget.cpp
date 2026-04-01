@@ -207,6 +207,17 @@ UiActionCatalog TracksWidget::queryAvailableActions(const UiState& rtState, cons
         pushAction(std::move(a));
     }
     {
+        const bool trackValid = (totalTracks > 0);
+        UiAction a{};
+        a.def.id = UiAction::Id::SceneOpenFxList;
+        a.def.scope = UiAction::Scope::Scene;
+        a.def.execution = UiAction::Execution::ApplyRequired;
+        a.def.valueKind = UiAction::ValueKind::None;
+        a.def.label = "Add FX";
+        a.state.enabled = trackValid;
+        pushAction(std::move(a));
+    }
+    {
         UiAction a{};
         a.def.id = UiAction::Id::SceneOpenManager;
         a.def.scope = UiAction::Scope::Scene;
@@ -236,7 +247,7 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
     // Главный принцип для scene-слоя:
     //   UiAction + navState (+rtState для текущих значений) => UiIntent.
     // То есть именно виджет решает, какой intent должен выйти наружу.
-    auto push = [&out](UiIntent intent) {
+    auto pushIntentToWidgetOutput = [&out](UiIntent intent) {
         out.intents.push_back(std::move(intent));
     };
 
@@ -254,7 +265,7 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             UiIntent it{};
             it.type = UiIntentType::SetActiveTrack;
             it.track = navState.selectedTrack;
-            push(std::move(it));
+            pushIntentToWidgetOutput(std::move(it));
         } break;
 
         case UiAction::Id::SceneTrackMute: {
@@ -269,7 +280,7 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             it.type = UiIntentType::SetTrackMuted;
             it.track = selectedTrack;
             it.value = rtState.tracks[selectedTrack].muted ? 0.0f : 1.0f;
-            push(std::move(it));
+            pushIntentToWidgetOutput(std::move(it));
         } break;
 
         case UiAction::Id::SceneTrackArm: {
@@ -284,7 +295,7 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             it.type = UiIntentType::SetTrackArmed;
             it.track = selectedTrack;
             it.value = rtState.tracks[selectedTrack].armed ? 0.0f : 1.0f;
-            push(std::move(it));
+            pushIntentToWidgetOutput(std::move(it));
         } break;
 
         case UiAction::Id::SceneTrackSpeed: {
@@ -302,7 +313,7 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             it.type = UiIntentType::SetTrackSpeed;
             it.track = selectedTrack;
             it.value = next;
-            push(std::move(it));
+            pushIntentToWidgetOutput(std::move(it));
         } break;
 
         case UiAction::Id::SceneQuantize: {
@@ -320,7 +331,7 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             UiIntent it{};
             it.type = UiIntentType::SetTransportQuant;
             it.value = static_cast<float>(v);
-            push(std::move(it));
+            pushIntentToWidgetOutput(std::move(it));
         } break;
 
         case UiAction::Id::SceneTempoBpm: {
@@ -334,7 +345,7 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             UiIntent it{};
             it.type = UiIntentType::SetTransportBpm;
             it.value = next;
-            push(std::move(it));
+            pushIntentToWidgetOutput(std::move(it));
         } break;
 
         case UiAction::Id::SceneOpenManager: {
@@ -343,9 +354,24 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
                 break;
             }
             navState.scene = UiScene::Manager;
+            navState.sceneActionIndex = 0;
             UiIntent it{};
             it.type = UiIntentType::OpenScene;
-            push(std::move(it));
+            pushIntentToWidgetOutput(std::move(it));
+        } break;
+
+        case UiAction::Id::SceneOpenFxList: {
+            if (totalTracks == 0) break;
+            if (action.op != UiAction::Op::Apply &&
+                action.op != UiAction::Op::Press) {
+                break;
+            }
+            navState.scene = UiScene::FxList;
+            navState.selectedFx = 0;
+            navState.sceneActionIndex = 0;
+            UiIntent it{};
+            it.type = UiIntentType::OpenScene;
+            pushIntentToWidgetOutput(std::move(it));
         } break;
 
         case UiAction::Id::None:
@@ -356,6 +382,12 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
         case UiAction::Id::GlobalPageNext:
         case UiAction::Id::GlobalMasterVolume:
         case UiAction::Id::SceneTrackGain:
+        case UiAction::Id::SceneAddReverb:
+        case UiAction::Id::SceneFxSlotSelect:
+        case UiAction::Id::SceneFxOpenEditor:
+        case UiAction::Id::SceneFxParamSelect:
+        case UiAction::Id::SceneFxParamValue:
+        case UiAction::Id::SceneFxBack:
         default:
             out.handled = false;
             break;
@@ -389,6 +421,9 @@ std::string TracksWidget::buildActionStatusLine_(const UiState& rtState, const U
             break;
         case UiAction::Id::SceneTempoBpm:
             std::snprintf(buf, sizeof(buf), " action:%s = %.1f ", a.def.label.c_str(), a.state.value);
+            break;
+        case UiAction::Id::SceneOpenFxList:
+            std::snprintf(buf, sizeof(buf), " action:%s (apply) ", a.def.label.c_str());
             break;
         case UiAction::Id::SceneOpenManager:
             std::snprintf(buf, sizeof(buf), " action:%s (apply) ", a.def.label.c_str());

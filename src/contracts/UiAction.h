@@ -75,7 +75,17 @@ struct UiAction {
         SceneTrackGain,
         SceneQuantize,
         SceneTempoBpm,
-        SceneOpenManager
+        SceneAddFx,
+        SceneAddReverb,
+        SceneOpenManager,
+        SceneOpenFxList,
+        SceneFxTypeSelect,
+        SceneFxSlotSelect,
+        SceneFxRemove,
+        SceneFxOpenEditor,
+        SceneFxParamSelect,
+        SceneFxParamValue,
+        SceneFxBack
     };
 
     // Статическое описание экшена (что это за действие и как его исполнять).

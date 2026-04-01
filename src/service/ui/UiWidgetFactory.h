@@ -16,6 +16,8 @@ struct UiWidgetFactoryOptions {
     // Базовые шаги pointer-редактирования для TracksWidget.
     float tracksSpeedStep{0.05f};
     float tracksBpmStep{1.0f};
+    // Шаг изменения параметров в FX редакторе.
+    float fxParamStep{0.05f};
 };
 
 // Простая фабрика виджетов сцены.

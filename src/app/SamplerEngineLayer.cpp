@@ -222,6 +222,7 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
         track.armed = false;
         track.loop = false;
         track.fxCount = 0;
+        track.fxChainIds.clear();
         track.clipName.clear();
         bootstrapOut.tracks[t] = std::move(track);
     }
@@ -371,6 +372,56 @@ bool SamplerEngineLayer::setTrackSpeed(uint8_t track, float speed) noexcept {
         return false;
     }
     return impl_->controlDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::PlaybackInc, speed);
+}
+
+bool SamplerEngineLayer::addFxToTrack(uint8_t track, std::unique_ptr<IAudioModule> module) noexcept {
+    if (!impl_ || !module || impl_->clipCtl.empty()) {
+        return false;
+    }
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+        return false;
+    }
+    // addModule вызывается строго вне RT.
+    impl_->clipCtl[t]->addModule(std::move(module));
+    return true;
+}
+
+bool SamplerEngineLayer::removeFxFromTrack(uint8_t track, uint8_t fxSlot) noexcept {
+    if (!impl_ || impl_->clipCtl.empty()) {
+        return false;
+    }
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+        return false;
+    }
+    // Защита от невалидного слота до удаления.
+    if (!impl_->clipCtl[t]->getModule(static_cast<std::size_t>(fxSlot))) {
+        return false;
+    }
+    // removeModuleAt вызывается только вне RT.
+    return impl_->clipCtl[t]->removeModuleAt(static_cast<std::size_t>(fxSlot));
+}
+
+bool SamplerEngineLayer::setFxParam(uint8_t track,
+                                    uint8_t fxSlot,
+                                    uint16_t paramIndex,
+                                    float normalizedValue) noexcept {
+    if (!impl_ || impl_->clipCtl.empty()) {
+        return false;
+    }
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+        return false;
+    }
+    if (!impl_->clipCtl[t]->getModule(static_cast<std::size_t>(fxSlot))) {
+        return false;
+    }
+    return impl_->controlDispatcher.sendParamSet(
+        static_cast<int16_t>(t),
+        static_cast<int16_t>(fxSlot),
+        paramIndex,
+        normalizedValue);
 }
 
 bool SamplerEngineLayer::loadSampleToTrack(uint8_t track,

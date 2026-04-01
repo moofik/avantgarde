@@ -281,6 +281,14 @@ namespace avantgarde {
             return modules_[index].get();
         }
 
+        bool removeModuleAt(std::size_t index) override {
+            if (index >= modules_.size()) {
+                return false;
+            }
+            modules_.erase(modules_.begin() + static_cast<std::ptrdiff_t>(index));
+            return true;
+        }
+
         void process(const AudioProcessContext& ctx) override {
             // RT boundary: apply any pending control updates
             rtApplyPending_();

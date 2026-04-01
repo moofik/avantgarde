@@ -20,6 +20,7 @@ file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS
 
 if (TEST_SOURCES)
     add_executable(avantgarde_tests ${TEST_SOURCES}
+            ${CMAKE_SOURCE_DIR}/src/app/HistoryTransactionManager.cpp
             ParamBridgeDualBufferTests.cpp
             AudioEngineTests.cpp
             GainSlewModuleTests.cpp

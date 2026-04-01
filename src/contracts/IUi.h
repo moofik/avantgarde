@@ -37,6 +37,9 @@ struct UiTrackStateView {
     bool armed{false};
     bool loop{false};
     uint8_t fxCount{0};
+    // Канонические ID FX по слотам (слот 0 -> fxChainIds[0] и т.д.).
+    // UI использует это для именования списка FX и подбора профиля параметров в редакторе.
+    std::vector<std::string> fxChainIds{};
     std::string clipName;
 };
 

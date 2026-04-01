@@ -52,6 +52,20 @@ namespace avantgarde {
         FollowTransportEnabled = 5
     };
 
+    // Параметры встроенного Schroeder reverb.
+    // Эти индексы используются в UiIntent::paramIndex для SetFxParam.
+    enum class ReverbParamId : uint16_t {
+        Wet = 0,
+        Room = 1,
+        Damp = 2,
+        Width = 3
+    };
+
+    // Параметры встроенного OnePole HPF.
+    enum class HpfParamId : uint16_t {
+        Cutoff = 0
+    };
+
     enum class QuantizeCmdValue : uint8_t {
         None = 0,
         Beat = 1,
@@ -59,6 +73,14 @@ namespace avantgarde {
     };
 
     constexpr uint16_t toParamIndex(TrackParamId id) noexcept {
+        return static_cast<uint16_t>(id);
+    }
+
+    constexpr uint16_t toParamIndex(ReverbParamId id) noexcept {
+        return static_cast<uint16_t>(id);
+    }
+
+    constexpr uint16_t toParamIndex(HpfParamId id) noexcept {
         return static_cast<uint16_t>(id);
     }
 

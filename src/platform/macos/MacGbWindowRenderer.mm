@@ -170,6 +170,11 @@ UiInputAction mapWindowKeyCode(unsigned short keyCode) noexcept {
         case 34: return UiInputAction::MuteActiveTrack;   // I
         case 17: return UiInputAction::MuteToggleActiveTrack; // T
         case 15: return UiInputAction::ArmToggleActiveTrack; // R
+        case 41: return UiInputAction::ActionFocusPrev;  // ;
+        case 39: return UiInputAction::ActionFocusNext;  // '
+        case 44: return UiInputAction::ActionAdjustPrev; // /
+        case 31: return UiInputAction::ActionApply;      // O
+        case 16: return UiInputAction::ActionUndo;       // Y
         case 24: return UiInputAction::TrackSpeedUp;    // =
         case 27: return UiInputAction::TrackSpeedDown;  // -
         case 6:  return UiInputAction::QuantNone;       // Z
@@ -249,6 +254,15 @@ UiInputAction mapWindowChars(NSString* chars) noexcept {
 UiInputAction mapWindowEvent(NSEvent* event) noexcept {
     if (!event || [event type] != NSEventTypeKeyDown) {
         return UiInputAction::None;
+    }
+    // Для '/' и '?' учитываем Shift на уровне физической клавиши,
+    // чтобы не зависеть от символа текущей раскладки.
+    if ([event keyCode] == 44) { // Slash key
+        const NSEventModifierFlags mods =
+            ([event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask);
+        return (mods & NSEventModifierFlagShift)
+                   ? UiInputAction::ActionAdjustNext
+                   : UiInputAction::ActionAdjustPrev;
     }
     const UiInputAction byKeyCode = mapWindowKeyCode([event keyCode]);
     if (byKeyCode != UiInputAction::None) {

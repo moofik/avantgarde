@@ -209,8 +209,16 @@ WidgetOutput UiSceneHost::handleInput(UiInputAction action, const UiState& rtSta
         return {};
     }
     if (action == UiInputAction::BackScene) {
+        if (nav_.scene == UiScene::FxEditor && widgets_[sceneIndex_(UiScene::FxList)]) {
+            nav_.scene = UiScene::FxList;
+            nav_.sceneActionIndex = 0;
+            UiIntent backIntent{};
+            backIntent.type = UiIntentType::Back;
+            return WidgetOutput{true, {backIntent}};
+        }
         if (nav_.scene != UiScene::Tracks) {
             nav_.scene = UiScene::Tracks;
+            nav_.sceneActionIndex = 0;
             UiIntent backIntent{};
             backIntent.type = UiIntentType::Back;
             return WidgetOutput{true, {backIntent}};

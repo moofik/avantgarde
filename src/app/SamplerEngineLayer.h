@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 
+#include "contracts/IAudioModule.h"
 #include "contracts/IUi.h"
 #include "contracts/IPlatform.h"
 #include "contracts/ITransport.h"
@@ -68,6 +69,12 @@ public:
     bool setTrackMuted(uint8_t track, bool muted) noexcept;
     bool setTrackArmed(uint8_t track, bool armed) noexcept;
     bool setTrackSpeed(uint8_t track, float speed) noexcept;
+    // Добавить FX-модуль в конец цепочки выбранного трека (вне RT).
+    bool addFxToTrack(uint8_t track, std::unique_ptr<IAudioModule> module) noexcept;
+    // Удалить FX-модуль из цепочки выбранного трека по индексу (вне RT).
+    bool removeFxFromTrack(uint8_t track, uint8_t fxSlot) noexcept;
+    // Установить параметр FX-слота (RT-safe через ParamSet команду).
+    bool setFxParam(uint8_t track, uint8_t fxSlot, uint16_t paramIndex, float normalizedValue) noexcept;
     bool loadSampleToTrack(uint8_t track, const std::string& path, std::string& clipNameOut) noexcept;
     // Preview-голос (скрытый отдельный трек).
     void previewRequest(const std::string& path) noexcept;

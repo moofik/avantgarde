@@ -1,5 +1,6 @@
 #pragma once
 #include "ITrack.h"
+#include <cstddef>
 #include <cstdint>
 
 namespace avantgarde {
@@ -130,6 +131,18 @@ namespace avantgarde {
          * @return true если операция успешна
          */
         virtual bool setSlotLooping(uint32_t slot, bool loop) = 0;
+
+        /**
+         * Удаляет FX-модуль из цепочки трека по индексу.
+         *
+         * ВАЖНО:
+         *  - Вызывается только вне RT.
+         *  - После удаления индексы следующих модулей сдвигаются влево.
+         *
+         * @param index индекс FX в цепочке [0..N-1]
+         * @return true, если модуль существовал и был удален
+         */
+        virtual bool removeModuleAt(std::size_t index) = 0;
     };
 
 } // namespace avantgarde

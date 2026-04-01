@@ -1,7 +1,6 @@
 #pragma once
 
 #include <atomic>
-#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -9,7 +8,9 @@
 #include <vector>
 
 #include "app/SamplerEngineLayer.h"
+#include "app/HistoryTransactionManager.h"
 #include "app/SamplerIoLayer.h"
+#include "app/UiIntentApplier.h"
 #include "contracts/IPlatform.h"
 #include "contracts/UiIntent.h"
 #include "service/UiStateComposer.h"
@@ -55,18 +56,8 @@ private:
     // Ограничение UI-индекса трека в диапазон [0..N-1].
     uint8_t clampUiTrack_(uint8_t track) const noexcept;
 
-    // Применение интентов, пришедших от scene-виджетов.
-    // Возвращает true, если intent реально изменил состояние.
-    bool applyIntent_(const UiIntent& intent);
-    // Обертка над applyIntent_ с записью undo/redo истории.
-    void dispatchIntent_(const UiIntent& intent);
-    // Сформировать обратный intent (undo), используя текущее control-состояние.
-    bool buildUndoIntent_(const UiIntent& forward, UiIntent& undoOut) const;
-    // Выполнить один шаг undo/redo (возвращает true, если применилось изменение).
-    bool undoLast_();
-    bool redoLast_();
-    // Сбросить историю undo/redo (например, при новом запуске).
-    void clearHistory_() noexcept;
+    // Применить intent виджета через ActionApplier и корректно записать в историю.
+    void dispatchWidgetIntent_(const UiIntent& intent);
     // Пересчитать отображаемое состояние одного трека из transport + mute/clip данных.
     void refreshTrackViewState_(uint8_t track) noexcept;
     // Пересчитать состояния всех треков.
@@ -93,15 +84,10 @@ private:
     // Кэш transport state на control-уровне.
     UiTransportState trCtl_{};
 
-    // Пара интентов для истории:
-    // undoIntent возвращает состояние назад, redoIntent повторяет исходное действие.
-    struct UndoEntry {
-        UiIntent undoIntent{};
-        UiIntent redoIntent{};
-    };
-    static constexpr std::size_t kHistoryDepth_ = 4;
-    std::deque<UndoEntry> undoStack_{};
-    std::deque<UndoEntry> redoStack_{};
+    // Слой применения intent'ов к engine/ui-state (без знаний о ввода/сценах).
+    UiIntentApplier intentApplier_{};
+    // История и транзакции undo/redo.
+    HistoryTransactionManager history_{4};
 
     // Синхронизация доступа к sceneHost_ между control/render потоками.
     std::mutex sceneMutex_{};

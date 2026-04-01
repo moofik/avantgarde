@@ -2,6 +2,8 @@
 
 #include <utility>
 
+#include "service/ui/FxEditorWidget.h"
+#include "service/ui/FxListWidget.h"
 #include "service/ui/ManagerWidget.h"
 #include "service/ui/TracksWidget.h"
 
@@ -25,9 +27,10 @@ std::unique_ptr<IUiWidget> UiWidgetFactory::create(UiScene scene) const {
             // Файловый менеджер использует только ширину рамки.
             return std::make_unique<ManagerWidget>(options_.frameWidth);
         case UiScene::FxList:
+            return std::make_unique<FxListWidget>(options_.frameWidth);
         case UiScene::FxEditor:
+            return std::make_unique<FxEditorWidget>(options_.frameWidth, options_.fxParamStep);
         default:
-            // Нереализованные сцены пока не имеют виджетов.
             return nullptr;
     }
 }
