@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <fcntl.h>
 #include <new>
+#include <string>
 #include <sys/select.h>
 #include <termios.h>
 #include <unistd.h>
@@ -111,6 +112,20 @@ UiInputAction TerminalUiInput::mapKey(char ch) noexcept {
         case 'r':
         case 'R':
             return UiInputAction::ArmToggleActiveTrack;
+        case ';':
+            return UiInputAction::ActionFocusPrev;
+        case '\'':
+            return UiInputAction::ActionFocusNext;
+        case '/':
+            return UiInputAction::ActionAdjustPrev;
+        case '?':
+            return UiInputAction::ActionAdjustNext;
+        case 'o':
+        case 'O':
+            return UiInputAction::ActionApply;
+        case 'y':
+        case 'Y':
+            return UiInputAction::ActionUndo;
         case '+':
         case '=':
             return UiInputAction::TrackSpeedUp;
@@ -135,6 +150,54 @@ UiInputAction TerminalUiInput::mapKey(char ch) noexcept {
     }
 }
 
+UiInputAction TerminalUiInput::mapEscapeSequence(std::string_view seq) noexcept {
+    // Arrow keys: ESC [ A/B/C/D
+    if (seq == "[A") return UiInputAction::ActionAdjustNext; // Up
+    if (seq == "[B") return UiInputAction::ActionAdjustPrev; // Down
+    if (seq == "[C") return UiInputAction::ActionFocusNext;  // Right
+    if (seq == "[D") return UiInputAction::ActionFocusPrev;  // Left
+
+    // xterm function keys:
+    // F1..F4: ESC O P/Q/R/S
+    if (seq == "OP") return UiInputAction::F1;
+    if (seq == "OQ") return UiInputAction::F2;
+    if (seq == "OR") return UiInputAction::F3;
+    if (seq == "OS") return UiInputAction::F4;
+    // F5..F12: ESC [15~ [17~ [18~ [19~ [20~ [21~ [23~ [24~
+    if (seq == "[15~") return UiInputAction::F5;
+    if (seq == "[17~") return UiInputAction::F6;
+    if (seq == "[18~") return UiInputAction::F7;
+    if (seq == "[19~") return UiInputAction::F8;
+    if (seq == "[20~") return UiInputAction::F9;
+    if (seq == "[21~") return UiInputAction::F10;
+    if (seq == "[23~") return UiInputAction::F11;
+    if (seq == "[24~") return UiInputAction::F12;
+
+    // Linux console alternative for F1..F4:
+    // ESC [[A .. ESC [[D
+    if (seq == "[[A") return UiInputAction::F1;
+    if (seq == "[[B") return UiInputAction::F2;
+    if (seq == "[[C") return UiInputAction::F3;
+    if (seq == "[[D") return UiInputAction::F4;
+
+    // Linux console alternative for F1..F12:
+    // ESC [11~ .. ESC [24~
+    if (seq == "[11~") return UiInputAction::F1;
+    if (seq == "[12~") return UiInputAction::F2;
+    if (seq == "[13~") return UiInputAction::F3;
+    if (seq == "[14~") return UiInputAction::F4;
+    if (seq == "[15~") return UiInputAction::F5;
+    if (seq == "[17~") return UiInputAction::F6;
+    if (seq == "[18~") return UiInputAction::F7;
+    if (seq == "[19~") return UiInputAction::F8;
+    if (seq == "[20~") return UiInputAction::F9;
+    if (seq == "[21~") return UiInputAction::F10;
+    if (seq == "[23~") return UiInputAction::F11;
+    if (seq == "[24~") return UiInputAction::F12;
+
+    return UiInputAction::None;
+}
+
 bool TerminalUiInput::poll(UiInputEvent& out) noexcept {
     out.action = UiInputAction::None;
     if (!valid_) {
@@ -157,6 +220,33 @@ bool TerminalUiInput::poll(UiInputEvent& out) noexcept {
     const ssize_t n = read(STDIN_FILENO, &ch, 1);
     if (n <= 0) {
         return false;
+    }
+
+    if (ch == 27) {
+        // ESC может быть как одиночной клавишей, так и началом escape-последовательности.
+        // Читаем "хвост" без блокировки и пытаемся декодировать функциональные клавиши.
+        std::string seq;
+        seq.reserve(8);
+        for (int i = 0; i < 7; ++i) {
+            char b = 0;
+            const ssize_t rn = read(STDIN_FILENO, &b, 1);
+            if (rn <= 0) {
+                break;
+            }
+            seq.push_back(b);
+            if ((b >= 'A' && b <= 'Z') || b == '~') {
+                break;
+            }
+        }
+        if (!seq.empty()) {
+            const UiInputAction escAction = mapEscapeSequence(seq);
+            if (escAction != UiInputAction::None) {
+                out.action = escAction;
+                return true;
+            }
+        }
+        out.action = UiInputAction::BackScene;
+        return true;
     }
 
     const UiInputAction action = mapKey(ch);

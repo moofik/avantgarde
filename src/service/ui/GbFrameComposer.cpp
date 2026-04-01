@@ -112,7 +112,8 @@ float speedTo01(float speed) noexcept {
 std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
                                                   uint16_t width,
                                                   std::string_view headerTitle,
-                                                  std::optional<std::size_t> pageOverride) {
+                                                  std::optional<std::size_t> pageOverride,
+                                                  std::string_view actionStatusLine) {
     if (width < 4) {
         return {};
     }
@@ -200,7 +201,11 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
     }
 
     out << "╠" << repeatUtf8("═", inner) << "╣\n";
-    out << "║" << padRight(" keys [1< /2>] [,< /.>] [p/s] [u/i/t/r] [-/=] [z/x/c] [[/]] [q] ", inner) << "║\n";
+    if (!actionStatusLine.empty()) {
+        out << "║" << padRight(std::string(actionStatusLine), inner) << "║\n";
+    }
+    out << "║" << padRight(" keys [j/k focus] [/? adj] [o apply] [F2 undo] [F9 redo] [p/s] [u/i/t/r] [q] ", inner)
+        << "║\n";
     out << "╚" << repeatUtf8("═", inner) << "╝\n";
     return out.str();
 }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string_view>
+
 #include "contracts/IUiInput.h"
 
 namespace avantgarde {
@@ -12,6 +14,7 @@ public:
     bool poll(UiInputEvent& out) noexcept override;
 
     static UiInputAction mapKey(char ch) noexcept;
+    static UiInputAction mapEscapeSequence(std::string_view seq) noexcept;
 
 private:
     bool valid_{false};

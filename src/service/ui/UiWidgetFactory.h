@@ -13,6 +13,9 @@ struct UiWidgetFactoryOptions {
     uint16_t frameWidth{60};
     // Заголовок экрана треков.
     std::string tracksHeaderTitle{"AVANTGARDE"};
+    // Базовые шаги pointer-редактирования для TracksWidget.
+    float tracksSpeedStep{0.05f};
+    float tracksBpmStep{1.0f};
 };
 
 // Простая фабрика виджетов сцены.

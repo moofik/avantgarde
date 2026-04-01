@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -55,7 +56,17 @@ private:
     uint8_t clampUiTrack_(uint8_t track) const noexcept;
 
     // Применение интентов, пришедших от scene-виджетов.
-    void handleIntent_(const UiIntent& intent);
+    // Возвращает true, если intent реально изменил состояние.
+    bool applyIntent_(const UiIntent& intent);
+    // Обертка над applyIntent_ с записью undo/redo истории.
+    void dispatchIntent_(const UiIntent& intent);
+    // Сформировать обратный intent (undo), используя текущее control-состояние.
+    bool buildUndoIntent_(const UiIntent& forward, UiIntent& undoOut) const;
+    // Выполнить один шаг undo/redo (возвращает true, если применилось изменение).
+    bool undoLast_();
+    bool redoLast_();
+    // Сбросить историю undo/redo (например, при новом запуске).
+    void clearHistory_() noexcept;
     // Пересчитать отображаемое состояние одного трека из transport + mute/clip данных.
     void refreshTrackViewState_(uint8_t track) noexcept;
     // Пересчитать состояния всех треков.
@@ -81,6 +92,16 @@ private:
     std::vector<UiTrackStateView> tracksCtl_{};
     // Кэш transport state на control-уровне.
     UiTransportState trCtl_{};
+
+    // Пара интентов для истории:
+    // undoIntent возвращает состояние назад, redoIntent повторяет исходное действие.
+    struct UndoEntry {
+        UiIntent undoIntent{};
+        UiIntent redoIntent{};
+    };
+    static constexpr std::size_t kHistoryDepth_ = 4;
+    std::deque<UndoEntry> undoStack_{};
+    std::deque<UndoEntry> redoStack_{};
 
     // Синхронизация доступа к sceneHost_ между control/render потоками.
     std::mutex sceneMutex_{};

@@ -17,6 +17,10 @@ public:
         uint16_t frameWidth{60};
         // Заголовок в верхней рамке.
         std::string headerTitle{"AVANTGARDE"};
+        // Шаг скорости трека для pointer-режима.
+        float speedStep{0.05f};
+        // Шаг BPM для pointer-режима.
+        float bpmStep{1.0f};
     };
 
     TracksWidget() noexcept;
@@ -29,12 +33,21 @@ public:
     void render(UiTextBuffer& out, const UiState& rtState, const UiNavState& navState) override;
     // Обработка input для экрана треков (пока без локальных интентов).
     WidgetOutput onInput(UiInputAction action, const UiState& rtState, UiNavState& navState) override;
+    // Возвращает scene-local action catalog (tracks screen).
+    UiActionCatalog queryAvailableActions(const UiState& rtState, const UiNavState& navState) const override;
+    // Маппит action (+nav/ui state) в intents.
+    WidgetOutput onAction(UiAction& action, const UiState& rtState, UiNavState& navState) override;
 
 private:
+    // Формирование строки статуса активного action pointer.
+    std::string buildActionStatusLine_(const UiState& rtState, const UiNavState& navState) const;
     // Фактическая ширина рендера рамок.
     uint16_t frameWidth_{60};
     // Текст шапки экрана.
     std::string headerTitle_{"AVANTGARDE"};
+    // Конфиг шагов pointer-редактирования.
+    float speedStep_{0.05f};
+    float bpmStep_{1.0f};
 };
 
 } // namespace avantgarde

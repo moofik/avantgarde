@@ -177,6 +177,18 @@ UiInputAction mapWindowKeyCode(unsigned short keyCode) noexcept {
         case 8:  return UiInputAction::QuantBar;        // C
         case 30: return UiInputAction::BpmUp;           // ]
         case 33: return UiInputAction::BpmDown;         // [
+        case 122: return UiInputAction::F1;             // F1
+        case 120: return UiInputAction::F2;             // F2
+        case 99:  return UiInputAction::F3;             // F3
+        case 118: return UiInputAction::F4;             // F4
+        case 96:  return UiInputAction::F5;             // F5
+        case 97:  return UiInputAction::F6;             // F6
+        case 98:  return UiInputAction::F7;             // F7
+        case 100: return UiInputAction::F8;             // F8
+        case 101: return UiInputAction::F9;             // F9
+        case 109: return UiInputAction::F10;            // F10
+        case 103: return UiInputAction::F11;            // F11
+        case 111: return UiInputAction::F12;            // F12
         default: break;
     }
     return UiInputAction::None;
@@ -210,6 +222,20 @@ UiInputAction mapWindowChars(NSString* chars) noexcept {
         case 'r':
         case 'R':
             return UiInputAction::ArmToggleActiveTrack;
+        case ';':
+            return UiInputAction::ActionFocusPrev;
+        case '\'':
+            return UiInputAction::ActionFocusNext;
+        case '/':
+            return UiInputAction::ActionAdjustPrev;
+        case '?':
+            return UiInputAction::ActionAdjustNext;
+        case 'o':
+        case 'O':
+            return UiInputAction::ActionApply;
+        case 'y':
+        case 'Y':
+            return UiInputAction::ActionUndo;
         case ',':
             return UiInputAction::TrackPagePrev;
         case '.':

@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "contracts/IUi.h"
+#include "contracts/UiAction.h"
 #include "contracts/IUiInput.h"
 #include "contracts/UiIntent.h"
 #include "contracts/UiNavState.h"
@@ -50,6 +51,28 @@ struct IUiWidget {
     virtual WidgetOutput onInput(UiInputAction action,
                                  const UiState& rtState,
                                  UiNavState& navState) = 0;
+
+    // V2 контракт для Active Action Pointer:
+    // read-only query, который возвращает scene-local набор экшенов
+    // и текущий индекс активного pointer.
+    // Метод ничего не мутирует в виджете и в переданных состояниях.
+    virtual UiActionCatalog queryAvailableActions(const UiState&,
+                                                  const UiNavState&) const {
+        return {};
+    }
+
+    // V2 контракт для применения pointer-операции.
+    // Вызов всегда получает единую сущность UiAction (включая id/op/state).
+    // Ключевая идея пайплайна:
+    //   UiAction + UiNavState (+ текущий UiState) => UiIntent
+    // То есть виджет сам маппит пользовательский action в intent,
+    // а верхние слои не знают деталей конкретного экшена.
+    // По умолчанию обработка отсутствует.
+    virtual WidgetOutput onAction(UiAction&,
+                                  const UiState&,
+                                  UiNavState&) {
+        return {};
+    }
 };
 
 } // namespace avantgarde

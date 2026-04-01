@@ -375,6 +375,46 @@ TEST_CASE("ClipTrack: ParamSet index=2 controls playback speed") {
     REQUIRE(sumFast > sumNormal * 0.3f);
 }
 
+TEST_CASE("ClipTrack: mute does not stop playback phase progression") {
+    avantgarde::ClipTrackImpl tr;
+
+    // Упорядоченная амплитуда, чтобы можно было увидеть сдвиг playhead после mute.
+    const int sr = 48000;
+    std::vector<int16_t> pcm = { 8192, 16384, 24576, 32767 };
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_test_mute_phase.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLooping(0, true) == true);
+
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/-1, avantgarde::toParamIndex(avantgarde::TrackParamId::PlaybackInc), 1.0f);
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/-1, avantgarde::toParamIndex(avantgarde::TrackParamId::MuteEnabled), 0.0f);
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+
+    auto one = make_ctx(1);
+    clear_out(one);
+    tr.process(one.ctx);
+    const float firstAudible = absf(one.out0[0]);
+    REQUIRE(firstAudible > 0.1f);
+
+    // Включаем mute и прогоняем 2 фрейма:
+    // звук должен быть нулевой, но фаза должна продолжить движение.
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/-1, avantgarde::toParamIndex(avantgarde::TrackParamId::MuteEnabled), 1.0f);
+    auto muted2 = make_ctx(2);
+    clear_out(muted2);
+    tr.process(muted2.ctx);
+    REQUIRE(absf(muted2.out0[0]) < 1e-4f);
+    REQUIRE(absf(muted2.out0[1]) < 1e-4f);
+
+    // Снимаем mute: ожидаем не "второй" сэмпл, а следующий по фазе
+    // после двух mute-фреймов (в нашем случае это самый громкий 4-й сэмпл).
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/-1, avantgarde::toParamIndex(avantgarde::TrackParamId::MuteEnabled), 0.0f);
+    clear_out(one);
+    tr.process(one.ctx);
+    const float afterUnmute = absf(one.out0[0]);
+    REQUIRE(afterUnmute > 0.75f);
+    REQUIRE(afterUnmute > firstAudible * 2.5f);
+}
+
 TEST_CASE("ClipTrack: setSlotLengthInBars stretches playback length to target bars") {
     avantgarde::ClipTrackImpl tr;
 

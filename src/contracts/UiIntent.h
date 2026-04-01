@@ -27,6 +27,19 @@ enum class UiIntentType : uint8_t {
     PreviewRequest,
     // Остановка предпрослушки.
     PreviewStop,
+    // Явная установка активного трека в UI/control модели.
+    SetActiveTrack,
+    // Явная установка mute для трека (value: 0.0=off, 1.0=on).
+    SetTrackMuted,
+    // Явная установка arm для трека (value: 0.0=off, 1.0=on).
+    SetTrackArmed,
+    // Явная установка speed/stretch для трека.
+    SetTrackSpeed,
+    // Явная установка режима квантизации транспорта
+    // (value: 0=None, 1=Beat, 2=Bar).
+    SetTransportQuant,
+    // Явная установка BPM транспорта.
+    SetTransportBpm,
     // Intent-обертки над текущими transport/track действиями движка.
     EnginePlayTrack,
     EngineStopTrack,
@@ -47,6 +60,8 @@ struct UiIntent {
     uint16_t paramIndex{0};
     // Значение параметра / BPM / speed и т.д.
     float value{0.0f};
+    // Доп. значение для расширений (например relative delta/secondary payload).
+    float value2{0.0f};
     // Путь к файлу (для load intents) или иной string payload.
     std::string path;
 };

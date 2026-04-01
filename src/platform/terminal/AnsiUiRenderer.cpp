@@ -57,7 +57,7 @@ void AnsiUiRenderer::render(const UiState& state) {
                     static_cast<unsigned>(tr.fxCount));
     }
 
-    std::printf("\nKeys: [1 prev / 2 next track] [, prev page / . next page] [p play] [s stop] [u unmute] [i mute] [t mute-toggle] [r arm] [- slower] [+/= faster] [z/x/c quant] [[ and ] bpm] [q quit]\n");
+    std::printf("\nKeys: [j/k focus action] [/? adjust] [o apply] [p play] [s stop] [u unmute] [i mute] [t mute-toggle] [r arm] [F1..F12 softkeys] [q quit]\n");
     std::fflush(stdout);
 }
 

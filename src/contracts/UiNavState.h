@@ -4,6 +4,7 @@
 #include <string>
 
 #include "contracts/UiScene.h"
+#include "contracts/UiAction.h"
 
 namespace avantgarde {
 
@@ -21,6 +22,13 @@ struct UiNavState {
     // Конкретный виджет может использовать их по-своему.
     uint16_t cursor{0};
     uint16_t scroll{0};
+
+    // Active Action Pointer (V2):
+    // - actionScope определяет, сейчас выбран глобальный или scene-local список.
+    // - globalActionIndex/sceneActionIndex хранят позицию в соответствующем списке.
+    UiAction::Scope actionScope{UiAction::Scope::Scene};
+    uint16_t globalActionIndex{0};
+    uint16_t sceneActionIndex{0};
 
     // Выбранный FX-слот в FxList/FxEditor.
     uint16_t selectedFx{0};

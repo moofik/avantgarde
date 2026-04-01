@@ -18,6 +18,8 @@ std::unique_ptr<IUiWidget> UiWidgetFactory::create(UiScene scene) const {
                 TracksWidget::Options{
                     .frameWidth = options_.frameWidth,
                     .headerTitle = options_.tracksHeaderTitle,
+                    .speedStep = options_.tracksSpeedStep,
+                    .bpmStep = options_.tracksBpmStep,
                 });
         case UiScene::Manager:
             // Файловый менеджер использует только ширину рамки.

@@ -299,7 +299,8 @@ namespace avantgarde {
             if (!clip || clip->frames <= 0 || !out0) return;
 
             const bool runGate = playbackRt_.followTransport ? playbackRt_.transportRunning : playbackRt_.oneshotRunning;
-            if (!runGate || playbackRt_.muted) return;
+            if (!runGate) return;
+            const bool muted = playbackRt_.muted;
 
             const float* c0 = clip->ch[0];
             const float* c1 = (clip->channels == 2) ? clip->ch[1] : nullptr;
@@ -311,7 +312,7 @@ namespace avantgarde {
             const bool loop = playbackRt_.loop;
             const double inc = static_cast<double>(detail_interp::clampf(playbackRt_.playbackInc, 0.05f, 8.0f));
 
-            const bool hasFx = !modules_.empty();
+            const bool hasFx = !modules_.empty() && !muted;
             if (hasFx) {
                 for (auto& mod : modules_) {
                     mod->beginBlock();
@@ -325,6 +326,13 @@ namespace avantgarde {
                 const std::size_t produced = renderClipChunk_(chunk, c0, c1, len, lenD, loop, g, inc, ph);
                 if (produced == 0) {
                     break;
+                }
+
+                // Mute не должен останавливать внутренний playback:
+                // playhead продолжает идти, но в master ничего не пишем.
+                if (muted) {
+                    offset += produced;
+                    continue;
                 }
 
                 const float* mix0 = fxA0_.data();

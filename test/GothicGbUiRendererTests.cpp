@@ -49,5 +49,6 @@ TEST_CASE("GothicGbUiRenderer: frame contains compact transport and track cards"
     REQUIRE(frame.find("bars:4  fx:0  loop:N") != std::string::npos);
     REQUIRE(frame.find("bars:8  fx:1  loop:Y  m:N  a:Y") != std::string::npos);
     REQUIRE(frame.find("bars:4  fx:0  loop:N  m:Y  a:N") != std::string::npos);
-    REQUIRE(frame.find("keys [1< /2>] [,< /.>] [p/s] [u/i/t/r] [-/=] [z/x/c] [[/]] [q]") != std::string::npos);
+    REQUIRE(frame.find("F2 undo") != std::string::npos);
+    REQUIRE(frame.find("F9 redo") != std::string::npos);
 }

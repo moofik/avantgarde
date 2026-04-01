@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <string>
 
@@ -10,6 +11,29 @@
 #include "service/ui/UiWidgetFactory.h"
 
 namespace avantgarde {
+namespace {
+
+float quantModeToIntentValue(QuantizeMode mode) noexcept {
+    switch (mode) {
+        case QuantizeMode::None: return 0.0f;
+        case QuantizeMode::Beat: return 1.0f;
+        case QuantizeMode::Bar: return 2.0f;
+        default: return 2.0f;
+    }
+}
+
+QuantizeMode quantModeFromIntentValue(float value) noexcept {
+    const int q = static_cast<int>(std::lround(value));
+    if (q <= 0) {
+        return QuantizeMode::None;
+    }
+    if (q == 1) {
+        return QuantizeMode::Beat;
+    }
+    return QuantizeMode::Bar;
+}
+
+} // namespace
 
 SamplerApplication::~SamplerApplication() {
     // Безопасное завершение всех циклов/потоков в любом сценарии выхода.
@@ -67,6 +91,7 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
     initialState.transport = trCtl_;
     initialState.tracks = tracksCtl_;
     uiStore_.setState(initialState);
+    clearHistory_();
 
     // 2) Сборка scene-графа (каждая функциональная сцена = виджет).
     UiWidgetFactory widgetFactory(
@@ -145,16 +170,74 @@ uint8_t SamplerApplication::clampUiTrack_(uint8_t track) const noexcept {
     return (track >= tracksCtl_.size()) ? static_cast<uint8_t>(tracksCtl_.size() - 1) : track;
 }
 
-void SamplerApplication::handleIntent_(const UiIntent& intent) {
+bool SamplerApplication::buildUndoIntent_(const UiIntent& forward, UiIntent& undoOut) const {
+    undoOut = UiIntent{};
+    switch (forward.type) {
+        case UiIntentType::SetActiveTrack: {
+            if (tracksCtl_.empty()) {
+                return false;
+            }
+            undoOut = forward;
+            undoOut.track = clampUiTrack_(trCtl_.activeTrack);
+            return true;
+        }
+        case UiIntentType::SetTrackMuted: {
+            if (tracksCtl_.empty()) {
+                return false;
+            }
+            const uint8_t t = clampUiTrack_(forward.track);
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.value = tracksCtl_[t].muted ? 1.0f : 0.0f;
+            return true;
+        }
+        case UiIntentType::SetTrackArmed: {
+            if (tracksCtl_.empty()) {
+                return false;
+            }
+            const uint8_t t = clampUiTrack_(forward.track);
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.value = tracksCtl_[t].armed ? 1.0f : 0.0f;
+            return true;
+        }
+        case UiIntentType::SetTrackSpeed: {
+            if (tracksCtl_.empty()) {
+                return false;
+            }
+            const uint8_t t = clampUiTrack_(forward.track);
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.value = tracksCtl_[t].stretchRatio;
+            return true;
+        }
+        case UiIntentType::SetTransportQuant:
+            undoOut = forward;
+            undoOut.value = quantModeToIntentValue(trCtl_.quant);
+            return true;
+        case UiIntentType::SetTransportBpm:
+            undoOut = forward;
+            undoOut.value = trCtl_.bpm;
+            return true;
+        default:
+            // Остальные intent'ы в текущем MVP не откатываем.
+            return false;
+    }
+}
+
+bool SamplerApplication::applyIntent_(const UiIntent& intent) {
+    // Формула слоя application:
+    //   intent = f(action, navState, uiState) уже посчитан внутри виджета.
+    // Здесь мы только применяем intent к engine/UI-store и не знаем деталей action.
     switch (intent.type) {
         case UiIntentType::LoadSampleToTrack: {
             if (tracksCtl_.empty()) {
-                break;
+                return false;
             }
             const uint8_t t = clampUiTrack_(intent.track);
             std::string clipName;
             if (!engine_.loadSampleToTrack(t, intent.path, clipName)) {
-                break;
+                return false;
             }
             // После успешной загрузки подправляем view-state трека.
             tracksCtl_[t].clipName = clipName;
@@ -162,14 +245,93 @@ void SamplerApplication::handleIntent_(const UiIntent& intent) {
             tracksCtl_[t].loop = true;
             refreshTrackViewState_(t);
             uiStore_.setTrack(t, tracksCtl_[t]);
-        } break;
+            return true;
+        }
         case UiIntentType::PreviewRequest:
             engine_.previewRequest(intent.path);
-            break;
+            return true;
         case UiIntentType::PreviewStop:
             engine_.previewStop();
-            break;
+            return true;
+        case UiIntentType::SetActiveTrack: {
+            if (tracksCtl_.empty()) {
+                return false;
+            }
+            const uint8_t next = clampUiTrack_(intent.track);
+            if (next == trCtl_.activeTrack) {
+                return false;
+            }
+            trCtl_.activeTrack = next;
+            uiStore_.setTransport(trCtl_);
+            return true;
+        }
+        case UiIntentType::SetTrackMuted: {
+            if (tracksCtl_.empty()) {
+                return false;
+            }
+            const uint8_t t = clampUiTrack_(intent.track);
+            const bool muted = (intent.value >= 0.5f);
+            if (tracksCtl_[t].muted == muted) {
+                return false;
+            }
+            tracksCtl_[t].muted = muted;
+            (void)engine_.setTrackMuted(t, muted);
+            refreshTrackViewState_(t);
+            uiStore_.setTrack(t, tracksCtl_[t]);
+            return true;
+        }
+        case UiIntentType::SetTrackArmed: {
+            if (tracksCtl_.empty()) {
+                return false;
+            }
+            const uint8_t t = clampUiTrack_(intent.track);
+            const bool armed = (intent.value >= 0.5f);
+            if (tracksCtl_[t].armed == armed) {
+                return false;
+            }
+            tracksCtl_[t].armed = armed;
+            (void)engine_.setTrackArmed(t, armed);
+            uiStore_.setTrack(t, tracksCtl_[t]);
+            return true;
+        }
+        case UiIntentType::SetTrackSpeed: {
+            if (tracksCtl_.empty()) {
+                return false;
+            }
+            const uint8_t t = clampUiTrack_(intent.track);
+            const float next = std::clamp(intent.value, 0.25f, 4.0f);
+            if (std::fabs(tracksCtl_[t].stretchRatio - next) < 1e-6f) {
+                return false;
+            }
+            tracksCtl_[t].stretchRatio = next;
+            (void)engine_.setTrackSpeed(t, tracksCtl_[t].stretchRatio);
+            uiStore_.setTrack(t, tracksCtl_[t]);
+            return true;
+        }
+        case UiIntentType::SetTransportQuant: {
+            const QuantizeMode next = quantModeFromIntentValue(intent.value);
+            if (trCtl_.quant == next) {
+                return false;
+            }
+            trCtl_.quant = next;
+            engine_.setQuantize(trCtl_.quant);
+            uiStore_.setTransport(trCtl_);
+            return true;
+        }
+        case UiIntentType::SetTransportBpm: {
+            const float next = std::clamp(intent.value, 20.0f, 300.0f);
+            if (std::fabs(trCtl_.bpm - next) < 1e-6f) {
+                return false;
+            }
+            trCtl_.bpm = next;
+            engine_.setTempo(trCtl_.bpm);
+            uiStore_.setTransport(trCtl_);
+            return true;
+        }
         case UiIntentType::OpenScene:
+            // OpenScene пока обрабатывается scene host'ом на уровне маршрутизации.
+            // Для MVP здесь ничего дополнительно делать не нужно.
+            return false;
         case UiIntentType::Back:
         case UiIntentType::None:
         case UiIntentType::AddFxToTrack:
@@ -182,8 +344,64 @@ void SamplerApplication::handleIntent_(const UiIntent& intent) {
         case UiIntentType::EngineSetBpm:
         case UiIntentType::EngineSetTrackSpeed:
         default:
-            break;
+            return false;
     }
+}
+
+void SamplerApplication::dispatchIntent_(const UiIntent& intent) {
+    UiIntent undoIntent{};
+    const bool isUndoable = buildUndoIntent_(intent, undoIntent);
+    const bool changed = applyIntent_(intent);
+    if (!changed) {
+        return;
+    }
+    if (!isUndoable) {
+        // Любое новое действие сбрасывает redo-цепочку,
+        // даже если его нельзя откатить (иначе redo становится несогласованным).
+        redoStack_.clear();
+        return;
+    }
+
+    if (undoStack_.size() >= kHistoryDepth_) {
+        undoStack_.pop_front();
+    }
+    undoStack_.push_back(UndoEntry{undoIntent, intent});
+    redoStack_.clear();
+}
+
+bool SamplerApplication::undoLast_() {
+    if (undoStack_.empty()) {
+        return false;
+    }
+    const UndoEntry entry = undoStack_.back();
+    undoStack_.pop_back();
+
+    const bool changed = applyIntent_(entry.undoIntent);
+    if (redoStack_.size() >= kHistoryDepth_) {
+        redoStack_.pop_front();
+    }
+    redoStack_.push_back(entry);
+    return changed;
+}
+
+bool SamplerApplication::redoLast_() {
+    if (redoStack_.empty()) {
+        return false;
+    }
+    const UndoEntry entry = redoStack_.back();
+    redoStack_.pop_back();
+
+    const bool changed = applyIntent_(entry.redoIntent);
+    if (undoStack_.size() >= kHistoryDepth_) {
+        undoStack_.pop_front();
+    }
+    undoStack_.push_back(entry);
+    return changed;
+}
+
+void SamplerApplication::clearHistory_() noexcept {
+    undoStack_.clear();
+    redoStack_.clear();
 }
 
 void SamplerApplication::refreshTrackViewState_(uint8_t track) noexcept {
@@ -194,7 +412,7 @@ void SamplerApplication::refreshTrackViewState_(uint8_t track) noexcept {
     UiTrackStateView& tr = tracksCtl_[t];
     if (tr.clipName.empty()) {
         tr.state = UiTrackState::Empty;
-    } else if (trCtl_.playing && !tr.muted) {
+    } else if (trCtl_.playing) {
         tr.state = UiTrackState::Playing;
     } else {
         tr.state = UiTrackState::Stopped;
@@ -246,6 +464,18 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
         return false;
     }
 
+    // Глобальные hotkey undo/redo (доступны в любой сцене).
+    // F2/F9 резервируются под аппаратные кнопки, ActionUndo/ActionRedo —
+    // под универсальный слой pointer-команд.
+    if (action == UiInputAction::ActionUndo || action == UiInputAction::F2) {
+        (void)undoLast_();
+        return true;
+    }
+    if (action == UiInputAction::ActionRedo || action == UiInputAction::F9) {
+        (void)redoLast_();
+        return true;
+    }
+
     // ВАЖНО: snapshot берем до sceneMutex_, чтобы избежать lock inversion с UiStateStore.
     const UiState widgetState = uiStore_.snapshot();
     WidgetOutput widgetOut{};
@@ -262,7 +492,7 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
         uiStore_.setTransport(trCtl_);
     }
     for (const UiIntent& intent : widgetOut.intents) {
-        handleIntent_(intent);
+        dispatchIntent_(intent);
     }
 
     // Если активен Manager, scene-local логика уже обработана виджетом.
