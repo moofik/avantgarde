@@ -22,6 +22,8 @@ TEST_CASE("GothicGbUiRenderer: frame contains compact transport and track cards"
     state.tracks[0].bars = 8;
     state.tracks[0].fxCount = 1;
     state.tracks[0].loop = true;
+    state.tracks[0].muted = false;
+    state.tracks[0].armed = true;
     state.tracks[0].stretchRatio = 1.4f;
     state.tracks[0].gain01 = 0.8f;
 
@@ -31,6 +33,8 @@ TEST_CASE("GothicGbUiRenderer: frame contains compact transport and track cards"
     state.tracks[1].bars = 4;
     state.tracks[1].fxCount = 0;
     state.tracks[1].loop = false;
+    state.tracks[1].muted = true;
+    state.tracks[1].armed = false;
     state.tracks[1].stretchRatio = 0.9f;
     state.tracks[1].gain01 = 0.5f;
 
@@ -43,5 +47,7 @@ TEST_CASE("GothicGbUiRenderer: frame contains compact transport and track cards"
     REQUIRE(frame.find("▶ T2 STOP") != std::string::npos);
     REQUIRE(frame.find("bars:8  fx:1  loop:Y") != std::string::npos);
     REQUIRE(frame.find("bars:4  fx:0  loop:N") != std::string::npos);
-    REQUIRE(frame.find("keys [1< /2>] [,< /.>] [p/s] [-/=] [z/x/c] [[/]] [q]") != std::string::npos);
+    REQUIRE(frame.find("bars:8  fx:1  loop:Y  m:N  a:Y") != std::string::npos);
+    REQUIRE(frame.find("bars:4  fx:0  loop:N  m:Y  a:N") != std::string::npos);
+    REQUIRE(frame.find("keys [1< /2>] [,< /.>] [p/s] [u/i/t/r] [-/=] [z/x/c] [[/]] [q]") != std::string::npos);
 }

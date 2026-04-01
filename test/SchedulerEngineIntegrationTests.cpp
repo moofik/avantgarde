@@ -115,6 +115,7 @@ TEST_CASE("Engine + QuantizedScheduler: beat-quantized command reaches track on 
     engine->registerTrack(std::move(tr));
 
     TransportBridgeDualBuffer transport;
+    transport.setPlaying(true);
     transport.setTempo(120.0f);
     transport.setTimeSignature(4, 4);
     transport.swapBuffers();

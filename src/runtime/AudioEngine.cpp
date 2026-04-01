@@ -142,10 +142,14 @@ namespace avantgarde {
                 rtExt_[i]->onBlockEnd(ctx);
             }
 
-            // 6.5) Теперь можно продвинуть transport sampleTime на размер блока:
-            //      "время" соответствует началу следующего блока.
+            // 6.5) Продвигаем transport sampleTime только в режиме PLAY.
+            //      В STOP музыкальное время "заморожено":
+            //      это упрощает попадание в сетку и поведение квантизации.
             if (transport_) {
-                transport_->advanceSampleTime(static_cast<uint64_t>(ctx.nframes));
+                const TransportRtSnapshot& snap = transport_->rt();
+                if (snap.playing) {
+                    transport_->advanceSampleTime(static_cast<uint64_t>(ctx.nframes));
+                }
             }
 
             // 7) Запись master out (если подключен sink)
@@ -165,7 +169,10 @@ namespace avantgarde {
                 // (например, auto stretch-to-bars в ClipTrack).
                 if (t == kRtTrackGlobal) {
                     const CmdId id = fromWireCmdId(rc.id);
-                    if (id == CmdId::SetTempoBpm || id == CmdId::SetTimeSig) {
+                    if (id == CmdId::SetTempoBpm ||
+                        id == CmdId::SetTimeSig ||
+                        id == CmdId::Play ||
+                        id == CmdId::Stop) {
                         for (auto& tr : tracks_) {
                             tr->onRtCommand(rc);
                         }

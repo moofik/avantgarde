@@ -1,4 +1,9 @@
 // src/platform/macos/MacAudioHost.mm  (Objective-C++)
+//
+// Платформенный слой аудио для macOS:
+// - реализует IAudioHost/IAudioStream поверх CoreAudio HAL Output AudioUnit
+// - изолирует все Apple API внутри src/platform
+// - экспортирует только контрактный entrypoint createDefaultAudioHost()
 
 #include "contracts/IPlatform.h"
 #include <atomic>
@@ -52,9 +57,16 @@ namespace avantgarde {
     }
 
 // -------- stream --------
+// Реализация одного открытого аудио-потока.
+// Жизненный цикл:
+// 1) start() -> setup AudioUnit + запуск callback
+// 2) RenderCB() вызывается в аудио-потоке и передает буферы в AudioEngine
+// 3) stop()/close() останавливают и освобождают системные ресурсы
 
     class MacAudioStream final : public IAudioStream {
     public:
+        // cfg хранится как фактическая конфигурация потока.
+        // inDev/outDev и notify колбэки подготовлены для будущего расширения enumerate.
         MacAudioStream(const StreamConfig& cfg,
                        AudioDeviceID inDev,
                        AudioDeviceID outDev,
@@ -99,6 +111,8 @@ namespace avantgarde {
         ~MacAudioStream() override { close(); }
 
     private:
+        // CoreAudio render callback.
+        // ВАЖНО: вызывается в RT-потоке, никаких блокировок/аллоков в "горячем" пути.
         static OSStatus RenderCB(void* inRefCon,
                                  AudioUnitRenderActionFlags* /*ioActionFlags*/,
                                  const AudioTimeStamp* inTimeStamp,
@@ -147,11 +161,12 @@ namespace avantgarde {
             ctx.out     = self->outPtrs_.data();
             ctx.nframes = (std::size_t)inNumberFrames;
 
-            // 4) call engine thunk
+            // 4) Передаем сформированный контекст в движок.
             if (self->render_) self->render_(ctx, self->user_);
             return noErr;
         }
 
+        // Конфигурирует HAL Output AudioUnit: каналы, формат, callback, device.
         bool setupUnit() {
             // HAL Output AudioUnit
             AudioComponentDescription desc{};
@@ -212,6 +227,8 @@ namespace avantgarde {
             return true;
         }
 
+        // Выделение AudioBufferList под входные каналы.
+        // Хранится отдельно, чтобы переиспользовать между callback-вызовами.
         void allocInputABL(int frames) {
             freeInputABL();
             inAblFrames_ = frames;
@@ -229,6 +246,7 @@ namespace avantgarde {
             }
         }
 
+        // Освобождение входного AudioBufferList.
         void freeInputABL() {
             if (!inAbl_) return;
             for (UInt32 i = 0; i < inAbl_->mNumberBuffers; ++i) {
@@ -240,31 +258,38 @@ namespace avantgarde {
         }
 
     private:
+        // Пользовательская конфигурация потока.
         StreamConfig cfg_{};
+        // Выбранные устройства (MVP: дефолтные).
         AudioDeviceID inDev_ = 0;
         AudioDeviceID outDev_ = 0;
+        // Канал уведомлений вне RT (пока зарезервирован, не используется в MVP).
         NonRtNotifyCb notify_ = nullptr;
         void* notifyUser_ = nullptr;
 
+        // Экземпляр CoreAudio AudioUnit.
         AudioComponentInstance unit_ = nullptr;
 
+        // Флаги/метрики, читаемые из non-RT слоя.
         std::atomic<bool> running_{false};
         std::atomic<uint64_t> totalCb_{0};
         std::atomic<uint64_t> xruns_{0};
 
+        // Callback движка и user pointer для render thunk.
         AudioRenderCb render_ = nullptr;
         void* user_ = nullptr;
 
-        // channel pointers (planar)
+        // Временные векторы указателей каналов (planar float).
         std::vector<const float*> inPtrs_;
         std::vector<float*> outPtrs_;
 
-        // input buffer list for AudioUnitRender
+        // Буфер-лист входа для AudioUnitRender на input bus.
         AudioBufferList* inAbl_ = nullptr;
         int inAblFrames_ = 0;
     };
 
 // -------- host --------
+// Фабрика/входная точка platform-слоя: создает потоки и перечисляет устройства.
 
     class MacAudioHost final : public IAudioHost {
     public:
@@ -295,5 +320,10 @@ namespace avantgarde {
             return std::make_unique<MacAudioStream>(cfg, inDev, outDev, onNotify, notifyUser);
         }
     };
+
+    // Контрактный entrypoint: отдает дефолтный хост текущей платформы.
+    std::shared_ptr<IAudioHost> createDefaultAudioHost() {
+        return std::make_shared<MacAudioHost>();
+    }
 
 } // namespace avantgarde

@@ -38,6 +38,9 @@ if (TEST_SOURCES)
 
     # если тестам нужен C++20 (на всякий случай)
     target_compile_features(avantgarde_tests PRIVATE cxx_std_20)
+    target_compile_definitions(avantgarde_tests PRIVATE
+            AVANTGARDE_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+    )
 
     include(Catch)
     catch_discover_tests(avantgarde_tests)

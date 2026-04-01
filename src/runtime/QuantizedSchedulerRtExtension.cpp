@@ -122,7 +122,10 @@ void QuantizedSchedulerRtExtension::drainIncoming(const TransportRtSnapshot& sna
             continue;
         }
 
-        if (isQuantizable(cmd) && quantMode_ != QuantizeMode::None) {
+        // Квантизацию применяем только когда транспорт уже в PLAY.
+        // В STOP команда Play должна проходить мгновенно, иначе пользователь
+        // получает "скрытую" задержку в несколько секунд.
+        if (isQuantizable(cmd) && quantMode_ != QuantizeMode::None && snap.playing) {
             if (!pending_ || pendingCount_ >= pendingCapacity_) {
                 overflow_.store(true, std::memory_order_relaxed);
                 continue;

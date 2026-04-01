@@ -36,14 +36,14 @@ uint8_t normalizeTsNum(uint8_t num) noexcept {
 } // namespace
 
 TransportBridgeDualBuffer::TransportBridgeDualBuffer() noexcept {
-    rt_.playing = playingWrite_.load(std::memory_order_relaxed);
-    rt_.tsNum = tsNumWrite_.load(std::memory_order_relaxed);
-    rt_.tsDen = tsDenWrite_.load(std::memory_order_relaxed);
-    rt_.ppq = ppqWrite_.load(std::memory_order_relaxed);
-    rt_.bpm = bpmWrite_.load(std::memory_order_relaxed);
-    rt_.quant = static_cast<QuantizeMode>(quantWrite_.load(std::memory_order_relaxed));
-    rt_.swing = swingWrite_.load(std::memory_order_relaxed);
-    rt_.sampleTime = 0;
+    transportRtSnapshot_.playing = playingWrite_.load(std::memory_order_relaxed);
+    transportRtSnapshot_.tsNum = tsNumWrite_.load(std::memory_order_relaxed);
+    transportRtSnapshot_.tsDen = tsDenWrite_.load(std::memory_order_relaxed);
+    transportRtSnapshot_.ppq = ppqWrite_.load(std::memory_order_relaxed);
+    transportRtSnapshot_.bpm = bpmWrite_.load(std::memory_order_relaxed);
+    transportRtSnapshot_.quant = static_cast<QuantizeMode>(quantWrite_.load(std::memory_order_relaxed));
+    transportRtSnapshot_.swing = swingWrite_.load(std::memory_order_relaxed);
+    transportRtSnapshot_.sampleTime = 0;
 }
 
 void TransportBridgeDualBuffer::setPlaying(bool on) {
@@ -68,21 +68,21 @@ void TransportBridgeDualBuffer::setSwing(float s01) {
 }
 
 void TransportBridgeDualBuffer::swapBuffers() noexcept {
-    rt_.playing = playingWrite_.load(std::memory_order_acquire);
-    rt_.tsNum = tsNumWrite_.load(std::memory_order_acquire);
-    rt_.tsDen = tsDenWrite_.load(std::memory_order_acquire);
-    rt_.ppq = ppqWrite_.load(std::memory_order_acquire);
-    rt_.bpm = bpmWrite_.load(std::memory_order_acquire);
-    rt_.quant = static_cast<QuantizeMode>(quantWrite_.load(std::memory_order_acquire));
-    rt_.swing = swingWrite_.load(std::memory_order_acquire);
+    transportRtSnapshot_.playing = playingWrite_.load(std::memory_order_acquire);
+    transportRtSnapshot_.tsNum = tsNumWrite_.load(std::memory_order_acquire);
+    transportRtSnapshot_.tsDen = tsDenWrite_.load(std::memory_order_acquire);
+    transportRtSnapshot_.ppq = ppqWrite_.load(std::memory_order_acquire);
+    transportRtSnapshot_.bpm = bpmWrite_.load(std::memory_order_acquire);
+    transportRtSnapshot_.quant = static_cast<QuantizeMode>(quantWrite_.load(std::memory_order_acquire));
+    transportRtSnapshot_.swing = swingWrite_.load(std::memory_order_acquire);
 }
 
 const TransportRtSnapshot& TransportBridgeDualBuffer::rt() const noexcept {
-    return rt_;
+    return transportRtSnapshot_;
 }
 
 void TransportBridgeDualBuffer::advanceSampleTime(uint64_t frames) noexcept {
-    rt_.sampleTime += frames;
+    transportRtSnapshot_.sampleTime += frames;
 }
 
 } // namespace avantgarde

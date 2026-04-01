@@ -28,7 +28,7 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
     // 1) Инициализация движка и IO.
     UiState bootstrap{};
     std::string error;
-    if (!engine_.init(config.engine, bootstrap, error)) {
+    if (!engine_.init(config.engine, config.audioHost, bootstrap, error)) {
         std::printf("%s\n", error.c_str());
         return 2;
     }
@@ -55,9 +55,12 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
             continue;
         }
         tracksCtl_[t].clipName = clipName;
-        tracksCtl_[t].state = UiTrackState::Stopped;
+        tracksCtl_[t].muted = false;
+        tracksCtl_[t].armed = false;
         tracksCtl_[t].loop = true;
     }
+
+    refreshAllTrackViewStates_();
 
     // Публикуем начальный снапшот в UI store.
     UiState initialState{};
@@ -155,10 +158,9 @@ void SamplerApplication::handleIntent_(const UiIntent& intent) {
             }
             // После успешной загрузки подправляем view-state трека.
             tracksCtl_[t].clipName = clipName;
-            if (tracksCtl_[t].state == UiTrackState::Empty) {
-                tracksCtl_[t].state = UiTrackState::Stopped;
-            }
+            tracksCtl_[t].muted = false;
             tracksCtl_[t].loop = true;
+            refreshTrackViewState_(t);
             uiStore_.setTrack(t, tracksCtl_[t]);
         } break;
         case UiIntentType::PreviewRequest:
@@ -184,14 +186,25 @@ void SamplerApplication::handleIntent_(const UiIntent& intent) {
     }
 }
 
-bool SamplerApplication::recomputePlaying_() const noexcept {
-    // Transport "playing" = хотя бы один трек в состоянии Playing.
-    for (const UiTrackStateView& track : tracksCtl_) {
-        if (track.state == UiTrackState::Playing) {
-            return true;
-        }
+void SamplerApplication::refreshTrackViewState_(uint8_t track) noexcept {
+    if (tracksCtl_.empty()) {
+        return;
     }
-    return false;
+    const uint8_t t = clampUiTrack_(track);
+    UiTrackStateView& tr = tracksCtl_[t];
+    if (tr.clipName.empty()) {
+        tr.state = UiTrackState::Empty;
+    } else if (trCtl_.playing && !tr.muted) {
+        tr.state = UiTrackState::Playing;
+    } else {
+        tr.state = UiTrackState::Stopped;
+    }
+}
+
+void SamplerApplication::refreshAllTrackViewStates_() noexcept {
+    for (std::size_t i = 0; i < tracksCtl_.size(); ++i) {
+        refreshTrackViewState_(static_cast<uint8_t>(i));
+    }
 }
 
 void SamplerApplication::renderUiOnce_() {
@@ -277,33 +290,61 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
         case UiInputAction::PreviewAutoToggle:
             break;
         case UiInputAction::PlayActiveTrack: {
-            if (tracksCtl_.empty()) {
-                break;
+            trCtl_.playing = true;
+            engine_.setTransportPlaying(true);
+            refreshAllTrackViewStates_();
+            for (std::size_t i = 0; i < tracksCtl_.size(); ++i) {
+                uiStore_.setTrack(i, tracksCtl_[i]);
             }
-            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
-            (void)engine_.playTrack(t);
-            if (tracksCtl_[t].state != UiTrackState::Empty) {
-                tracksCtl_[t].state = UiTrackState::Playing;
-                uiStore_.setTrack(t, tracksCtl_[t]);
-            }
-            // Синхронизируем транспорт с фактическими состояниями треков.
-            trCtl_.playing = recomputePlaying_();
-            engine_.setTransportPlaying(trCtl_.playing);
             uiStore_.setTransport(trCtl_);
         } break;
         case UiInputAction::StopActiveTrack: {
+            trCtl_.playing = false;
+            engine_.setTransportPlaying(false);
+            refreshAllTrackViewStates_();
+            for (std::size_t i = 0; i < tracksCtl_.size(); ++i) {
+                uiStore_.setTrack(i, tracksCtl_[i]);
+            }
+            uiStore_.setTransport(trCtl_);
+        } break;
+        case UiInputAction::UnmuteActiveTrack: {
             if (tracksCtl_.empty()) {
                 break;
             }
             const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
-            (void)engine_.stopTrack(t);
-            if (tracksCtl_[t].state != UiTrackState::Empty) {
-                tracksCtl_[t].state = UiTrackState::Stopped;
-                uiStore_.setTrack(t, tracksCtl_[t]);
+            tracksCtl_[t].muted = false;
+            (void)engine_.setTrackMuted(t, false);
+            refreshTrackViewState_(t);
+            uiStore_.setTrack(t, tracksCtl_[t]);
+        } break;
+        case UiInputAction::MuteActiveTrack: {
+            if (tracksCtl_.empty()) {
+                break;
             }
-            trCtl_.playing = recomputePlaying_();
-            engine_.setTransportPlaying(trCtl_.playing);
-            uiStore_.setTransport(trCtl_);
+            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
+            tracksCtl_[t].muted = true;
+            (void)engine_.setTrackMuted(t, true);
+            refreshTrackViewState_(t);
+            uiStore_.setTrack(t, tracksCtl_[t]);
+        } break;
+        case UiInputAction::MuteToggleActiveTrack: {
+            if (tracksCtl_.empty()) {
+                break;
+            }
+            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
+            tracksCtl_[t].muted = !tracksCtl_[t].muted;
+            (void)engine_.setTrackMuted(t, tracksCtl_[t].muted);
+            refreshTrackViewState_(t);
+            uiStore_.setTrack(t, tracksCtl_[t]);
+        } break;
+        case UiInputAction::ArmToggleActiveTrack: {
+            if (tracksCtl_.empty()) {
+                break;
+            }
+            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
+            tracksCtl_[t].armed = !tracksCtl_[t].armed;
+            (void)engine_.setTrackArmed(t, tracksCtl_[t].armed);
+            uiStore_.setTrack(t, tracksCtl_[t]);
         } break;
         case UiInputAction::TrackSpeedUp: {
             if (tracksCtl_.empty()) {

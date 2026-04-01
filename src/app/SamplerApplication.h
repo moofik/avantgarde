@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -8,6 +9,7 @@
 
 #include "app/SamplerEngineLayer.h"
 #include "app/SamplerIoLayer.h"
+#include "contracts/IPlatform.h"
 #include "contracts/UiIntent.h"
 #include "service/UiStateComposer.h"
 #include "service/UiStateStore.h"
@@ -26,6 +28,8 @@ struct SamplerAppConfig {
 
     // Параметры аудио/движка.
     SamplerEngineConfig engine{};
+    // Платформенный аудиохост (инжекция зависимости в engine-слой).
+    std::shared_ptr<IAudioHost> audioHost{};
     // Параметры слоя ввода/вывода.
     SamplerIoConfig io{};
     // Стартовые загрузки клипов (произвольный список пар track/path).
@@ -52,8 +56,10 @@ private:
 
     // Применение интентов, пришедших от scene-виджетов.
     void handleIntent_(const UiIntent& intent);
-    // Агрегированный флаг "хотя бы один трек проигрывается".
-    bool recomputePlaying_() const noexcept;
+    // Пересчитать отображаемое состояние одного трека из transport + mute/clip данных.
+    void refreshTrackViewState_(uint8_t track) noexcept;
+    // Пересчитать состояния всех треков.
+    void refreshAllTrackViewStates_() noexcept;
     // Один UI render-pass: telemetry + scene render + backend draw.
     void renderUiOnce_();
     // Обработка одного UI action (клавиша/кнопка).

@@ -89,6 +89,8 @@ TEST_CASE("LowResUiRenderer: renders compact transport and two tracks") {
     state.tracks[0].bars = 8;
     state.tracks[0].fxCount = 2;
     state.tracks[0].loop = true;
+    state.tracks[0].muted = false;
+    state.tracks[0].armed = true;
     state.tracks[0].stretchRatio = 1.5f;
     state.tracks[0].gain01 = 0.75f;
     state.tracks[0].clipName = "kick.wav";
@@ -98,6 +100,8 @@ TEST_CASE("LowResUiRenderer: renders compact transport and two tracks") {
     state.tracks[1].bars = 4;
     state.tracks[1].fxCount = 1;
     state.tracks[1].loop = false;
+    state.tracks[1].muted = true;
+    state.tracks[1].armed = false;
     state.tracks[1].stretchRatio = 0.9f;
     state.tracks[1].gain01 = 0.5f;
     state.tracks[1].clipName = "snare.wav";
@@ -111,6 +115,7 @@ TEST_CASE("LowResUiRenderer: renders compact transport and two tracks") {
     REQUIRE(frame.find("T1* P kick.wav") != std::string::npos);
     REQUIRE(frame.find("T2  S snare.wav") != std::string::npos);
     REQUIRE(frame.find("bars:8 fx:2 loop:Y") != std::string::npos);
+    REQUIRE(frame.find("bars:8 fx:2 loop:Y m:N a:Y") != std::string::npos);
     REQUIRE(frame.find("gn :0.75") != std::string::npos);
 }
 

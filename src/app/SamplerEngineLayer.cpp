@@ -15,8 +15,7 @@
 #include "runtime/QuantizedSchedulerRtExtension.h"
 #include "runtime/TransportBridgeDualBuffer.h"
 
-// Concrete runtime/platform impls are compiled into this TU intentionally.
-#include "platform/macos/MacAudioHost.mm"
+// Concrete runtime impls are compiled into this TU intentionally.
 #include "runtime/AudioEngine.cpp"
 #include "runtime/ClipTrack.cpp"
 #include "runtime/ParamBridgeDualBuffer.cpp"
@@ -79,8 +78,8 @@ void renderThunk(AudioProcessContext& ctx, void* user) noexcept {
 } // namespace
 
 struct SamplerEngineLayer::Impl {
-    // Platform host (CoreAudio на macOS).
-    MacAudioHost host{};
+    // Абстрактный платформенный хост, инжектируется извне.
+    std::shared_ptr<IAudioHost> host{};
     // UI -> Scheduler очередь.
     RtCommandQueueSPSC qUi{};
     // Scheduler -> Engine RT очередь.
@@ -124,12 +123,21 @@ SamplerEngineLayer::~SamplerEngineLayer() {
 }
 
 bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
+                              const std::shared_ptr<IAudioHost>& audioHost,
                               UiState& bootstrapOut,
                               std::string& errorOut) {
     if (!impl_) {
         errorOut = "engine impl is null";
         return false;
     }
+    if (!audioHost) {
+        errorOut = "audio host is null";
+        return false;
+    }
+
+    // Внедряем абстрактный host через контракт.
+    // SamplerEngineLayer не знает о Mac/ALSA/JACK реализациях.
+    impl_->host = audioHost;
 
     impl_->engine.setSampleRate(config.sampleRate);
     impl_->trackCount = sanitizeTrackCount(config.trackCount);
@@ -186,9 +194,19 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
     impl_->controlDispatcher.setTempoBpm(bootstrapOut.transport.bpm);
     impl_->controlDispatcher.setTimeSignature(bootstrapOut.transport.tsNum, bootstrapOut.transport.tsDen);
 
-    // Preview: тише и без loop по умолчанию.
+    // Пользовательские треки следуют global transport и стартуют unmuted/disarmed.
+    for (uint8_t t = 0; t < impl_->trackCount; ++t) {
+        impl_->immediateDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::FollowTransportEnabled, kRtValueOn);
+        impl_->immediateDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::MuteEnabled, kRtValueOff);
+        impl_->immediateDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::ArmEnabled, kRtValueOff);
+    }
+
+    // Preview-голос: отдельный one-shot режим (не следует global transport).
     impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::Gain01, 0.25f);
     impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::LoopEnabled, kRtValueOff);
+    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::FollowTransportEnabled, kRtValueOff);
+    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::MuteEnabled, kRtValueOn);
+    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::ArmEnabled, kRtValueOff);
 
     // Готовим стартовый UI state треков (без автозагрузки файлов).
     bootstrapOut.tracks.clear();
@@ -200,6 +218,8 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
         track.bars = 4;
         track.stretchRatio = 1.0f;
         track.gain01 = 1.0f;
+        track.muted = false;
+        track.armed = false;
         track.loop = false;
         track.fxCount = 0;
         track.clipName.clear();
@@ -226,8 +246,14 @@ bool SamplerEngineLayer::start(std::string& errorOut) {
         return true;
     }
 
+    if (!impl_->host) {
+        errorOut = "audio host is null";
+        return false;
+    }
+
     // Открытие физического устройства и запуск RT колбэка.
-    impl_->stream = impl_->host.openStream(impl_->streamCfg, "default", "default");
+    // Здесь только контракт IAudioHost, без platform include'ов.
+    impl_->stream = impl_->host->openStream(impl_->streamCfg, "default", "default");
     if (!impl_->stream) {
         errorOut = "openStream failed";
         return false;
@@ -278,6 +304,15 @@ void SamplerEngineLayer::setTransportPlaying(bool playing) noexcept {
         return;
     }
     impl_->transport.setPlaying(playing);
+
+    // Прокидываем global Play/Stop в треки (чтобы user tracks следовали transport gate).
+    RtCommand cmd{};
+    cmd.id = toWireCmdId(playing ? CmdId::Play : CmdId::Stop);
+    cmd.track = kRtTrackGlobal;
+    cmd.slot = kRtSlotTrackParams;
+    cmd.index = kRtIndexUnused;
+    cmd.value = playing ? kRtValueOn : kRtValueOff;
+    (void)impl_->qRt.push(cmd);
 }
 
 void SamplerEngineLayer::setTempo(float bpm) noexcept {
@@ -305,7 +340,7 @@ void SamplerEngineLayer::setTimeSignature(uint8_t num, uint8_t den) noexcept {
     impl_->transport.setTimeSignature(num, den);
 }
 
-bool SamplerEngineLayer::playTrack(uint8_t track) noexcept {
+bool SamplerEngineLayer::setTrackMuted(uint8_t track, bool muted) noexcept {
     if (!impl_ || impl_->clipCtl.empty()) {
         return false;
     }
@@ -313,10 +348,10 @@ bool SamplerEngineLayer::playTrack(uint8_t track) noexcept {
     if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
         return false;
     }
-    return impl_->controlDispatcher.sendPlay(static_cast<int16_t>(t), kRtClipSlot0);
+    return impl_->controlDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::MuteEnabled, muted ? kRtValueOn : kRtValueOff);
 }
 
-bool SamplerEngineLayer::stopTrack(uint8_t track) noexcept {
+bool SamplerEngineLayer::setTrackArmed(uint8_t track, bool armed) noexcept {
     if (!impl_ || impl_->clipCtl.empty()) {
         return false;
     }
@@ -324,7 +359,7 @@ bool SamplerEngineLayer::stopTrack(uint8_t track) noexcept {
     if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
         return false;
     }
-    return impl_->controlDispatcher.sendStop(static_cast<int16_t>(t), kRtClipSlot0);
+    return impl_->controlDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::ArmEnabled, armed ? kRtValueOn : kRtValueOff);
 }
 
 bool SamplerEngineLayer::setTrackSpeed(uint8_t track, float speed) noexcept {
@@ -369,6 +404,7 @@ void SamplerEngineLayer::previewRequest(const std::string& path) noexcept {
         return;
     }
     (void)impl_->immediateDispatcher.sendStop(impl_->previewTrackId, kRtClipSlot0);
+    (void)impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::MuteEnabled, kRtValueOn);
     if (path.empty() || !impl_->previewClip || !impl_->previewClip->healthcheck()) {
         return;
     }
@@ -376,6 +412,7 @@ void SamplerEngineLayer::previewRequest(const std::string& path) noexcept {
         return;
     }
     (void)impl_->previewClip->setSlotLooping(0, false);
+    (void)impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::MuteEnabled, kRtValueOff);
     (void)impl_->immediateDispatcher.sendPlay(impl_->previewTrackId, kRtClipSlot0);
 }
 
@@ -387,6 +424,7 @@ void SamplerEngineLayer::previewStop() noexcept {
         return;
     }
     (void)impl_->immediateDispatcher.sendStop(impl_->previewTrackId, kRtClipSlot0);
+    (void)impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::MuteEnabled, kRtValueOn);
 }
 
 } // namespace avantgarde

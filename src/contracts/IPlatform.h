@@ -59,5 +59,11 @@ namespace avantgarde {
                                                          void* notifyUser = nullptr) = 0; // вне RT
     };
 
+    // Фабрика "дефолтного" платформенного хоста.
+    // Это boundary между platform-слоем и остальным кодом:
+    // - реализация живет только в src/platform/*
+    // - engine/app слои работают только через интерфейс IAudioHost
+    // Возвращает nullptr, если на текущей платформе хост не реализован.
+    std::shared_ptr<IAudioHost> createDefaultAudioHost();
 
 } // namespace avantgarde

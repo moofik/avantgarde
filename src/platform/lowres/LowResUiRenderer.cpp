@@ -94,10 +94,12 @@ void LowResUiRenderer::render(const UiState& state) {
                       clipShort(tr.clipName).c_str());
         display_.drawText(0, y, line);
 
-        std::snprintf(line, sizeof(line), "bars:%u fx:%u loop:%c",
+        std::snprintf(line, sizeof(line), "bars:%u fx:%u loop:%c m:%c a:%c",
                       static_cast<unsigned>(tr.bars),
                       static_cast<unsigned>(tr.fxCount),
-                      tr.loop ? 'Y' : 'N');
+                      tr.loop ? 'Y' : 'N',
+                      tr.muted ? 'Y' : 'N',
+                      tr.armed ? 'Y' : 'N');
         display_.drawText(0, static_cast<uint16_t>(y + 1), line);
 
         std::snprintf(line, sizeof(line), "spd:%1.2f", tr.stretchRatio);

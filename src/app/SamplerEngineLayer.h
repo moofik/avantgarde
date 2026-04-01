@@ -1,9 +1,11 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 
 #include "contracts/IUi.h"
+#include "contracts/IPlatform.h"
 #include "contracts/ITransport.h"
 
 namespace avantgarde {
@@ -36,6 +38,8 @@ struct SamplerEngineTelemetry {
 
 // Изолированный слой Engine:
 // инкапсулирует audio host, transport, rt-очереди и track команды.
+// ВАЖНО: слой платформенно-нейтрален. Конкретный IAudioHost
+// инжектируется извне (обычно в main/app bootstrap).
 class SamplerEngineLayer {
 public:
     SamplerEngineLayer();
@@ -43,6 +47,7 @@ public:
 
     // Инициализация графа движка. Начальное состояние UI отдается в bootstrapOut.
     bool init(const SamplerEngineConfig& config,
+              const std::shared_ptr<IAudioHost>& audioHost,
               UiState& bootstrapOut,
               std::string& errorOut);
     // Запуск аудиострима.
@@ -59,9 +64,9 @@ public:
     void setQuantize(QuantizeMode q) noexcept;
     void setTimeSignature(uint8_t num, uint8_t den) noexcept;
 
-    // Track-local операции.
-    bool playTrack(uint8_t track) noexcept;
-    bool stopTrack(uint8_t track) noexcept;
+    // Track-local операции (mute/arm/speed/загрузка клипа).
+    bool setTrackMuted(uint8_t track, bool muted) noexcept;
+    bool setTrackArmed(uint8_t track, bool armed) noexcept;
     bool setTrackSpeed(uint8_t track, float speed) noexcept;
     bool loadSampleToTrack(uint8_t track, const std::string& path, std::string& clipNameOut) noexcept;
     // Preview-голос (скрытый отдельный трек).

@@ -41,7 +41,15 @@ namespace avantgarde {
     enum class TrackParamId : uint16_t {
         Gain01 = 0,
         LoopEnabled = 1,
-        PlaybackInc = 2
+        PlaybackInc = 2,
+        // Mute-гейт трека: 1.0 = muted, 0.0 = unmuted.
+        MuteEnabled = 3,
+        // Arm-флаг трека: 1.0 = armed, 0.0 = disarmed.
+        ArmEnabled = 4,
+        // Режим запуска:
+        // 1.0 = follow global transport.playing
+        // 0.0 = one-shot gate через CmdId::Play/CmdId::Stop (preview voice)
+        FollowTransportEnabled = 5
     };
 
     enum class QuantizeCmdValue : uint8_t {

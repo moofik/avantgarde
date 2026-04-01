@@ -6,6 +6,7 @@
 
 #include "app/SamplerApplication.h"
 #include "app/SamplerIoLayer.h"
+#include "contracts/IPlatform.h"
 #include "contracts/UiTheme.h"
 
 using namespace avantgarde;
@@ -103,6 +104,11 @@ int main(int argc, char** argv) {
     config.io.gbTextWidth = kGbTextWidth;
     config.gbTextWidth = kGbTextWidth;
     config.engine.trackCount = trackCount;
+    config.audioHost = createDefaultAudioHost();
+    if (!config.audioHost) {
+        std::printf("Failed to create audio host for current platform\n");
+        return 2;
+    }
 
     for (int track = 0; argi < argc; ++argi, ++track) {
         if (track >= trackCount) {

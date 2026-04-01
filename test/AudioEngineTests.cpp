@@ -126,7 +126,7 @@ struct MockTransportBridge : ITransportBridge {
     int* phase = nullptr;
 
     // Control-side (не используется в тестах)
-    void setPlaying(bool) override {}
+    void setPlaying(bool on) override { snap.playing = on; }
     void setTempo(float) override {}
     void setTimeSignature(uint8_t, uint8_t) override {}
     void setQuantize(QuantizeMode) override {}
@@ -151,7 +151,7 @@ struct MockTransportBridge : ITransportBridge {
         }
     }
 
-    TransportRtSnapshot snap{};
+    TransportRtSnapshot snap{true, 4, 4, 96, 120.0f, QuantizeMode::None, 0.0f, 0};
 };
 
 // Фабрика из реализации (объявлена в AudioEngine.cpp)
@@ -226,6 +226,7 @@ TEST_CASE("TransportBridge::swapBuffers() and advanceSampleTime() are called in 
     auto eng = avantgarde::MakeAudioEngine(&q, &p);
 
     MockTransportBridge tr;
+    tr.setPlaying(true);
     eng->setTransportBridge(&tr);
 
     auto ctx = makeCtx(256);
@@ -233,6 +234,22 @@ TEST_CASE("TransportBridge::swapBuffers() and advanceSampleTime() are called in 
 
     REQUIRE(tr.swaps == 1);
     REQUIRE(tr.advanced == 256);
+}
+
+TEST_CASE("TransportBridge::sampleTime is not advanced when transport is stopped") {
+    MockRtQueue q;
+    MockParamBridge p;
+    auto eng = avantgarde::MakeAudioEngine(&q, &p);
+
+    MockTransportBridge tr;
+    tr.setPlaying(false);
+    eng->setTransportBridge(&tr);
+
+    auto ctx = makeCtx(256);
+    eng->processBlock(ctx.ctx);
+
+    REQUIRE(tr.swaps == 1);
+    REQUIRE(tr.advanced == 0);
 }
 
 TEST_CASE("TransportBridge is not called when nullptr") {
@@ -467,6 +484,7 @@ TEST_CASE("Full ordering: ParamBridge -> Transport -> RtExtension(begin) -> Trac
     p.phase = &phase;
 
     MockTransportBridge tr;
+    tr.setPlaying(true);
     tr.phase = &phase;
     eng->setTransportBridge(&tr);
 

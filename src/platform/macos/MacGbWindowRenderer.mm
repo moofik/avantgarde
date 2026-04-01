@@ -15,9 +15,12 @@
 namespace avantgarde {
 namespace {
 
+// Ручной micro-bias для позиционирования overlay-заголовка относительно monospace-сетки.
+// Держим константами, чтобы правка была локальной и предсказуемой при смене шрифта.
 constexpr CGFloat kHeaderOverlayXBias = 0.0;
 constexpr CGFloat kHeaderOverlayYBias = 0.0;
 
+// Утилита преобразования 8-bit RGB в NSColor.
 NSColor* colorFromRgb(uint8_t r, uint8_t g, uint8_t b) {
     return [NSColor colorWithSRGBRed:static_cast<CGFloat>(r) / 255.0
                                green:static_cast<CGFloat>(g) / 255.0
@@ -25,6 +28,7 @@ NSColor* colorFromRgb(uint8_t r, uint8_t g, uint8_t b) {
                                alpha:1.0];
 }
 
+// Проверяем расширение файла на допустимые font-контейнеры.
 bool isFontExtension(NSString* ext) {
     if (!ext) {
         return false;
@@ -34,6 +38,8 @@ bool isFontExtension(NSString* ext) {
            [lower isEqualToString:@"ttc"] || [lower isEqualToString:@"otc"];
 }
 
+// Находит шрифты в assets/fonts, регистрирует их в процессе и возвращает PostScript names.
+// Это позволяет пользователю подкидывать кастомные font-файлы без перекомпиляции.
 NSArray<NSString*>* discoverAssetFontPostScriptNames() {
     NSFileManager* fm = [NSFileManager defaultManager];
     NSString* cwd = [fm currentDirectoryPath];
@@ -84,6 +90,7 @@ NSArray<NSString*>* discoverAssetFontPostScriptNames() {
     return names;
 }
 
+// Берет первый доступный шрифт из списка кандидатов.
 NSFont* pickFirstFont(NSArray<NSString*>* names, CGFloat size, NSFont* fallback) {
     for (NSString* name in names) {
         NSFont* f = [NSFont fontWithName:name size:size];
@@ -94,6 +101,7 @@ NSFont* pickFirstFont(NSArray<NSString*>* names, CGFloat size, NSFont* fallback)
     return fallback;
 }
 
+// Берет первый фиксированной ширины (моноширинный) шрифт.
 NSFont* pickFixedPitchFont(NSArray<NSString*>* names, CGFloat size) {
     for (NSString* name in names) {
         NSFont* f = [NSFont fontWithName:name size:size];
@@ -104,6 +112,7 @@ NSFont* pickFixedPitchFont(NSArray<NSString*>* names, CGFloat size) {
     return nil;
 }
 
+// Ширина одного глифа в заданном шрифте.
 CGFloat glyphWidth(NSFont* font, NSString* glyph) {
     if (!font || !glyph || [glyph length] == 0) {
         return 0.0;
@@ -111,6 +120,8 @@ CGFloat glyphWidth(NSFont* font, NSString* glyph) {
     return [glyph sizeWithAttributes:@{ NSFontAttributeName: font }].width;
 }
 
+// Проверка, что "рамочные" символы имеют стабильную ширину.
+// Если метрики нестабильны, рамки визуально "плывут".
 bool hasStableFrameMetrics(NSFont* font) {
     if (!font) {
         return false;
@@ -136,6 +147,7 @@ bool hasStableFrameMetrics(NSFont* font) {
     return true;
 }
 
+// Таблица соответствия keyCode -> UiInputAction для macOS окна.
 UiInputAction mapWindowKeyCode(unsigned short keyCode) noexcept {
     switch (keyCode) {
         case 53: return UiInputAction::BackScene;       // Esc
@@ -154,6 +166,10 @@ UiInputAction mapWindowKeyCode(unsigned short keyCode) noexcept {
         case 0:  return UiInputAction::PreviewAutoToggle; // A
         case 35: return UiInputAction::PlayActiveTrack; // P
         case 1:  return UiInputAction::StopActiveTrack; // S
+        case 32: return UiInputAction::UnmuteActiveTrack; // U
+        case 34: return UiInputAction::MuteActiveTrack;   // I
+        case 17: return UiInputAction::MuteToggleActiveTrack; // T
+        case 15: return UiInputAction::ArmToggleActiveTrack; // R
         case 24: return UiInputAction::TrackSpeedUp;    // =
         case 27: return UiInputAction::TrackSpeedDown;  // -
         case 6:  return UiInputAction::QuantNone;       // Z
@@ -166,6 +182,7 @@ UiInputAction mapWindowKeyCode(unsigned short keyCode) noexcept {
     return UiInputAction::None;
 }
 
+// Дополнительный маппинг по printable-символам.
 UiInputAction mapWindowChars(NSString* chars) noexcept {
     if (!chars || [chars length] == 0) {
         return UiInputAction::None;
@@ -181,6 +198,18 @@ UiInputAction mapWindowChars(NSString* chars) noexcept {
             return UiInputAction::ListParent;
         case ' ':
             return UiInputAction::PreviewPlay;
+        case 'u':
+        case 'U':
+            return UiInputAction::UnmuteActiveTrack;
+        case 'i':
+        case 'I':
+            return UiInputAction::MuteActiveTrack;
+        case 't':
+        case 'T':
+            return UiInputAction::MuteToggleActiveTrack;
+        case 'r':
+        case 'R':
+            return UiInputAction::ArmToggleActiveTrack;
         case ',':
             return UiInputAction::TrackPagePrev;
         case '.':
@@ -190,6 +219,7 @@ UiInputAction mapWindowChars(NSString* chars) noexcept {
     }
 }
 
+// Унифицированный перевод NSEvent в UiInputAction.
 UiInputAction mapWindowEvent(NSEvent* event) noexcept {
     if (!event || [event type] != NSEventTypeKeyDown) {
         return UiInputAction::None;
@@ -204,19 +234,29 @@ UiInputAction mapWindowEvent(NSEvent* event) noexcept {
 } // namespace
 
 struct MacGbWindowRenderer::Impl {
+    // Топ-уровневое окно предпросмотра UI.
     NSWindow* window{nil};
+    // Основное текстовое полотно (body с monospace рамками).
     NSTextView* textView{nil};
+    // Overlay-заголовок (готический шрифт), рендерится поверх body.
     NSTextField* headerOverlay{nil};
+    // Последний выведенный кадр; нужен для cheap dedup, чтобы не перерисовывать одинаковый текст.
     NSString* lastText{nil};
+    // Шрифты: декоративный header и моноширинный body.
     NSFont* headerFont{nil};
     NSFont* bodyFont{nil};
+    // Кэш цветов палитры активной темы.
     NSColor* bg{nil};
     NSColor* panel{nil};
     NSColor* mid{nil};
     NSColor* text{nil};
+    // Активная тема интерфейса.
     UiTheme theme{UiTheme::Gothic};
+    // Защита очереди input-событий окна.
     std::mutex inputMutex{};
+    // FIFO действий клавиатуры, которые считывает control-loop.
     std::deque<UiInputAction> inputQueue{};
+    // Локальный AppKit monitor для перехвата хоткеев внутри window режима.
     id keyMonitor{nil};
 
     explicit Impl(UiTheme t) : theme(t) {}
@@ -227,6 +267,7 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
       textWidth_(textWidth) {
     NSArray<NSString*>* assetFonts = discoverAssetFontPostScriptNames();
 
+    // Явная инициализация AppKit окружения в desktop режиме.
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
     [NSApp finishLaunching];
@@ -263,6 +304,7 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
     [impl_->textView setTextContainerInset:NSMakeSize(8.0, 10.0)];
     [impl_->textView setSelectable:YES];
 
+    // Header может быть декоративным и не обязан быть моноширинным.
     impl_->headerFont = assetFonts.count > 0
                         ? pickFirstFont(assetFonts, 28.0, nil)
                         : nil;
@@ -274,6 +316,7 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
         );
     }
 
+    // Body обязан быть моноширинным: на нем завязана геометрия рамок.
     impl_->bodyFont = pickFixedPitchFont(assetFonts, 10.0);
     if (!impl_->bodyFont && assetFonts.count > 0) {
         // If custom font is not fixed-pitch, keep monospaced body for frame alignment.
@@ -314,7 +357,8 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
     [impl_->textView setBackgroundColor:impl_->bg];
     [impl_->textView setTextColor:impl_->text];
 
-    // Render gothic title as overlay to keep frame geometry strictly monospace.
+    // Готический заголовок рисуем отдельным overlay:
+    // рамка в тексте остается строго monospace и не зависит от декоративного шрифта.
     impl_->headerOverlay = [[NSTextField alloc] initWithFrame:NSZeroRect];
     [impl_->headerOverlay setStringValue:@"AVANTGARDE"];
     [impl_->headerOverlay setEditable:NO];
@@ -347,6 +391,7 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
     [impl_->window makeKeyWindow];
     [impl_->window orderFrontRegardless];
 
+    // Local monitor кладет действия в очередь и "съедает" уже обработанные хоткеи.
     __block Impl* weakImpl = impl_;
     impl_->keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
                                                                handler:^NSEvent* _Nullable(NSEvent* _Nonnull event) {
@@ -400,6 +445,7 @@ void MacGbWindowRenderer::renderCustomFrame(const std::string& monoFrame, bool s
     if (!text) {
         return;
     }
+    // Кадр не изменился: избегаем лишнего обновления NSTextStorage.
     if (impl_->lastText && [impl_->lastText isEqualToString:text]) {
         return;
     }
@@ -430,7 +476,7 @@ void MacGbWindowRenderer::renderCustomFrame(const std::string& monoFrame, bool s
                               [line hasPrefix:@"╠"] || [line hasPrefix:@"╟"];
         const bool isHeader = [line containsString:@"AVANTGARDE"];
         const bool isTransport = [line containsString:@" TRN:"] || [line containsString:@" ACTIVE:"];
-        const bool isActiveTrack = [line containsString:@"▶ T1"] || [line containsString:@"▶ T2"];
+        const bool isActiveTrack = [line containsString:@"▶ T"];
 
         if (isBorder) {
             [attr addAttributes:@{
@@ -464,6 +510,8 @@ void MacGbWindowRenderer::renderCustomFrame(const std::string& monoFrame, bool s
 }
 
 void MacGbWindowRenderer::pumpEvents() noexcept {
+    // Неблокирующий pump очереди AppKit-событий.
+    // Вызывается часто из main loop, чтобы держать input latency низкой.
     for (;;) {
         NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
                                             untilDate:[NSDate dateWithTimeIntervalSinceNow:0.0]
@@ -482,6 +530,7 @@ bool MacGbWindowRenderer::readNextInputEvent(UiInputEvent& out) noexcept {
     if (!impl_) {
         return false;
     }
+    // Очередь input общая для monitor callback и control-thread.
     std::lock_guard<std::mutex> lock(impl_->inputMutex);
     if (impl_->inputQueue.empty()) {
         return false;

@@ -12,6 +12,10 @@ TEST_CASE("TerminalUiInput: key mapping") {
     REQUIRE(TerminalUiInput::mapKey('.') == UiInputAction::TrackPageNext);
     REQUIRE(TerminalUiInput::mapKey('p') == UiInputAction::PlayActiveTrack);
     REQUIRE(TerminalUiInput::mapKey('s') == UiInputAction::StopActiveTrack);
+    REQUIRE(TerminalUiInput::mapKey('u') == UiInputAction::UnmuteActiveTrack);
+    REQUIRE(TerminalUiInput::mapKey('i') == UiInputAction::MuteActiveTrack);
+    REQUIRE(TerminalUiInput::mapKey('t') == UiInputAction::MuteToggleActiveTrack);
+    REQUIRE(TerminalUiInput::mapKey('r') == UiInputAction::ArmToggleActiveTrack);
     REQUIRE(TerminalUiInput::mapKey('=') == UiInputAction::TrackSpeedUp);
     REQUIRE(TerminalUiInput::mapKey('-') == UiInputAction::TrackSpeedDown);
     REQUIRE(TerminalUiInput::mapKey('z') == UiInputAction::QuantNone);

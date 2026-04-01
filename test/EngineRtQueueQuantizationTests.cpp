@@ -107,6 +107,7 @@ TEST_CASE("Engine: quantize mode and play from rtQueue schedule on bar boundary"
     engine->registerTrack(std::move(track));
 
     TransportBridgeDualBuffer transport;
+    transport.setPlaying(true);
     transport.setTempo(120.0f);
     transport.setTimeSignature(4, 4);
     transport.swapBuffers();

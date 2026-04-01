@@ -99,6 +99,18 @@ UiInputAction TerminalUiInput::mapKey(char ch) noexcept {
         case 's':
         case 'S':
             return UiInputAction::StopActiveTrack;
+        case 'u':
+        case 'U':
+            return UiInputAction::UnmuteActiveTrack;
+        case 'i':
+        case 'I':
+            return UiInputAction::MuteActiveTrack;
+        case 't':
+        case 'T':
+            return UiInputAction::MuteToggleActiveTrack;
+        case 'r':
+        case 'R':
+            return UiInputAction::ArmToggleActiveTrack;
         case '+':
         case '=':
             return UiInputAction::TrackSpeedUp;

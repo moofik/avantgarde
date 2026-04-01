@@ -2,9 +2,17 @@ file(GLOB_RECURSE PLATFORM_SOURCES CONFIGURE_DEPENDS
         ${CMAKE_CURRENT_LIST_DIR}/*.cpp
         ${CMAKE_CURRENT_LIST_DIR}/*.cxx
         ${CMAKE_CURRENT_LIST_DIR}/*.cc
-        ${CMAKE_CURRENT_LIST_DIR}/*.mm
-        ${CMAKE_CURRENT_LIST_DIR}/*.m
 )
+
+if(APPLE)
+    list(APPEND PLATFORM_SOURCES
+            ${CMAKE_CURRENT_LIST_DIR}/macos/MacAudioHost.mm
+            ${CMAKE_CURRENT_LIST_DIR}/macos/MacGbWindowRenderer.mm
+    )
+else()
+    # На non-Apple платформах Objective-C++ исходники не компилируем.
+    list(FILTER PLATFORM_SOURCES EXCLUDE REGEX ".*/macos/.*")
+endif()
 
 add_library(avantgarde_platform STATIC ${PLATFORM_SOURCES})
 
@@ -18,14 +26,14 @@ target_include_directories(avantgarde_platform
 
 # 👇 ВАЖНО: если CLion CMake ломается на OBJCXX
 # принудительно компилируем .mm как C++ с режимом objective-c++
-set_source_files_properties(
-        ${CMAKE_CURRENT_LIST_DIR}/macos/MacAudioHost.mm
-        PROPERTIES
-        LANGUAGE CXX
-        COMPILE_OPTIONS "-x;objective-c++"
-)
+if(APPLE)
+    set_source_files_properties(
+            ${CMAKE_CURRENT_LIST_DIR}/macos/MacAudioHost.mm
+            PROPERTIES
+            LANGUAGE CXX
+            COMPILE_OPTIONS "-x;objective-c++"
+    )
 
-if (EXISTS ${CMAKE_CURRENT_LIST_DIR}/macos/MacGbWindowRenderer.mm)
     set_source_files_properties(
             ${CMAKE_CURRENT_LIST_DIR}/macos/MacGbWindowRenderer.mm
             PROPERTIES

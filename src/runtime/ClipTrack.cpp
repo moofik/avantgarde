@@ -252,8 +252,9 @@ namespace avantgarde {
 // ============================================================
 // ClipTrackImpl (MVP)
 // - 1 slot
-// - Play/Stop via onRtCommand
-// - gain/loop/speed via ParamSet (TrackParamId) OR via control methods
+// - user-track режим: follow global transport + mute/arm
+// - preview режим: one-shot gate через CmdId::Play/CmdId::Stop
+// - gain/loop/speed/mute/arm/followTransport via ParamSet (TrackParamId)
 // ============================================================
 
     class ClipTrackImpl final : public IClipTrack {
@@ -294,18 +295,21 @@ namespace avantgarde {
             // Если хочешь совсем безопасно — держи соглашение "всегда 2 канала".
             if (ctx.out[1]) out1 = ctx.out[1];
 
-            const ClipBuffer* clip = rt_.clip;
-            if (!rt_.playing || !clip || clip->frames <= 0 || !out0) return;
+            const ClipBuffer* clip = playbackRt_.clip;
+            if (!clip || clip->frames <= 0 || !out0) return;
+
+            const bool runGate = playbackRt_.followTransport ? playbackRt_.transportRunning : playbackRt_.oneshotRunning;
+            if (!runGate || playbackRt_.muted) return;
 
             const float* c0 = clip->ch[0];
             const float* c1 = (clip->channels == 2) ? clip->ch[1] : nullptr;
 
-            double ph = rt_.playhead;
+            double ph = playbackRt_.playhead;
             const int len = clip->frames;
             const double lenD = static_cast<double>(len);
-            const float g = rt_.gain;
-            const bool loop = rt_.loop;
-            const double inc = static_cast<double>(detail_interp::clampf(rt_.playbackInc, 0.05f, 8.0f));
+            const float g = playbackRt_.gain;
+            const bool loop = playbackRt_.loop;
+            const double inc = static_cast<double>(detail_interp::clampf(playbackRt_.playbackInc, 0.05f, 8.0f));
 
             const bool hasFx = !modules_.empty();
             if (hasFx) {
@@ -315,7 +319,8 @@ namespace avantgarde {
             }
 
             std::size_t offset = 0;
-            while (offset < ctx.nframes && rt_.playing) {
+            while (offset < ctx.nframes &&
+                   (playbackRt_.followTransport || playbackRt_.oneshotRunning)) {
                 const std::size_t chunk = std::min(kFxScratchFrames, ctx.nframes - offset);
                 const std::size_t produced = renderClipChunk_(chunk, c0, c1, len, lenD, loop, g, inc, ph);
                 if (produced == 0) {
@@ -364,7 +369,7 @@ namespace avantgarde {
                 offset += produced;
             }
 
-            rt_.playhead = ph;
+            playbackRt_.playhead = ph;
         }
 
         void onRtCommand(const RtCommand& cmd) noexcept override {
@@ -374,19 +379,33 @@ namespace avantgarde {
 
             switch (cid) {
                 case CmdId::Play: {
+                    if (cmd.track == kRtTrackGlobal) {
+                        playbackRt_.transportRunning = true;
+                        break;
+                    }
+                    if (playbackRt_.followTransport) {
+                        break;
+                    }
                     const uint32_t clipSlot = (cmd.slot < 0) ? 0u : static_cast<uint32_t>(cmd.slot);
                     if (clipSlot != 0u) break;
-                    if (rt_.clip && rt_.clip->frames > 0) {
-                        rt_.playhead = 0.0;
-                        rt_.playing = true;
+                    if (playbackRt_.clip && playbackRt_.clip->frames > 0) {
+                        playbackRt_.playhead = 0.0;
+                        playbackRt_.oneshotRunning = true;
                     }
                 } break;
 
                 case CmdId::Stop: {
+                    if (cmd.track == kRtTrackGlobal) {
+                        playbackRt_.transportRunning = false;
+                        break;
+                    }
+                    if (playbackRt_.followTransport) {
+                        break;
+                    }
                     const uint32_t clipSlot = (cmd.slot < 0) ? 0u : static_cast<uint32_t>(cmd.slot);
                     if (clipSlot != 0u) break;
-                    rt_.playing = false;
-                    rt_.playhead = 0.0;
+                    playbackRt_.oneshotRunning = false;
+                    playbackRt_.playhead = 0.0;
                 } break;
 
                 case CmdId::ParamSet: {
@@ -402,37 +421,55 @@ namespace avantgarde {
                     // значения параметров по договору нормализованы [0..1]
                     if (cmd.index == toParamIndex(TrackParamId::Gain01)) {
                         // gain (0..1) — MVP
-                        rt_.gain = detail_interp::clampf(cmd.value, 0.0f, 1.0f);
+                        playbackRt_.gain = detail_interp::clampf(cmd.value, 0.0f, 1.0f);
                     } else if (cmd.index == toParamIndex(TrackParamId::LoopEnabled)) {
                         // loop bool
-                        rt_.loop = (cmd.value >= 0.5f);
+                        playbackRt_.loop = (cmd.value >= 0.5f);
                     } else if (cmd.index == toParamIndex(TrackParamId::PlaybackInc)) {
                         // varispeed playback increment (1.0 = normal)
-                        rt_.playbackInc = detail_interp::clampf(cmd.value, 0.05f, 8.0f);
-                        rt_.stretchToBars = false;
+                        playbackRt_.playbackInc = detail_interp::clampf(cmd.value, 0.05f, 8.0f);
+                        playbackRt_.stretchToBars = false;
+                    } else if (cmd.index == toParamIndex(TrackParamId::MuteEnabled)) {
+                        playbackRt_.muted = (cmd.value >= 0.5f);
+                    } else if (cmd.index == toParamIndex(TrackParamId::ArmEnabled)) {
+                        const bool armed = (cmd.value >= 0.5f);
+                        playbackRt_.armed = armed;
+                        recArmed_.store(armed, std::memory_order_relaxed);
+                    } else if (cmd.index == toParamIndex(TrackParamId::FollowTransportEnabled)) {
+                        const bool followTransport = (cmd.value >= 0.5f);
+                        playbackRt_.followTransport = followTransport;
+                        if (followTransport) {
+                            playbackRt_.oneshotRunning = false;
+                        }
                     }
                 } break;
 
                 case CmdId::SetTempoBpm: {
                     const float bpm = detail_interp::clampf(cmd.value, 20.0f, 300.0f);
-                    rt_.transportBpm = bpm;
-                    if (rt_.stretchToBars) {
-                        rt_.playbackInc = computeAutoPlaybackIncRt_();
+                    playbackRt_.transportBpm = bpm;
+                    if (playbackRt_.stretchToBars) {
+                        playbackRt_.playbackInc = computeAutoPlaybackIncRt_();
                     }
                 } break;
 
                 case CmdId::SetTimeSig: {
                     const uint8_t num = sanitizeTsNum_(static_cast<int>(std::lround(cmd.value)));
                     const uint8_t den = sanitizeTsDen_(static_cast<int>(cmd.index));
-                    rt_.transportTsNum = num;
-                    rt_.transportTsDen = den;
-                    if (rt_.stretchToBars) {
-                        rt_.playbackInc = computeAutoPlaybackIncRt_();
+                    playbackRt_.transportTsNum = num;
+                    playbackRt_.transportTsDen = den;
+                    if (playbackRt_.stretchToBars) {
+                        playbackRt_.playbackInc = computeAutoPlaybackIncRt_();
                     }
                 } break;
 
                 case CmdId::RecArm:
+                    playbackRt_.armed = true;
+                    recArmed_.store(true, std::memory_order_relaxed);
+                    break;
                 case CmdId::RecDisarm:
+                    playbackRt_.armed = false;
+                    recArmed_.store(false, std::memory_order_relaxed);
+                    break;
                 case CmdId::Overdub:
                 case CmdId::Clear:
                 case CmdId::StopQuantized:
@@ -524,8 +561,14 @@ namespace avantgarde {
             std::size_t produced = 0;
             for (; produced < maxFrames; ++produced) {
                 if (!loop && ph >= lenD) {
-                    rt_.playing = false;
-                    ph = 0.0;
+                    // Для followTransport one-shot флаг не используем:
+                    // просто остаемся в "конце клипа" и выдаем тишину до retrigger.
+                    if (playbackRt_.followTransport) {
+                        ph = lenD;
+                    } else {
+                        playbackRt_.oneshotRunning = false;
+                        ph = 0.0;
+                    }
                     break;
                 }
 
@@ -551,7 +594,7 @@ namespace avantgarde {
             const float* ch[2] = {nullptr, nullptr};
         };
 
-        struct RtState {
+        struct ClipPlaybackRtState {
             const ClipBuffer* clip = nullptr;
             double playhead = 0.0;
             float playbackInc = 1.0f;
@@ -560,7 +603,11 @@ namespace avantgarde {
             uint8_t transportTsDen = 4;
             bool stretchToBars = false;
             float gain = 1.0f;     // normalized 0..1 (MVP)
-            bool playing = false;
+            bool muted = false;
+            bool armed = false;
+            bool followTransport = false;
+            bool transportRunning = false;
+            bool oneshotRunning = false;
             bool loop = false;
         };
 
@@ -578,15 +625,15 @@ namespace avantgarde {
         }
 
         float computeAutoPlaybackIncRt_() const noexcept {
-            const ClipBuffer* clip = rt_.clip;
+            const ClipBuffer* clip = playbackRt_.clip;
             if (!clip || clip->frames <= 0 || clip->sampleRate <= 0) {
                 return 1.0f;
             }
 
             const uint32_t bars = std::max<uint32_t>(1, slotBars_.load(std::memory_order_relaxed));
-            const float bpm = detail_interp::clampf(rt_.transportBpm, 20.0f, 300.0f);
-            const uint8_t tsNum = sanitizeTsNum_(rt_.transportTsNum);
-            const uint8_t tsDen = sanitizeTsDen_(rt_.transportTsDen);
+            const float bpm = detail_interp::clampf(playbackRt_.transportBpm, 20.0f, 300.0f);
+            const uint8_t tsNum = sanitizeTsNum_(playbackRt_.transportTsNum);
+            const uint8_t tsDen = sanitizeTsDen_(playbackRt_.transportTsDen);
 
             const double beatsPerBar = static_cast<double>(tsNum) * 4.0 / static_cast<double>(tsDen);
             const double targetFrames =
@@ -613,36 +660,39 @@ namespace avantgarde {
 
             // Apply pending clear
             if (pendingClear_.exchange(false, std::memory_order_acq_rel)) {
-                rt_.clip = nullptr;
-                rt_.playing = false;
-                rt_.playhead = 0.0;
+                playbackRt_.clip = nullptr;
+                playbackRt_.oneshotRunning = false;
+                playbackRt_.playhead = 0.0;
             }
 
             // Apply pending clip publish
             if (const ClipBuffer* p = pendingClip_.exchange(nullptr, std::memory_order_acq_rel)) {
-                rt_.clip = p;
-                rt_.playing = false;  // безопасно: при смене клипа останавливаем
-                rt_.playhead = 0.0;
+                playbackRt_.clip = p;
+                playbackRt_.oneshotRunning = false;  // безопасно: при смене клипа останавливаем one-shot gate
+                playbackRt_.playhead = 0.0;
                 clipChanged = true;
             }
 
             // Apply pending loop set (from control method)
             const uint32_t pl = pendingLoop_.exchange(0xFFFFFFFFu, std::memory_order_acq_rel);
             if (pl != 0xFFFFFFFFu) {
-                rt_.loop = (pl != 0u);
+                playbackRt_.loop = (pl != 0u);
             }
 
             const int stretchMode = pendingStretchMode_.exchange(-1, std::memory_order_acq_rel);
             if (stretchMode == 0) {
-                rt_.stretchToBars = false;
+                playbackRt_.stretchToBars = false;
             } else if (stretchMode == 1) {
-                rt_.stretchToBars = true;
+                playbackRt_.stretchToBars = true;
             }
 
             const bool stretchRecalc = pendingStretchRecalc_.exchange(false, std::memory_order_acq_rel);
-            if ((stretchRecalc || clipChanged) && rt_.stretchToBars) {
-                rt_.playbackInc = computeAutoPlaybackIncRt_();
+            if ((stretchRecalc || clipChanged) && playbackRt_.stretchToBars) {
+                playbackRt_.playbackInc = computeAutoPlaybackIncRt_();
             }
+
+            // armRecordSlot() публикует флаг вне RT, читаем его в начале блока.
+            playbackRt_.armed = recArmed_.load(std::memory_order_relaxed);
         }
 
     private:
@@ -674,7 +724,8 @@ namespace avantgarde {
         std::atomic<bool> recArmed_{false};
         std::atomic<uint32_t> slotBars_{4};
 
-        RtState rt_{}; // Текущее состояние плеера
+        // RT-only состояние плеера/гейтов данного трека.
+        ClipPlaybackRtState playbackRt_{};
     };
 
 } // namespace avantgarde

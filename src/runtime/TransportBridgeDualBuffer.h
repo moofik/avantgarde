@@ -30,7 +30,8 @@ private:
     std::atomic<uint8_t> quantWrite_{static_cast<uint8_t>(QuantizeMode::Bar)};
     std::atomic<float> swingWrite_{0.0f};
 
-    TransportRtSnapshot rt_{};
+    // RT-снапшот, который читается движком/RT-extension в пределах блока.
+    TransportRtSnapshot transportRtSnapshot_{};
 };
 
 } // namespace avantgarde

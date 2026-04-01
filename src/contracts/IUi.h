@@ -31,6 +31,10 @@ struct UiTrackStateView {
     uint32_t bars{4};
     float stretchRatio{1.0f};
     float gain01{1.0f};
+    // true = трек заглушен (в master не микшируется).
+    bool muted{false};
+    // true = трек вооружен для записи/овerdub (для будущего record flow).
+    bool armed{false};
     bool loop{false};
     uint8_t fxCount{0};
     std::string clipName;

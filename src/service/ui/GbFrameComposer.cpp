@@ -176,10 +176,12 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
                       clipShort(tr.clipName, clipWidth).c_str());
         out << "║" << padRight(line, inner) << "║\n";
 
-        std::snprintf(line, sizeof(line), "   bars:%u  fx:%u  loop:%c",
+        std::snprintf(line, sizeof(line), "   bars:%u  fx:%u  loop:%c  m:%c  a:%c",
                       static_cast<unsigned>(tr.bars),
                       static_cast<unsigned>(tr.fxCount),
-                      tr.loop ? 'Y' : 'N');
+                      tr.loop ? 'Y' : 'N',
+                      tr.muted ? 'Y' : 'N',
+                      tr.armed ? 'Y' : 'N');
         out << "║" << padRight(line, inner) << "║\n";
 
         std::snprintf(line, sizeof(line), "   spd:%1.2f [%s]",
@@ -198,7 +200,7 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
     }
 
     out << "╠" << repeatUtf8("═", inner) << "╣\n";
-    out << "║" << padRight(" keys [1< /2>] [,< /.>] [p/s] [-/=] [z/x/c] [[/]] [q] ", inner) << "║\n";
+    out << "║" << padRight(" keys [1< /2>] [,< /.>] [p/s] [u/i/t/r] [-/=] [z/x/c] [[/]] [q] ", inner) << "║\n";
     out << "╚" << repeatUtf8("═", inner) << "╝\n";
     return out.str();
 }

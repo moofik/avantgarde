@@ -43,7 +43,7 @@ void AnsiUiRenderer::render(const UiState& state) {
                 state.telemetry.rtQueueOverflow ? "yes" : "no");
 
     for (const auto& tr : state.tracks) {
-        std::printf("Track %u%s: %-9s | clip=%s | bars=%u | speed=%.3f | gain=%.2f | loop=%s | fx=%u\n",
+        std::printf("Track %u%s: %-9s | clip=%s | bars=%u | speed=%.3f | gain=%.2f | loop=%s | mute=%s | arm=%s | fx=%u\n",
                     static_cast<unsigned>(tr.id),
                     tr.id == state.transport.activeTrack ? "*" : " ",
                     trackStateToStr(tr.state),
@@ -52,10 +52,12 @@ void AnsiUiRenderer::render(const UiState& state) {
                     tr.stretchRatio,
                     tr.gain01,
                     tr.loop ? "on" : "off",
+                    tr.muted ? "on" : "off",
+                    tr.armed ? "on" : "off",
                     static_cast<unsigned>(tr.fxCount));
     }
 
-    std::printf("\nKeys: [1 prev / 2 next track] [, prev page / . next page] [p play] [s stop] [- slower] [+/= faster] [z/x/c quant] [[ and ] bpm] [q quit]\n");
+    std::printf("\nKeys: [1 prev / 2 next track] [, prev page / . next page] [p play] [s stop] [u unmute] [i mute] [t mute-toggle] [r arm] [- slower] [+/= faster] [z/x/c quant] [[ and ] bpm] [q quit]\n");
     std::fflush(stdout);
 }
 

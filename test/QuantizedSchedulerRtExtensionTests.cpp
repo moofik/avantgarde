@@ -79,6 +79,7 @@ TEST_CASE("QuantizedScheduler: QuantizeMode command sets internal mode") {
     MockRtQueue inQ;
     MockRtQueue outQ;
     TransportBridgeDualBuffer tr;
+    tr.setPlaying(true);
     tr.setTempo(120.0f);
     tr.setTimeSignature(4, 4);
     tr.swapBuffers();
@@ -109,6 +110,7 @@ TEST_CASE("QuantizedScheduler: Quantize Bar aligns to next bar") {
     MockRtQueue inQ;
     MockRtQueue outQ;
     TransportBridgeDualBuffer tr;
+    tr.setPlaying(true);
     tr.setTempo(120.0f);
     tr.setTimeSignature(4, 4);
     tr.swapBuffers();
@@ -154,4 +156,25 @@ TEST_CASE("QuantizedScheduler: Stop is immediate even when quantization mode is 
 
     REQUIRE(outQ.size() == 1);
     CHECK(outQ.q[0].id == toWireCmdId(CmdId::Stop));
+}
+
+TEST_CASE("QuantizedScheduler: Play is immediate when transport is stopped") {
+    MockRtQueue inQ;
+    MockRtQueue outQ;
+    TransportBridgeDualBuffer tr;
+    tr.setPlaying(false);
+    tr.setTempo(120.0f);
+    tr.setTimeSignature(4, 4);
+    tr.swapBuffers();
+    tr.advanceSampleTime(12345);
+
+    QuantizedSchedulerRtExtension scheduler(&inQ, &outQ, &tr, 48000.0);
+    inQ.push(makeCmd(CmdId::QuantizeMode, -1, 2.0f)); // Bar
+    inQ.push(makeCmd(CmdId::Play, 0, 1.0f));
+
+    const auto ctx = makeCtx(256);
+    scheduler.onBlockBegin(ctx);
+
+    REQUIRE(outQ.size() == 1);
+    CHECK(outQ.q[0].id == toWireCmdId(CmdId::Play));
 }
