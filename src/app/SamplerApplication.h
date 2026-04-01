@@ -64,8 +64,8 @@ private:
     void refreshAllTrackViewStates_() noexcept;
     // Один UI render-pass: telemetry + scene render + backend draw.
     void renderUiOnce_();
-    // Обработка одного UI action (клавиша/кнопка).
-    bool handleInputEvent_(UiInputAction action);
+    // Обработка одного UI-жеста (клавиша/энкодер/кнопка).
+    bool handleGesture_(UiGesture action);
 
     // Аудио/RT слой.
     SamplerEngineLayer engine_{};

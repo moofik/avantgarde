@@ -11,7 +11,7 @@
 
 #include "contracts/IDisplay.h"
 #include "contracts/IUi.h"
-#include "contracts/IUiInput.h"
+#include "contracts/IUiGestureInput.h"
 #include "contracts/UiTheme.h"
 
 namespace avantgarde {
@@ -59,7 +59,7 @@ public:
     // Считать накопленные события окна (актуально для gb-window) и положить их в общую очередь.
     bool readWindowEvents();
     // Получить следующее событие ввода из общей очереди.
-    bool readNextInputEvent(UiInputEvent& out);
+    bool readNextInputEvent(UiGestureEvent& out);
 
     // true, если рендер нужно выполнять в main thread (AppKit).
     bool renderOnMainThread() const noexcept;
@@ -69,13 +69,13 @@ public:
 private:
     // Простейшая SPSC-подобная очередь для handoff input событий между потоками.
     struct InputEventQueue final {
-        void push(const UiInputEvent& ev);
-        bool tryPop(UiInputEvent& out);
+        void push(const UiGestureEvent& ev);
+        bool tryPop(UiGestureEvent& out);
 
         // Защита внутренней очереди.
         std::mutex mutex_{};
         // Накопленные input события.
-        std::deque<UiInputEvent> queue_{};
+        std::deque<UiGestureEvent> queue_{};
     };
 
     // Очередь входных событий из разных источников.

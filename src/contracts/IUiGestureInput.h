@@ -4,7 +4,10 @@
 
 namespace avantgarde {
 
-enum class UiInputAction : uint8_t {
+// Низкоуровневые пользовательские жесты/команды управления.
+// Это слой "физического" ввода (клавиши/энкодеры/кнопки),
+// не бизнес-действия домена.
+enum class UiGesture : uint8_t {
     None = 0,
     Quit,
     SelectPrevTrack,
@@ -33,7 +36,7 @@ enum class UiInputAction : uint8_t {
     BpmUp,
     BpmDown,
 
-    // Active Action Pointer controls (reserved contract for encoder-like UI).
+    // Active Action Pointer controls (encoder-like model).
     ActionFocusPrev,
     ActionFocusNext,
     ActionAdjustPrev,
@@ -47,8 +50,7 @@ enum class UiInputAction : uint8_t {
     ActionPress,
     ActionRelease,
 
-    // F-row reserved actions for hardware-like mapping.
-    // Пока не привязаны к логике: резервируем в контракте заранее.
+    // F-row for hardware-like mapping.
     F1,
     F2,
     F3,
@@ -63,13 +65,13 @@ enum class UiInputAction : uint8_t {
     F12
 };
 
-struct UiInputEvent {
-    UiInputAction action{UiInputAction::None};
+struct UiGestureEvent {
+    UiGesture action{UiGesture::None};
 };
 
-struct IUiInput {
-    virtual ~IUiInput() = default;
-    virtual bool poll(UiInputEvent& out) noexcept = 0;
+struct IUiGestureInput {
+    virtual ~IUiGestureInput() = default;
+    virtual bool poll(UiGestureEvent& out) noexcept = 0;
 };
 
 } // namespace avantgarde

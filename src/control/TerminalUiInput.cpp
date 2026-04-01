@@ -57,149 +57,149 @@ TerminalUiInput::~TerminalUiInput() {
     delete oldTerm_;
 }
 
-UiInputAction TerminalUiInput::mapKey(char ch) noexcept {
+UiGesture TerminalUiInput::mapKey(char ch) noexcept {
     switch (ch) {
         case 27:  // ESC
-            return UiInputAction::BackScene;
+            return UiGesture::BackScene;
         case 'q':
         case 'Q':
-            return UiInputAction::Quit;
+            return UiGesture::Quit;
         case '1':
-            return UiInputAction::SelectPrevTrack;
+            return UiGesture::SelectPrevTrack;
         case '2':
-            return UiInputAction::SelectNextTrack;
+            return UiGesture::SelectNextTrack;
         case ',':
-            return UiInputAction::TrackPagePrev;
+            return UiGesture::TrackPagePrev;
         case '.':
-            return UiInputAction::TrackPageNext;
+            return UiGesture::TrackPageNext;
         case 'm':
         case 'M':
-            return UiInputAction::OpenManager;
+            return UiGesture::OpenManager;
         case 'j':
         case 'J':
-            return UiInputAction::ListDown;
+            return UiGesture::ListDown;
         case 'k':
         case 'K':
-            return UiInputAction::ListUp;
+            return UiGesture::ListUp;
         case '\r':
         case '\n':
-            return UiInputAction::ListEnter;
+            return UiGesture::ListEnter;
         case 8:    // ctrl+h / backspace on some terminals
         case 127:  // backspace
         case 'h':
         case 'H':
-            return UiInputAction::ListParent;
+            return UiGesture::ListParent;
         case ' ':
-            return UiInputAction::PreviewPlay;
+            return UiGesture::PreviewPlay;
         case 'a':
         case 'A':
-            return UiInputAction::PreviewAutoToggle;
+            return UiGesture::PreviewAutoToggle;
         case 'p':
         case 'P':
-            return UiInputAction::PlayActiveTrack;
+            return UiGesture::PlayActiveTrack;
         case 's':
         case 'S':
-            return UiInputAction::StopActiveTrack;
+            return UiGesture::StopActiveTrack;
         case 'u':
         case 'U':
-            return UiInputAction::UnmuteActiveTrack;
+            return UiGesture::UnmuteActiveTrack;
         case 'i':
         case 'I':
-            return UiInputAction::MuteActiveTrack;
+            return UiGesture::MuteActiveTrack;
         case 't':
         case 'T':
-            return UiInputAction::MuteToggleActiveTrack;
+            return UiGesture::MuteToggleActiveTrack;
         case 'r':
         case 'R':
-            return UiInputAction::ArmToggleActiveTrack;
+            return UiGesture::ArmToggleActiveTrack;
         case ';':
-            return UiInputAction::ActionFocusPrev;
+            return UiGesture::ActionFocusPrev;
         case '\'':
-            return UiInputAction::ActionFocusNext;
+            return UiGesture::ActionFocusNext;
         case '/':
-            return UiInputAction::ActionAdjustPrev;
+            return UiGesture::ActionAdjustPrev;
         case '?':
-            return UiInputAction::ActionAdjustNext;
+            return UiGesture::ActionAdjustNext;
         case 'o':
         case 'O':
-            return UiInputAction::ActionApply;
+            return UiGesture::ActionApply;
         case 'y':
         case 'Y':
-            return UiInputAction::ActionUndo;
+            return UiGesture::ActionUndo;
         case '+':
         case '=':
-            return UiInputAction::TrackSpeedUp;
+            return UiGesture::TrackSpeedUp;
         case '-':
         case '_':
-            return UiInputAction::TrackSpeedDown;
+            return UiGesture::TrackSpeedDown;
         case 'z':
         case 'Z':
-            return UiInputAction::QuantNone;
+            return UiGesture::QuantNone;
         case 'x':
         case 'X':
-            return UiInputAction::QuantBeat;
+            return UiGesture::QuantBeat;
         case 'c':
         case 'C':
-            return UiInputAction::QuantBar;
+            return UiGesture::QuantBar;
         case ']':
-            return UiInputAction::BpmUp;
+            return UiGesture::BpmUp;
         case '[':
-            return UiInputAction::BpmDown;
+            return UiGesture::BpmDown;
         default:
-            return UiInputAction::None;
+            return UiGesture::None;
     }
 }
 
-UiInputAction TerminalUiInput::mapEscapeSequence(std::string_view seq) noexcept {
+UiGesture TerminalUiInput::mapEscapeSequence(std::string_view seq) noexcept {
     // Arrow keys: ESC [ A/B/C/D
-    if (seq == "[A") return UiInputAction::ActionAdjustNext; // Up
-    if (seq == "[B") return UiInputAction::ActionAdjustPrev; // Down
-    if (seq == "[C") return UiInputAction::ActionFocusNext;  // Right
-    if (seq == "[D") return UiInputAction::ActionFocusPrev;  // Left
+    if (seq == "[A") return UiGesture::ActionAdjustNext; // Up
+    if (seq == "[B") return UiGesture::ActionAdjustPrev; // Down
+    if (seq == "[C") return UiGesture::ActionFocusNext;  // Right
+    if (seq == "[D") return UiGesture::ActionFocusPrev;  // Left
 
     // xterm function keys:
     // F1..F4: ESC O P/Q/R/S
-    if (seq == "OP") return UiInputAction::F1;
-    if (seq == "OQ") return UiInputAction::F2;
-    if (seq == "OR") return UiInputAction::F3;
-    if (seq == "OS") return UiInputAction::F4;
+    if (seq == "OP") return UiGesture::F1;
+    if (seq == "OQ") return UiGesture::F2;
+    if (seq == "OR") return UiGesture::F3;
+    if (seq == "OS") return UiGesture::F4;
     // F5..F12: ESC [15~ [17~ [18~ [19~ [20~ [21~ [23~ [24~
-    if (seq == "[15~") return UiInputAction::F5;
-    if (seq == "[17~") return UiInputAction::F6;
-    if (seq == "[18~") return UiInputAction::F7;
-    if (seq == "[19~") return UiInputAction::F8;
-    if (seq == "[20~") return UiInputAction::F9;
-    if (seq == "[21~") return UiInputAction::F10;
-    if (seq == "[23~") return UiInputAction::F11;
-    if (seq == "[24~") return UiInputAction::F12;
+    if (seq == "[15~") return UiGesture::F5;
+    if (seq == "[17~") return UiGesture::F6;
+    if (seq == "[18~") return UiGesture::F7;
+    if (seq == "[19~") return UiGesture::F8;
+    if (seq == "[20~") return UiGesture::F9;
+    if (seq == "[21~") return UiGesture::F10;
+    if (seq == "[23~") return UiGesture::F11;
+    if (seq == "[24~") return UiGesture::F12;
 
     // Linux console alternative for F1..F4:
     // ESC [[A .. ESC [[D
-    if (seq == "[[A") return UiInputAction::F1;
-    if (seq == "[[B") return UiInputAction::F2;
-    if (seq == "[[C") return UiInputAction::F3;
-    if (seq == "[[D") return UiInputAction::F4;
+    if (seq == "[[A") return UiGesture::F1;
+    if (seq == "[[B") return UiGesture::F2;
+    if (seq == "[[C") return UiGesture::F3;
+    if (seq == "[[D") return UiGesture::F4;
 
     // Linux console alternative for F1..F12:
     // ESC [11~ .. ESC [24~
-    if (seq == "[11~") return UiInputAction::F1;
-    if (seq == "[12~") return UiInputAction::F2;
-    if (seq == "[13~") return UiInputAction::F3;
-    if (seq == "[14~") return UiInputAction::F4;
-    if (seq == "[15~") return UiInputAction::F5;
-    if (seq == "[17~") return UiInputAction::F6;
-    if (seq == "[18~") return UiInputAction::F7;
-    if (seq == "[19~") return UiInputAction::F8;
-    if (seq == "[20~") return UiInputAction::F9;
-    if (seq == "[21~") return UiInputAction::F10;
-    if (seq == "[23~") return UiInputAction::F11;
-    if (seq == "[24~") return UiInputAction::F12;
+    if (seq == "[11~") return UiGesture::F1;
+    if (seq == "[12~") return UiGesture::F2;
+    if (seq == "[13~") return UiGesture::F3;
+    if (seq == "[14~") return UiGesture::F4;
+    if (seq == "[15~") return UiGesture::F5;
+    if (seq == "[17~") return UiGesture::F6;
+    if (seq == "[18~") return UiGesture::F7;
+    if (seq == "[19~") return UiGesture::F8;
+    if (seq == "[20~") return UiGesture::F9;
+    if (seq == "[21~") return UiGesture::F10;
+    if (seq == "[23~") return UiGesture::F11;
+    if (seq == "[24~") return UiGesture::F12;
 
-    return UiInputAction::None;
+    return UiGesture::None;
 }
 
-bool TerminalUiInput::poll(UiInputEvent& out) noexcept {
-    out.action = UiInputAction::None;
+bool TerminalUiInput::poll(UiGestureEvent& out) noexcept {
+    out.action = UiGesture::None;
     if (!valid_) {
         return false;
     }
@@ -239,18 +239,18 @@ bool TerminalUiInput::poll(UiInputEvent& out) noexcept {
             }
         }
         if (!seq.empty()) {
-            const UiInputAction escAction = mapEscapeSequence(seq);
-            if (escAction != UiInputAction::None) {
+            const UiGesture escAction = mapEscapeSequence(seq);
+            if (escAction != UiGesture::None) {
                 out.action = escAction;
                 return true;
             }
         }
-        out.action = UiInputAction::BackScene;
+        out.action = UiGesture::BackScene;
         return true;
     }
 
-    const UiInputAction action = mapKey(ch);
-    if (action == UiInputAction::None) {
+    const UiGesture action = mapKey(ch);
+    if (action == UiGesture::None) {
         return false;
     }
 

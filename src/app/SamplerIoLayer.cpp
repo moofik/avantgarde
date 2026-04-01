@@ -70,7 +70,7 @@ void SamplerIoLayer::startTerminalInput(std::atomic<bool>& stopFlag) {
     terminalInputThread_ = std::thread([this, &stopFlag]() {
         TerminalUiInput input;
         while (!stopFlag.load(std::memory_order_acquire)) {
-            UiInputEvent ev{};
+            UiGestureEvent ev{};
             if (input.poll(ev)) {
                 inputQueue_.push(ev);
                 continue;
@@ -92,7 +92,7 @@ bool SamplerIoLayer::readWindowEvents() {
         return false;
     }
     windowRenderer_->pumpEvents();
-    UiInputEvent ev{};
+    UiGestureEvent ev{};
     // Собираем все события из окна в общую очередь.
     while (windowRenderer_->readNextInputEvent(ev)) {
         inputQueue_.push(ev);
@@ -100,7 +100,7 @@ bool SamplerIoLayer::readWindowEvents() {
     return true;
 }
 
-bool SamplerIoLayer::readNextInputEvent(UiInputEvent& out) {
+bool SamplerIoLayer::readNextInputEvent(UiGestureEvent& out) {
     return inputQueue_.tryPop(out);
 }
 
@@ -128,7 +128,7 @@ void SamplerIoLayer::render(const UiState& state, const std::string& sceneFrame,
     renderer_->render(state);
 }
 
-void SamplerIoLayer::InputEventQueue::push(const UiInputEvent& ev) {
+void SamplerIoLayer::InputEventQueue::push(const UiGestureEvent& ev) {
     std::lock_guard<std::mutex> lock(mutex_);
     // Ограничиваем глубину очереди: при переполнении отбрасываем самый старый.
     if (queue_.size() >= 1024U) {
@@ -137,10 +137,10 @@ void SamplerIoLayer::InputEventQueue::push(const UiInputEvent& ev) {
     queue_.push_back(ev);
 }
 
-bool SamplerIoLayer::InputEventQueue::tryPop(UiInputEvent& out) {
+bool SamplerIoLayer::InputEventQueue::tryPop(UiGestureEvent& out) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (queue_.empty()) {
-        out.action = UiInputAction::None;
+        out.action = UiGesture::None;
         return false;
     }
     out = queue_.front();

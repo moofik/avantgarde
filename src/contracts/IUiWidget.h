@@ -5,7 +5,7 @@
 
 #include "contracts/IUi.h"
 #include "contracts/UiAction.h"
-#include "contracts/IUiInput.h"
+#include "contracts/IUiGestureInput.h"
 #include "contracts/UiIntent.h"
 #include "contracts/UiNavState.h"
 
@@ -21,18 +21,18 @@ struct UiTextBuffer {
     void clear() noexcept { lines.clear(); }
 };
 
-// Результат обработки input внутри конкретного виджета.
+// Результат обработки жеста внутри конкретного виджета.
 struct WidgetOutput {
     // true = событие обработано локально и не должно всплывать выше.
     bool handled{false};
-    // Набор intents, который SceneHost/dispatcher применит после onInput.
+    // Набор intents, который SceneHost/dispatcher применит после onGesture.
     std::vector<UiIntent> intents;
 };
 
 // Базовый контракт любого экранного виджета.
 // Виджет:
 // - рисует только свою сцену
-// - обрабатывает только scene-local input
+// - обрабатывает только scene-local жесты
 // - возвращает intents вместо прямых вызовов runtime/control.
 struct IUiWidget {
     virtual ~IUiWidget() = default;
@@ -46,9 +46,9 @@ struct IUiWidget {
                         const UiState& rtState,
                         const UiNavState& navState) = 0;
 
-    // Обработка одного input-action.
+    // Обработка одного gesture-события.
     // navState можно менять напрямую (курсор/selection/scene-local state).
-    virtual WidgetOutput onInput(UiInputAction action,
+    virtual WidgetOutput onGesture(UiGesture action,
                                  const UiState& rtState,
                                  UiNavState& navState) = 0;
 

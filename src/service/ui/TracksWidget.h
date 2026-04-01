@@ -32,7 +32,7 @@ public:
     // Рендер текущего UiState в набор строк.
     void render(UiTextBuffer& out, const UiState& rtState, const UiNavState& navState) override;
     // Обработка input для экрана треков (пока без локальных интентов).
-    WidgetOutput onInput(UiInputAction action, const UiState& rtState, UiNavState& navState) override;
+    WidgetOutput onGesture(UiGesture action, const UiState& rtState, UiNavState& navState) override;
     // Возвращает scene-local action catalog (tracks screen).
     UiActionCatalog queryAvailableActions(const UiState& rtState, const UiNavState& navState) const override;
     // Маппит action (+nav/ui state) в intents.

@@ -107,7 +107,7 @@ void TracksWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNav
     }
 }
 
-WidgetOutput TracksWidget::onInput(UiInputAction, const UiState&, UiNavState&) {
+WidgetOutput TracksWidget::onGesture(UiGesture, const UiState&, UiNavState&) {
     // У этого экрана пока нет собственной scene-local логики ввода.
     // Все действия треков обрабатываются на application/control-слое.
     return {};

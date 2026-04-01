@@ -23,7 +23,7 @@ The goal is to prevent one large renderer/controller class and keep RT-safe comm
 
 ## Existing Runtime/UI Contracts (stay stable)
 - Runtime state DTO: `UiState` (`src/contracts/IUi.h`)
-- Input source: `IUiInput` (`src/contracts/IUiInput.h`)
+- Input source: `IUiGestureInput` (`src/contracts/IUiGestureInput.h`)
 - Current renderer contract: `IUiRenderer::render(const UiState&)`
 
 These remain valid while scene/widget layer is introduced.
@@ -95,9 +95,9 @@ struct IUiWidget {
     virtual void render(TextCanvas& canvas,
                         const UiState& rtState,
                         const UiNavState& nav) = 0;
-    virtual WidgetOutput onInput(UiInputAction action,
-                                 const UiState& rtState,
-                                 UiNavState& nav) = 0;
+    virtual WidgetOutput onGesture(UiGesture action,
+                                   const UiState& rtState,
+                                   UiNavState& nav) = 0;
 };
 ```
 
@@ -105,9 +105,9 @@ struct IUiWidget {
 ```cpp
 class UiSceneHost {
 public:
-    void registerWidget(UiScene scene, std::unique_ptr<IUiWidget> widget);
-    void renderActive(TextCanvas& canvas, const UiState& rtState);
-    std::vector<UiIntent> handleInput(UiInputAction action, const UiState& rtState);
+    bool registerWidget(UiScene scene, std::unique_ptr<IUiWidget> widget);
+    bool renderActive(UiTextBuffer& out, const UiState& rtState) const;
+    WidgetOutput handleGesture(UiGesture action, const UiState& rtState);
     UiNavState& nav() noexcept;
     const UiNavState& nav() const noexcept;
 };
@@ -117,6 +117,9 @@ Responsibilities:
 - owns active scene and `UiNavState`
 - handles global keys (`q`, `1/2`, `Esc`, scene toggles)
 - delegates scene-local keys to active widget
+- routes Active Action Pointer in two режимах:
+  - `Scope::Scene` -> action catalog активного виджета
+  - `Scope::Global` -> host-level global action catalog
 
 ## Services (non-RT)
 
@@ -169,8 +172,8 @@ struct IClipLoadService {
 - edits emit `SetFxParam(track, fxSlot, paramIndex, value)`
 
 ## Input Routing Model
-1. `IUiInput::poll()` returns `UiInputAction`
-2. `UiSceneHost::handleInput()`:
+1. `IUiGestureInput::poll()` returns `UiGesture`
+2. `UiSceneHost::handleGesture()`:
    - handle global action if matched
    - else forward to active widget
 3. Collected intents are applied by `UiIntentDispatcher`
@@ -201,4 +204,3 @@ This keeps scene logic backend-agnostic.
 - Two different samples can be loaded and played in parallel
 - Runtime command path remains RT-safe and unchanged
 - No single UI class owns all scene logic
-

@@ -121,6 +121,10 @@ bool UiIntentApplier::buildUndoIntent(const UiIntent& forward,
             undoOut = forward;
             undoOut.value = transport.bpm;
             return true;
+        case UiIntentType::SetTransportPlaying:
+            undoOut = forward;
+            undoOut.value = transport.playing ? 1.0f : 0.0f;
+            return true;
         default:
             return false;
     }
@@ -222,6 +226,20 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             }
             ctx.transport.bpm = next;
             ctx.engine.setTempo(ctx.transport.bpm);
+            ctx.uiStore.setTransport(ctx.transport);
+            return true;
+        }
+        case UiIntentType::SetTransportPlaying: {
+            const bool playing = (intent.value >= 0.5f);
+            if (ctx.transport.playing == playing) {
+                return false;
+            }
+            ctx.transport.playing = playing;
+            ctx.engine.setTransportPlaying(playing);
+            for (std::size_t i = 0; i < ctx.tracks.size(); ++i) {
+                refreshTrackViewState_(static_cast<uint8_t>(i), ctx.transport, ctx.tracks);
+                ctx.uiStore.setTrack(i, ctx.tracks[i]);
+            }
             ctx.uiStore.setTransport(ctx.transport);
             return true;
         }

@@ -3,7 +3,7 @@
 #include <string>
 
 #include "contracts/IUi.h"
-#include "contracts/IUiInput.h"
+#include "contracts/IUiGestureInput.h"
 #include "contracts/UiTheme.h"
 
 namespace avantgarde {
@@ -23,7 +23,7 @@ public:
     // Нужно вызывать в main thread, чтобы AppKit обработал очередь событий окна.
     void pumpEvents() noexcept;
     // Забирает следующее действие клавиатуры из внутренней lock-protected очереди.
-    bool readNextInputEvent(UiInputEvent& out) noexcept;
+    bool readNextInputEvent(UiGestureEvent& out) noexcept;
 
 private:
     struct Impl;

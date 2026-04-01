@@ -19,7 +19,7 @@ TEST_CASE("FxListWidget: enter opens fx editor for selected slot") {
     nav.selectedTrack = 0;
     nav.selectedFx = 1;
 
-    const WidgetOutput out = widget.onInput(UiInputAction::ListEnter, state, nav);
+    const WidgetOutput out = widget.onGesture(UiGesture::ListEnter, state, nav);
     REQUIRE(out.handled);
     REQUIRE(nav.scene == UiScene::FxEditor);
     REQUIRE(out.intents.size() == 1);
@@ -70,7 +70,7 @@ TEST_CASE("FxEditorWidget: regular keyboard keys adjust selected param") {
     nav.selectedFx = 0;
     nav.cursor = 0;
 
-    const WidgetOutput out = widget.onInput(UiInputAction::BpmUp, state, nav);
+    const WidgetOutput out = widget.onGesture(UiGesture::BpmUp, state, nav);
     REQUIRE(out.handled);
     REQUIRE(out.intents.size() == 1);
     REQUIRE(out.intents[0].type == UiIntentType::SetFxParam);

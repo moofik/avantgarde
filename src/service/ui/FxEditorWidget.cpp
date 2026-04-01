@@ -203,7 +203,7 @@ void FxEditorWidget::render(UiTextBuffer& out, const UiState& rtState, const UiN
     out.lines.push_back(std::string(kFrameBottom) + repeatToken(kFrameH, inner) + kFrameBottomRight);
 }
 
-WidgetOutput FxEditorWidget::onInput(UiInputAction action, const UiState& rtState, UiNavState& navState) {
+WidgetOutput FxEditorWidget::onGesture(UiGesture action, const UiState& rtState, UiNavState& navState) {
     WidgetOutput out{};
     const uint8_t track = clampTrack_(navState.selectedTrack, rtState.tracks.size());
     const std::size_t fxCount = (rtState.tracks.empty()) ? 0U : rtState.tracks[track].fxCount;
@@ -211,19 +211,19 @@ WidgetOutput FxEditorWidget::onInput(UiInputAction action, const UiState& rtStat
     const FxDescriptor* descriptor = resolveDescriptor_(rtState, track, fxSlot);
     const std::size_t paramCount = descriptor ? descriptor->paramCount : 0U;
 
-    if (action == UiInputAction::ListUp && paramCount > 0U) {
+    if (action == UiGesture::ListUp && paramCount > 0U) {
         const uint16_t current = clampParamIndex_(navState.cursor, paramCount);
         navState.cursor = (current == 0U) ? static_cast<uint16_t>(paramCount - 1U)
                                           : static_cast<uint16_t>(current - 1U);
         out.handled = true;
         return out;
     }
-    if (action == UiInputAction::ListDown && paramCount > 0U) {
+    if (action == UiGesture::ListDown && paramCount > 0U) {
         navState.cursor = static_cast<uint16_t>((clampParamIndex_(navState.cursor, paramCount) + 1U) % paramCount);
         out.handled = true;
         return out;
     }
-    if (action == UiInputAction::ListParent) {
+    if (action == UiGesture::ListParent) {
         navState.scene = UiScene::FxList;
         navState.sceneActionIndex = 0;
         UiIntent it{};
@@ -234,13 +234,13 @@ WidgetOutput FxEditorWidget::onInput(UiInputAction action, const UiState& rtStat
     }
     // Обычные клавиши (не pointer-action):
     // '='/'-' в текущем keymap приходят как TrackSpeedUp/TrackSpeedDown.
-    if (action == UiInputAction::TrackSpeedUp && paramCount > 0U) {
+    if (action == UiGesture::TrackSpeedUp && paramCount > 0U) {
         const uint16_t current = clampParamIndex_(navState.cursor, paramCount);
         navState.cursor = static_cast<uint16_t>((current + 1U) % paramCount);
         out.handled = true;
         return out;
     }
-    if (action == UiInputAction::TrackSpeedDown && paramCount > 0U) {
+    if (action == UiGesture::TrackSpeedDown && paramCount > 0U) {
         const uint16_t current = clampParamIndex_(navState.cursor, paramCount);
         navState.cursor = (current == 0U) ? static_cast<uint16_t>(paramCount - 1U)
                                           : static_cast<uint16_t>(current - 1U);
@@ -248,11 +248,11 @@ WidgetOutput FxEditorWidget::onInput(UiInputAction action, const UiState& rtStat
         return out;
     }
     // '['/']' в текущем keymap приходят как BpmDown/BpmUp.
-    if ((action == UiInputAction::BpmUp || action == UiInputAction::BpmDown) &&
+    if ((action == UiGesture::BpmUp || action == UiGesture::BpmDown) &&
         descriptor && paramCount > 0U) {
         const uint16_t selectedParam = clampParamIndex_(navState.cursor, paramCount);
         const FxParamDescriptor& def = descriptor->params[selectedParam];
-        const float dir = (action == UiInputAction::BpmUp) ? 1.0f : -1.0f;
+        const float dir = (action == UiGesture::BpmUp) ? 1.0f : -1.0f;
         SlotCache& cache = cacheFor_(track, fxSlot, *descriptor);
         const float next = std::clamp(cache.values[selectedParam] + dir * paramStep_, def.minValue, def.maxValue);
         cache.values[selectedParam] = next;

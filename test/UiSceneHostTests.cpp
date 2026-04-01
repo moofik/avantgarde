@@ -14,8 +14,8 @@ public:
         out.lines.push_back(navState.selectedTrack == 0 ? "track0" : "track1");
     }
 
-    WidgetOutput onInput(UiInputAction action, const UiState&, UiNavState& navState) override {
-        if (action == UiInputAction::BpmUp) {
+    WidgetOutput onGesture(UiGesture action, const UiState&, UiNavState& navState) override {
+        if (action == UiGesture::PreviewPlay) {
             navState.cursor = static_cast<uint16_t>(navState.cursor + 1);
             return WidgetOutput{true, {}};
         }
@@ -85,24 +85,24 @@ TEST_CASE("UiSceneHost: handles global track navigation and delegates local inpu
     UiState state{};
     state.tracks.resize(2);
 
-    const WidgetOutput prevOut = host.handleInput(UiInputAction::SelectPrevTrack, state);
+    const WidgetOutput prevOut = host.handleGesture(UiGesture::SelectPrevTrack, state);
     REQUIRE(prevOut.handled);
     REQUIRE(host.nav().selectedTrack == 1);
 
-    const WidgetOutput nextOut = host.handleInput(UiInputAction::SelectNextTrack, state);
+    const WidgetOutput nextOut = host.handleGesture(UiGesture::SelectNextTrack, state);
     REQUIRE(nextOut.handled);
     REQUIRE(host.nav().selectedTrack == 0);
 
     host.nav().trackPage = 0;
-    const WidgetOutput pagePrevOut = host.handleInput(UiInputAction::TrackPagePrev, state);
+    const WidgetOutput pagePrevOut = host.handleGesture(UiGesture::TrackPagePrev, state);
     REQUIRE(pagePrevOut.handled);
     REQUIRE(host.nav().trackPage == 0);
 
-    const WidgetOutput pageNextOut = host.handleInput(UiInputAction::TrackPageNext, state);
+    const WidgetOutput pageNextOut = host.handleGesture(UiGesture::TrackPageNext, state);
     REQUIRE(pageNextOut.handled);
     REQUIRE(host.nav().trackPage == 0);
 
-    const WidgetOutput localOut = host.handleInput(UiInputAction::BpmUp, state);
+    const WidgetOutput localOut = host.handleGesture(UiGesture::PreviewPlay, state);
     REQUIRE(localOut.handled);
     REQUIRE(host.nav().cursor == 1);
 }
@@ -115,11 +115,11 @@ TEST_CASE("UiSceneHost: track page navigation wraps for multi-page track list") 
     state.tracks.resize(4);
 
     host.nav().trackPage = 0;
-    const WidgetOutput pagePrevOut = host.handleInput(UiInputAction::TrackPagePrev, state);
+    const WidgetOutput pagePrevOut = host.handleGesture(UiGesture::TrackPagePrev, state);
     REQUIRE(pagePrevOut.handled);
     REQUIRE(host.nav().trackPage == 1);
 
-    const WidgetOutput pageNextOut = host.handleInput(UiInputAction::TrackPageNext, state);
+    const WidgetOutput pageNextOut = host.handleGesture(UiGesture::TrackPageNext, state);
     REQUIRE(pageNextOut.handled);
     REQUIRE(host.nav().trackPage == 0);
 }
@@ -131,21 +131,59 @@ TEST_CASE("UiSceneHost: pointer actions are routed to widget action handler") {
     UiState state{};
     state.tracks.resize(2);
 
-    const WidgetOutput out = host.handleInput(UiInputAction::ActionAdjustNext, state);
+    const WidgetOutput out = host.handleGesture(UiGesture::ActionAdjustNext, state);
     REQUIRE(out.handled);
     REQUIRE(host.nav().cursor == 10);
     REQUIRE(out.intents.size() == 1);
     REQUIRE(out.intents[0].type == UiIntentType::SetTransportBpm);
 
-    const WidgetOutput outF = host.handleInput(UiInputAction::F8, state);
+    const WidgetOutput outF = host.handleGesture(UiGesture::F8, state);
     REQUIRE(outF.handled);
     REQUIRE(host.nav().cursor == 20);
 
-    const WidgetOutput focusOut = host.handleInput(UiInputAction::ListDown, state);
+    const WidgetOutput focusOut = host.handleGesture(UiGesture::ListDown, state);
     REQUIRE(focusOut.handled);
     REQUIRE(host.nav().sceneActionIndex == 1);
 
-    const WidgetOutput redoOut = host.handleInput(UiInputAction::F9, state);
+    const WidgetOutput redoOut = host.handleGesture(UiGesture::F9, state);
     REQUIRE(redoOut.handled);
     REQUIRE(host.nav().cursor == 120);
+}
+
+TEST_CASE("UiSceneHost: global pointer scope uses host global catalog") {
+    UiSceneHost host;
+    REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));
+
+    UiState state{};
+    state.tracks.resize(4);
+    state.transport.playing = false;
+
+    host.nav().actionScope = UiAction::Scope::Global;
+    host.nav().globalActionIndex = 0;
+    host.nav().sceneActionIndex = 1;
+    host.nav().cursor = 7;
+
+    // В глобальном scope ListDown двигает global pointer (в Tracks-сцене -> FocusNext).
+    const WidgetOutput focusOut = host.handleGesture(UiGesture::ListDown, state);
+    REQUIRE(focusOut.handled);
+    REQUIRE(host.nav().globalActionIndex == 1);
+    REQUIRE(host.nav().sceneActionIndex == 1);
+
+    // Возвращаемся на первый глобальный экшен: Transport Play.
+    host.nav().globalActionIndex = 0;
+    const WidgetOutput playOut = host.handleGesture(UiGesture::ActionApply, state);
+    REQUIRE(playOut.handled);
+    REQUIRE(playOut.intents.size() == 1);
+    REQUIRE(playOut.intents[0].type == UiIntentType::SetTransportPlaying);
+    REQUIRE(playOut.intents[0].value == 1.0f);
+    // Важно: глобальный путь не должен дергать widget->onAction.
+    REQUIRE(host.nav().cursor == 7);
+
+    // Глобальный Track Page Prev.
+    host.nav().trackPage = 0;
+    host.nav().globalActionIndex = 2;
+    const WidgetOutput pageOut = host.handleGesture(UiGesture::ActionApply, state);
+    REQUIRE(pageOut.handled);
+    REQUIRE(pageOut.intents.empty());
+    REQUIRE(host.nav().trackPage == 1);
 }

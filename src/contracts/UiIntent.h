@@ -40,6 +40,8 @@ enum class UiIntentType : uint8_t {
     SetTransportQuant,
     // Явная установка BPM транспорта.
     SetTransportBpm,
+    // Явная установка play/stop транспорта (value: 1.0=play, 0.0=stop).
+    SetTransportPlaying,
     // Intent-обертки над текущими transport/track действиями движка.
     EnginePlayTrack,
     EngineStopTrack,

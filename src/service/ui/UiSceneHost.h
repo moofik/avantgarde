@@ -32,9 +32,14 @@ public:
     // Обрабатывает input:
     // 1) глобальные shortcuts (host-level)
     // 2) делегирование в активный виджет.
-    WidgetOutput handleInput(UiInputAction action, const UiState& rtState);
+    WidgetOutput handleGesture(UiGesture action, const UiState& rtState);
 
 private:
+    // Формирует каталог глобальных pointer-экшенов (scope=Global).
+    UiActionCatalog queryGlobalActions_(const UiState& rtState) const;
+    // Применяет глобальный экшен и возвращает intents/UI-nav изменения.
+    WidgetOutput onGlobalAction_(UiAction& action, const UiState& rtState);
+
     // Индексирование std::array по enum UiScene.
     static constexpr std::size_t sceneIndex_(UiScene scene) noexcept {
         return static_cast<std::size_t>(scene);

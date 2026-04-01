@@ -186,7 +186,7 @@ void ManagerWidget::render(UiTextBuffer& out, const UiState&, const UiNavState& 
     out.lines.push_back(std::string(kFrameBottom) + repeatToken(kFrameH, inner) + kFrameBottomRight);
 }
 
-WidgetOutput ManagerWidget::onInput(UiInputAction action, const UiState&, UiNavState& navState) {
+WidgetOutput ManagerWidget::onGesture(UiGesture action, const UiState&, UiNavState& navState) {
     refresh_(navState);
     WidgetOutput out{};
     auto emitPreviewCurrent = [&]() {
@@ -202,7 +202,7 @@ WidgetOutput ManagerWidget::onInput(UiInputAction action, const UiState&, UiNavS
     };
 
     switch (action) {
-        case UiInputAction::ListUp:
+        case UiGesture::ListUp:
             if (!entries_.empty() && navState.cursor > 0) {
                 --navState.cursor;
                 if (navState.cursor < navState.scroll) {
@@ -214,7 +214,7 @@ WidgetOutput ManagerWidget::onInput(UiInputAction action, const UiState&, UiNavS
             }
             out.handled = true;
             break;
-        case UiInputAction::ListDown:
+        case UiGesture::ListDown:
             if (!entries_.empty() && (navState.cursor + 1U) < entries_.size()) {
                 ++navState.cursor;
                 if (navState.cursor >= navState.scroll + listRows_) {
@@ -226,7 +226,7 @@ WidgetOutput ManagerWidget::onInput(UiInputAction action, const UiState&, UiNavS
             }
             out.handled = true;
             break;
-        case UiInputAction::ListParent: {
+        case UiGesture::ListParent: {
             namespace fs = std::filesystem;
             fs::path cwd(navState.managerCwd);
             if (cwd.has_parent_path()) {
@@ -243,7 +243,7 @@ WidgetOutput ManagerWidget::onInput(UiInputAction action, const UiState&, UiNavS
             }
             out.handled = true;
         } break;
-        case UiInputAction::ListEnter: {
+        case UiGesture::ListEnter: {
             const Entry* e = selected_(navState);
             if (!e) {
                 out.handled = true;
@@ -269,11 +269,11 @@ WidgetOutput ManagerWidget::onInput(UiInputAction action, const UiState&, UiNavS
             }
             out.handled = true;
         } break;
-        case UiInputAction::PreviewPlay:
+        case UiGesture::PreviewPlay:
             emitPreviewCurrent();
             out.handled = true;
             break;
-        case UiInputAction::PreviewAutoToggle:
+        case UiGesture::PreviewAutoToggle:
             autoPreview_ = !autoPreview_;
             if (autoPreview_) {
                 emitPreviewCurrent();

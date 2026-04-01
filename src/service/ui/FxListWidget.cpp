@@ -139,12 +139,12 @@ void FxListWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNav
     out.lines.push_back(std::string(kFrameBottom) + repeatToken(kFrameH, inner) + kFrameBottomRight);
 }
 
-WidgetOutput FxListWidget::onInput(UiInputAction action, const UiState& rtState, UiNavState& navState) {
+WidgetOutput FxListWidget::onGesture(UiGesture action, const UiState& rtState, UiNavState& navState) {
     WidgetOutput out{};
     const uint8_t track = clampTrack_(navState.selectedTrack, rtState.tracks.size());
     const std::size_t fxCount = (rtState.tracks.empty()) ? 0U : rtState.tracks[track].fxCount;
 
-    if (action == UiInputAction::ListUp && fxCount > 0) {
+    if (action == UiGesture::ListUp && fxCount > 0) {
         if (navState.selectedFx == 0U) {
             navState.selectedFx = static_cast<uint16_t>(fxCount - 1U);
         } else {
@@ -153,12 +153,12 @@ WidgetOutput FxListWidget::onInput(UiInputAction action, const UiState& rtState,
         out.handled = true;
         return out;
     }
-    if (action == UiInputAction::ListDown && fxCount > 0) {
+    if (action == UiGesture::ListDown && fxCount > 0) {
         navState.selectedFx = static_cast<uint16_t>((clampFx_(navState.selectedFx, fxCount) + 1U) % fxCount);
         out.handled = true;
         return out;
     }
-    if (action == UiInputAction::ListEnter && fxCount > 0) {
+    if (action == UiGesture::ListEnter && fxCount > 0) {
         navState.scene = UiScene::FxEditor;
         navState.selectedFx = clampFx_(navState.selectedFx, fxCount);
         navState.sceneActionIndex = 0;
@@ -170,7 +170,7 @@ WidgetOutput FxListWidget::onInput(UiInputAction action, const UiState& rtState,
         out.intents.push_back(std::move(it));
         return out;
     }
-    if (action == UiInputAction::ListParent) {
+    if (action == UiGesture::ListParent) {
         navState.scene = UiScene::Tracks;
         navState.sceneActionIndex = 0;
         UiIntent it{};

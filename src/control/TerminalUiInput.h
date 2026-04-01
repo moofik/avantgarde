@@ -2,19 +2,19 @@
 
 #include <string_view>
 
-#include "contracts/IUiInput.h"
+#include "contracts/IUiGestureInput.h"
 
 namespace avantgarde {
 
-class TerminalUiInput final : public IUiInput {
+class TerminalUiInput final : public IUiGestureInput {
 public:
     TerminalUiInput();
     ~TerminalUiInput() override;
 
-    bool poll(UiInputEvent& out) noexcept override;
+    bool poll(UiGestureEvent& out) noexcept override;
 
-    static UiInputAction mapKey(char ch) noexcept;
-    static UiInputAction mapEscapeSequence(std::string_view seq) noexcept;
+    static UiGesture mapKey(char ch) noexcept;
+    static UiGesture mapEscapeSequence(std::string_view seq) noexcept;
 
 private:
     bool valid_{false};

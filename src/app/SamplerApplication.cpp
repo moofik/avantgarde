@@ -6,7 +6,7 @@
 #include <string>
 #include <utility>
 
-#include "contracts/IUiInput.h"
+#include "contracts/IUiGestureInput.h"
 #include "contracts/ids.h"
 #include "service/ui/UiWidgetFactory.h"
 
@@ -96,12 +96,12 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
 
     controlThread_ = std::thread([this]() {
         while (!stopUi_.load(std::memory_order_acquire)) {
-            UiInputEvent ev{};
+            UiGestureEvent ev{};
             if (!io_.readNextInputEvent(ev)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
-            if (!handleInputEvent_(ev.action)) {
+            if (!handleGesture_(ev.action)) {
                 break;
             }
         }
@@ -226,8 +226,8 @@ void SamplerApplication::renderUiOnce_() {
     io_.render(state, frame, showHeaderOverlay);
 }
 
-bool SamplerApplication::handleInputEvent_(UiInputAction action) {
-    if (action == UiInputAction::Quit) {
+bool SamplerApplication::handleGesture_(UiGesture action) {
+    if (action == UiGesture::Quit) {
         stopUi_.store(true, std::memory_order_release);
         return false;
     }
@@ -235,14 +235,14 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
     // Глобальные hotkey undo/redo (доступны в любой сцене).
     // F2/F9 резервируются под аппаратные кнопки, ActionUndo/ActionRedo —
     // под универсальный слой pointer-команд.
-    if (action == UiInputAction::ActionUndo || action == UiInputAction::F2) {
+    if (action == UiGesture::ActionUndo || action == UiGesture::F2) {
         UiIntentApplier::Context ctx{engine_, uiStore_, trCtl_, tracksCtl_};
         (void)history_.undo([this, &ctx](const UiIntent& intent) {
             return intentApplier_.apply(intent, ctx);
         });
         return true;
     }
-    if (action == UiInputAction::ActionRedo || action == UiInputAction::F9) {
+    if (action == UiGesture::ActionRedo || action == UiGesture::F9) {
         UiIntentApplier::Context ctx{engine_, uiStore_, trCtl_, tracksCtl_};
         (void)history_.redo([this, &ctx](const UiIntent& intent) {
             return intentApplier_.apply(intent, ctx);
@@ -253,17 +253,9 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
     // ВАЖНО: snapshot берем до sceneMutex_, чтобы избежать lock inversion с UiStateStore.
     const UiState widgetState = uiStore_.snapshot();
     WidgetOutput widgetOut{};
-    bool activeTrackChanged = false;
     {
         std::lock_guard<std::mutex> lock(sceneMutex_);
-        widgetOut = sceneHost_.handleInput(action, widgetState);
-        if (action == UiInputAction::SelectPrevTrack || action == UiInputAction::SelectNextTrack) {
-            trCtl_.activeTrack = clampUiTrack_(sceneHost_.nav().selectedTrack);
-            activeTrackChanged = true;
-        }
-    }
-    if (activeTrackChanged) {
-        uiStore_.setTransport(trCtl_);
+        widgetOut = sceneHost_.handleGesture(action, widgetState);
     }
     // Пакет scene-intent'ов от одного input события пишем как одну транзакцию.
     const bool txOpened = !widgetOut.intents.empty() && history_.begin();
@@ -273,145 +265,6 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
     if (txOpened) {
         (void)history_.commit();
     }
-
-    // Если действие было обработано scene/widget слоем,
-    // не даем ему "протечь" в legacy hotkey switch ниже.
-    if (widgetOut.handled) {
-        return true;
-    }
-
-    // Если активен Manager, scene-local логика уже обработана виджетом.
-    bool managerScene = false;
-    {
-        std::lock_guard<std::mutex> lock(sceneMutex_);
-        managerScene = (sceneHost_.scene() == UiScene::Manager);
-    }
-    if (managerScene) {
-        return true;
-    }
-
-    switch (action) {
-        case UiInputAction::SelectPrevTrack:
-        case UiInputAction::SelectNextTrack:
-        case UiInputAction::TrackPagePrev:
-        case UiInputAction::TrackPageNext:
-        case UiInputAction::OpenManager:
-        case UiInputAction::BackScene:
-        case UiInputAction::ListUp:
-        case UiInputAction::ListDown:
-        case UiInputAction::ListEnter:
-        case UiInputAction::ListParent:
-        case UiInputAction::PreviewPlay:
-        case UiInputAction::PreviewAutoToggle:
-            break;
-        case UiInputAction::PlayActiveTrack: {
-            trCtl_.playing = true;
-            engine_.setTransportPlaying(true);
-            refreshAllTrackViewStates_();
-            for (std::size_t i = 0; i < tracksCtl_.size(); ++i) {
-                uiStore_.setTrack(i, tracksCtl_[i]);
-            }
-            uiStore_.setTransport(trCtl_);
-        } break;
-        case UiInputAction::StopActiveTrack: {
-            trCtl_.playing = false;
-            engine_.setTransportPlaying(false);
-            refreshAllTrackViewStates_();
-            for (std::size_t i = 0; i < tracksCtl_.size(); ++i) {
-                uiStore_.setTrack(i, tracksCtl_[i]);
-            }
-            uiStore_.setTransport(trCtl_);
-        } break;
-        case UiInputAction::UnmuteActiveTrack: {
-            if (tracksCtl_.empty()) {
-                break;
-            }
-            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
-            tracksCtl_[t].muted = false;
-            (void)engine_.setTrackMuted(t, false);
-            refreshTrackViewState_(t);
-            uiStore_.setTrack(t, tracksCtl_[t]);
-        } break;
-        case UiInputAction::MuteActiveTrack: {
-            if (tracksCtl_.empty()) {
-                break;
-            }
-            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
-            tracksCtl_[t].muted = true;
-            (void)engine_.setTrackMuted(t, true);
-            refreshTrackViewState_(t);
-            uiStore_.setTrack(t, tracksCtl_[t]);
-        } break;
-        case UiInputAction::MuteToggleActiveTrack: {
-            if (tracksCtl_.empty()) {
-                break;
-            }
-            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
-            tracksCtl_[t].muted = !tracksCtl_[t].muted;
-            (void)engine_.setTrackMuted(t, tracksCtl_[t].muted);
-            refreshTrackViewState_(t);
-            uiStore_.setTrack(t, tracksCtl_[t]);
-        } break;
-        case UiInputAction::ArmToggleActiveTrack: {
-            if (tracksCtl_.empty()) {
-                break;
-            }
-            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
-            tracksCtl_[t].armed = !tracksCtl_[t].armed;
-            (void)engine_.setTrackArmed(t, tracksCtl_[t].armed);
-            uiStore_.setTrack(t, tracksCtl_[t]);
-        } break;
-        case UiInputAction::TrackSpeedUp: {
-            if (tracksCtl_.empty()) {
-                break;
-            }
-            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
-            tracksCtl_[t].stretchRatio = std::clamp(tracksCtl_[t].stretchRatio + 0.05f, 0.25f, 4.0f);
-            (void)engine_.setTrackSpeed(t, tracksCtl_[t].stretchRatio);
-            uiStore_.setTrack(t, tracksCtl_[t]);
-        } break;
-        case UiInputAction::TrackSpeedDown: {
-            if (tracksCtl_.empty()) {
-                break;
-            }
-            const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
-            tracksCtl_[t].stretchRatio = std::clamp(tracksCtl_[t].stretchRatio - 0.05f, 0.25f, 4.0f);
-            (void)engine_.setTrackSpeed(t, tracksCtl_[t].stretchRatio);
-            uiStore_.setTrack(t, tracksCtl_[t]);
-        } break;
-        case UiInputAction::QuantNone:
-            // Quantize меняется и в engine, и в UI модели.
-            engine_.setQuantize(QuantizeMode::None);
-            trCtl_.quant = QuantizeMode::None;
-            uiStore_.setTransport(trCtl_);
-            break;
-        case UiInputAction::QuantBeat:
-            engine_.setQuantize(QuantizeMode::Beat);
-            trCtl_.quant = QuantizeMode::Beat;
-            uiStore_.setTransport(trCtl_);
-            break;
-        case UiInputAction::QuantBar:
-            engine_.setQuantize(QuantizeMode::Bar);
-            trCtl_.quant = QuantizeMode::Bar;
-            uiStore_.setTransport(trCtl_);
-            break;
-        case UiInputAction::BpmUp:
-            // BPM clamp на control-стороне, затем отправка в engine.
-            trCtl_.bpm = std::clamp(trCtl_.bpm + 1.0f, 20.0f, 300.0f);
-            engine_.setTempo(trCtl_.bpm);
-            uiStore_.setTransport(trCtl_);
-            break;
-        case UiInputAction::BpmDown:
-            trCtl_.bpm = std::clamp(trCtl_.bpm - 1.0f, 20.0f, 300.0f);
-            engine_.setTempo(trCtl_.bpm);
-            uiStore_.setTransport(trCtl_);
-            break;
-        case UiInputAction::None:
-        case UiInputAction::Quit:
-        default:
-            break;
-    }
-
     return true;
 }
 

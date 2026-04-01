@@ -147,113 +147,113 @@ bool hasStableFrameMetrics(NSFont* font) {
     return true;
 }
 
-// Таблица соответствия keyCode -> UiInputAction для macOS окна.
-UiInputAction mapWindowKeyCode(unsigned short keyCode) noexcept {
+// Таблица соответствия keyCode -> UiGesture для macOS окна.
+UiGesture mapWindowKeyCode(unsigned short keyCode) noexcept {
     switch (keyCode) {
-        case 53: return UiInputAction::BackScene;       // Esc
-        case 12: return UiInputAction::Quit;            // Q
-        case 18: return UiInputAction::SelectPrevTrack; // 1
-        case 19: return UiInputAction::SelectNextTrack; // 2
-        case 43: return UiInputAction::TrackPagePrev;   // ,
-        case 47: return UiInputAction::TrackPageNext;   // .
-        case 46: return UiInputAction::OpenManager;     // M
-        case 38: return UiInputAction::ListDown;        // J
-        case 40: return UiInputAction::ListUp;          // K
-        case 36: return UiInputAction::ListEnter;       // Enter
-        case 4:  return UiInputAction::ListParent;      // H
-        case 51: return UiInputAction::ListParent;      // Backspace
-        case 49: return UiInputAction::PreviewPlay;     // Space
-        case 0:  return UiInputAction::PreviewAutoToggle; // A
-        case 35: return UiInputAction::PlayActiveTrack; // P
-        case 1:  return UiInputAction::StopActiveTrack; // S
-        case 32: return UiInputAction::UnmuteActiveTrack; // U
-        case 34: return UiInputAction::MuteActiveTrack;   // I
-        case 17: return UiInputAction::MuteToggleActiveTrack; // T
-        case 15: return UiInputAction::ArmToggleActiveTrack; // R
-        case 41: return UiInputAction::ActionFocusPrev;  // ;
-        case 39: return UiInputAction::ActionFocusNext;  // '
-        case 44: return UiInputAction::ActionAdjustPrev; // /
-        case 31: return UiInputAction::ActionApply;      // O
-        case 16: return UiInputAction::ActionUndo;       // Y
-        case 24: return UiInputAction::TrackSpeedUp;    // =
-        case 27: return UiInputAction::TrackSpeedDown;  // -
-        case 6:  return UiInputAction::QuantNone;       // Z
-        case 7:  return UiInputAction::QuantBeat;       // X
-        case 8:  return UiInputAction::QuantBar;        // C
-        case 30: return UiInputAction::BpmUp;           // ]
-        case 33: return UiInputAction::BpmDown;         // [
-        case 122: return UiInputAction::F1;             // F1
-        case 120: return UiInputAction::F2;             // F2
-        case 99:  return UiInputAction::F3;             // F3
-        case 118: return UiInputAction::F4;             // F4
-        case 96:  return UiInputAction::F5;             // F5
-        case 97:  return UiInputAction::F6;             // F6
-        case 98:  return UiInputAction::F7;             // F7
-        case 100: return UiInputAction::F8;             // F8
-        case 101: return UiInputAction::F9;             // F9
-        case 109: return UiInputAction::F10;            // F10
-        case 103: return UiInputAction::F11;            // F11
-        case 111: return UiInputAction::F12;            // F12
+        case 53: return UiGesture::BackScene;       // Esc
+        case 12: return UiGesture::Quit;            // Q
+        case 18: return UiGesture::SelectPrevTrack; // 1
+        case 19: return UiGesture::SelectNextTrack; // 2
+        case 43: return UiGesture::TrackPagePrev;   // ,
+        case 47: return UiGesture::TrackPageNext;   // .
+        case 46: return UiGesture::OpenManager;     // M
+        case 38: return UiGesture::ListDown;        // J
+        case 40: return UiGesture::ListUp;          // K
+        case 36: return UiGesture::ListEnter;       // Enter
+        case 4:  return UiGesture::ListParent;      // H
+        case 51: return UiGesture::ListParent;      // Backspace
+        case 49: return UiGesture::PreviewPlay;     // Space
+        case 0:  return UiGesture::PreviewAutoToggle; // A
+        case 35: return UiGesture::PlayActiveTrack; // P
+        case 1:  return UiGesture::StopActiveTrack; // S
+        case 32: return UiGesture::UnmuteActiveTrack; // U
+        case 34: return UiGesture::MuteActiveTrack;   // I
+        case 17: return UiGesture::MuteToggleActiveTrack; // T
+        case 15: return UiGesture::ArmToggleActiveTrack; // R
+        case 41: return UiGesture::ActionFocusPrev;  // ;
+        case 39: return UiGesture::ActionFocusNext;  // '
+        case 44: return UiGesture::ActionAdjustPrev; // /
+        case 31: return UiGesture::ActionApply;      // O
+        case 16: return UiGesture::ActionUndo;       // Y
+        case 24: return UiGesture::TrackSpeedUp;    // =
+        case 27: return UiGesture::TrackSpeedDown;  // -
+        case 6:  return UiGesture::QuantNone;       // Z
+        case 7:  return UiGesture::QuantBeat;       // X
+        case 8:  return UiGesture::QuantBar;        // C
+        case 30: return UiGesture::BpmUp;           // ]
+        case 33: return UiGesture::BpmDown;         // [
+        case 122: return UiGesture::F1;             // F1
+        case 120: return UiGesture::F2;             // F2
+        case 99:  return UiGesture::F3;             // F3
+        case 118: return UiGesture::F4;             // F4
+        case 96:  return UiGesture::F5;             // F5
+        case 97:  return UiGesture::F6;             // F6
+        case 98:  return UiGesture::F7;             // F7
+        case 100: return UiGesture::F8;             // F8
+        case 101: return UiGesture::F9;             // F9
+        case 109: return UiGesture::F10;            // F10
+        case 103: return UiGesture::F11;            // F11
+        case 111: return UiGesture::F12;            // F12
         default: break;
     }
-    return UiInputAction::None;
+    return UiGesture::None;
 }
 
 // Дополнительный маппинг по printable-символам.
-UiInputAction mapWindowChars(NSString* chars) noexcept {
+UiGesture mapWindowChars(NSString* chars) noexcept {
     if (!chars || [chars length] == 0) {
-        return UiInputAction::None;
+        return UiGesture::None;
     }
     const unichar ch = [chars characterAtIndex:0];
     switch (ch) {
-        case 27: return UiInputAction::BackScene;
+        case 27: return UiGesture::BackScene;
         case '\r':
         case '\n':
-            return UiInputAction::ListEnter;
+            return UiGesture::ListEnter;
         case 8:
         case 127:
-            return UiInputAction::ListParent;
+            return UiGesture::ListParent;
         case ' ':
-            return UiInputAction::PreviewPlay;
+            return UiGesture::PreviewPlay;
         case 'u':
         case 'U':
-            return UiInputAction::UnmuteActiveTrack;
+            return UiGesture::UnmuteActiveTrack;
         case 'i':
         case 'I':
-            return UiInputAction::MuteActiveTrack;
+            return UiGesture::MuteActiveTrack;
         case 't':
         case 'T':
-            return UiInputAction::MuteToggleActiveTrack;
+            return UiGesture::MuteToggleActiveTrack;
         case 'r':
         case 'R':
-            return UiInputAction::ArmToggleActiveTrack;
+            return UiGesture::ArmToggleActiveTrack;
         case ';':
-            return UiInputAction::ActionFocusPrev;
+            return UiGesture::ActionFocusPrev;
         case '\'':
-            return UiInputAction::ActionFocusNext;
+            return UiGesture::ActionFocusNext;
         case '/':
-            return UiInputAction::ActionAdjustPrev;
+            return UiGesture::ActionAdjustPrev;
         case '?':
-            return UiInputAction::ActionAdjustNext;
+            return UiGesture::ActionAdjustNext;
         case 'o':
         case 'O':
-            return UiInputAction::ActionApply;
+            return UiGesture::ActionApply;
         case 'y':
         case 'Y':
-            return UiInputAction::ActionUndo;
+            return UiGesture::ActionUndo;
         case ',':
-            return UiInputAction::TrackPagePrev;
+            return UiGesture::TrackPagePrev;
         case '.':
-            return UiInputAction::TrackPageNext;
+            return UiGesture::TrackPageNext;
         default:
-            return UiInputAction::None;
+            return UiGesture::None;
     }
 }
 
-// Унифицированный перевод NSEvent в UiInputAction.
-UiInputAction mapWindowEvent(NSEvent* event) noexcept {
+// Унифицированный перевод NSEvent в UiGesture.
+UiGesture mapWindowEvent(NSEvent* event) noexcept {
     if (!event || [event type] != NSEventTypeKeyDown) {
-        return UiInputAction::None;
+        return UiGesture::None;
     }
     // Для '/' и '?' учитываем Shift на уровне физической клавиши,
     // чтобы не зависеть от символа текущей раскладки.
@@ -261,11 +261,11 @@ UiInputAction mapWindowEvent(NSEvent* event) noexcept {
         const NSEventModifierFlags mods =
             ([event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask);
         return (mods & NSEventModifierFlagShift)
-                   ? UiInputAction::ActionAdjustNext
-                   : UiInputAction::ActionAdjustPrev;
+                   ? UiGesture::ActionAdjustNext
+                   : UiGesture::ActionAdjustPrev;
     }
-    const UiInputAction byKeyCode = mapWindowKeyCode([event keyCode]);
-    if (byKeyCode != UiInputAction::None) {
+    const UiGesture byKeyCode = mapWindowKeyCode([event keyCode]);
+    if (byKeyCode != UiGesture::None) {
         return byKeyCode;
     }
     return mapWindowChars([event charactersIgnoringModifiers]);
@@ -295,7 +295,7 @@ struct MacGbWindowRenderer::Impl {
     // Защита очереди input-событий окна.
     std::mutex inputMutex{};
     // FIFO действий клавиатуры, которые считывает control-loop.
-    std::deque<UiInputAction> inputQueue{};
+    std::deque<UiGesture> inputQueue{};
     // Локальный AppKit monitor для перехвата хоткеев внутри window режима.
     id keyMonitor{nil};
 
@@ -438,8 +438,8 @@ MacGbWindowRenderer::MacGbWindowRenderer(UiTheme theme, uint16_t textWidth)
         if (!weakImpl) {
             return event;
         }
-        const UiInputAction action = mapWindowEvent(event);
-        if (action == UiInputAction::None) {
+        const UiGesture action = mapWindowEvent(event);
+        if (action == UiGesture::None) {
             return event;
         }
         std::lock_guard<std::mutex> lock(weakImpl->inputMutex);
@@ -565,8 +565,8 @@ void MacGbWindowRenderer::pumpEvents() noexcept {
     [NSApp updateWindows];
 }
 
-bool MacGbWindowRenderer::readNextInputEvent(UiInputEvent& out) noexcept {
-    out.action = UiInputAction::None;
+bool MacGbWindowRenderer::readNextInputEvent(UiGestureEvent& out) noexcept {
+    out.action = UiGesture::None;
     if (!impl_) {
         return false;
     }

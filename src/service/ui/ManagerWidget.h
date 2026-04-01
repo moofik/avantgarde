@@ -15,7 +15,7 @@ public:
 
     const char* id() const noexcept override;
     void render(UiTextBuffer& out, const UiState& rtState, const UiNavState& navState) override;
-    WidgetOutput onInput(UiInputAction action, const UiState& rtState, UiNavState& navState) override;
+    WidgetOutput onGesture(UiGesture action, const UiState& rtState, UiNavState& navState) override;
 
 private:
     struct Entry {
