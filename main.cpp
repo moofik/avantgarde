@@ -1,5 +1,6 @@
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 
@@ -13,6 +14,7 @@ int main(int argc, char** argv) {
     SamplerUiMode uiMode = SamplerUiMode::Ansi;
     UiTheme uiTheme = UiTheme::Default;
     bool uiThemeProvided = false;
+    uint8_t trackCount = 4;
 
     int argi = 1;
     while (argi < argc) {
@@ -51,6 +53,28 @@ int main(int argc, char** argv) {
             argi += 2;
             continue;
         }
+        if (arg.rfind("--tracks=", 0) == 0) {
+            char* end = nullptr;
+            const long parsed = std::strtol(arg.c_str() + 9, &end, 10);
+            if (!end || *end != '\0' || parsed < 1 || parsed > 32) {
+                std::printf("Invalid --tracks value: %s (expected 1..32)\n", arg.c_str());
+                return 1;
+            }
+            trackCount = static_cast<uint8_t>(parsed);
+            ++argi;
+            continue;
+        }
+        if (arg == "--tracks" && (argi + 1) < argc) {
+            char* end = nullptr;
+            const long parsed = std::strtol(argv[argi + 1], &end, 10);
+            if (!end || *end != '\0' || parsed < 1 || parsed > 32) {
+                std::printf("Invalid --tracks value: %s (expected 1..32)\n", argv[argi + 1]);
+                return 1;
+            }
+            trackCount = static_cast<uint8_t>(parsed);
+            argi += 2;
+            continue;
+        }
         if (arg == "--ui") {
             std::printf("Missing value for --ui (expected: ansi|lowres|gb|gb-window)\n");
             return 1;
@@ -59,17 +83,15 @@ int main(int argc, char** argv) {
             std::printf("Missing value for --theme (expected: default|gothic)\n");
             return 1;
         }
+        if (arg == "--tracks") {
+            std::printf("Missing value for --tracks (expected: 1..32)\n");
+            return 1;
+        }
         if (arg.rfind("--", 0) == 0) {
             std::printf("Unknown option: %s\n", arg.c_str());
             return 1;
         }
         break;
-    }
-
-    if (argi >= argc) {
-        std::printf("Usage: %s [--ui=ansi|lowres|gb|gb-window] [--theme=default|gothic] "
-                    "/path/to/track1.wav [/path/to/track2.wav]\n", argv[0]);
-        return 1;
     }
 
     static constexpr uint16_t kGbTextWidth = 60;
@@ -80,11 +102,17 @@ int main(int argc, char** argv) {
     config.io.themeProvided = uiThemeProvided;
     config.io.gbTextWidth = kGbTextWidth;
     config.gbTextWidth = kGbTextWidth;
+    config.engine.trackCount = trackCount;
 
-    config.engine.track0Path = argv[argi];
-    config.engine.hasTrack1 = (argi + 1 < argc);
-    if (config.engine.hasTrack1) {
-        config.engine.track1Path = argv[argi + 1];
+    for (int track = 0; argi < argc; ++argi, ++track) {
+        if (track >= trackCount) {
+            std::printf("Too many startup clips for --tracks=%u\n", static_cast<unsigned>(trackCount));
+            return 1;
+        }
+        SamplerAppConfig::StartupClipLoad load{};
+        load.track = static_cast<uint8_t>(track);
+        load.path = argv[argi];
+        config.startupClipLoads.push_back(load);
     }
 
     SamplerApplication app;

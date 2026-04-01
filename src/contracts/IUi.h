@@ -1,8 +1,8 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "ITransport.h"
 
@@ -44,7 +44,7 @@ struct UiTelemetryState {
 
 struct UiState {
     UiTransportState transport{};
-    std::array<UiTrackStateView, 2> tracks{};
+    std::vector<UiTrackStateView> tracks{};
     UiTelemetryState telemetry{};
 };
 

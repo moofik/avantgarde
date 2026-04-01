@@ -52,6 +52,16 @@ void LowResUiRenderer::render(const UiState& state) {
     display_.beginFrame();
     display_.clear();
 
+    const std::size_t totalTracks = state.tracks.size();
+    const std::size_t pageSize = 2;
+    const std::size_t totalPages = std::max<std::size_t>(1, (totalTracks + pageSize - 1U) / pageSize);
+    const std::size_t activeTrack = (totalTracks == 0)
+                                        ? 0U
+                                        : std::min<std::size_t>(state.transport.activeTrack, totalTracks - 1U);
+    const std::size_t pageIndex = (totalTracks == 0) ? 0U : (activeTrack / pageSize);
+    const std::size_t pageStart = pageIndex * pageSize;
+    const std::size_t pageEnd = std::min<std::size_t>(pageStart + pageSize, totalTracks);
+
     char line[128]{};
     std::snprintf(line, sizeof(line), "TRN %s %.1f %u/%u Q%s",
                   state.transport.playing ? "PLAY" : "STOP",
@@ -61,9 +71,11 @@ void LowResUiRenderer::render(const UiState& state) {
                   quantToShort(state.transport.quant));
     display_.drawText(0, 0, line);
 
-    std::snprintf(line, sizeof(line), "ACT:T%u XR:%llu",
-                  static_cast<unsigned>(state.transport.activeTrack + 1),
-                  static_cast<unsigned long long>(state.telemetry.xruns));
+    std::snprintf(line, sizeof(line), "ACT:T%u XR:%llu P:%u/%u",
+                  static_cast<unsigned>(activeTrack + 1U),
+                  static_cast<unsigned long long>(state.telemetry.xruns),
+                  static_cast<unsigned>(pageIndex + 1U),
+                  static_cast<unsigned>(totalPages));
     display_.drawText(0, 1, line);
 
     std::snprintf(line, sizeof(line), "OVF:%c",
@@ -71,13 +83,13 @@ void LowResUiRenderer::render(const UiState& state) {
     display_.drawText(0, 2, line);
 
     const uint16_t barWidth = display_.width() > 24 ? static_cast<uint16_t>(display_.width() - 24U) : 8U;
-    for (std::size_t i = 0; i < state.tracks.size(); ++i) {
+    for (std::size_t i = pageStart; i < pageEnd; ++i) {
         const auto& tr = state.tracks[i];
-        const uint16_t y = static_cast<uint16_t>(4 + i * 5);
+        const uint16_t y = static_cast<uint16_t>(4 + (i - pageStart) * 5);
 
         std::snprintf(line, sizeof(line), "T%u%s %s %s",
                       static_cast<unsigned>(tr.id + 1),
-                      tr.id == state.transport.activeTrack ? "*" : " ",
+                      tr.id == activeTrack ? "*" : " ",
                       trackStateToShort(tr.state),
                       clipShort(tr.clipName).c_str());
         display_.drawText(0, y, line);

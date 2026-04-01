@@ -35,7 +35,7 @@ void AnsiUiRenderer::render(const UiState& state) {
                 static_cast<unsigned>(state.transport.tsNum),
                 static_cast<unsigned>(state.transport.tsDen),
                 quantToStr(state.transport.quant),
-                static_cast<unsigned>(state.transport.activeTrack),
+                static_cast<unsigned>(state.transport.activeTrack + 1),
                 static_cast<unsigned long long>(state.transport.sampleTime));
     std::printf("Telemetry: callbacks=%llu | xruns=%llu | queue_overflow=%s\n\n",
                 static_cast<unsigned long long>(state.telemetry.totalCallbacks),
@@ -55,7 +55,7 @@ void AnsiUiRenderer::render(const UiState& state) {
                     static_cast<unsigned>(tr.fxCount));
     }
 
-    std::printf("\nKeys: [1/2 select track] [p play] [s stop] [- slower] [+/= faster] [z/x/c quant] [[ and ] bpm] [q quit]\n");
+    std::printf("\nKeys: [1 prev / 2 next track] [, prev page / . next page] [p play] [s stop] [- slower] [+/= faster] [z/x/c quant] [[ and ] bpm] [q quit]\n");
     std::fflush(stdout);
 }
 

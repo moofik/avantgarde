@@ -111,7 +111,8 @@ float speedTo01(float speed) noexcept {
 
 std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
                                                   uint16_t width,
-                                                  std::string_view headerTitle) {
+                                                  std::string_view headerTitle,
+                                                  std::optional<std::size_t> pageOverride) {
     if (width < 4) {
         return {};
     }
@@ -138,15 +139,34 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
                   state.telemetry.rtQueueOverflow ? 'Y' : 'N');
     out << "║" << padRight(line, inner) << "║\n";
 
-    std::snprintf(line, sizeof(line), " ACTIVE:T%u XRUN:%llu ",
-                  static_cast<unsigned>(state.transport.activeTrack + 1),
-                  static_cast<unsigned long long>(state.telemetry.xruns));
+    const std::size_t totalTracks = state.tracks.size();
+    const std::size_t pageSize = 2;
+    const std::size_t totalPages = std::max<std::size_t>(1, (totalTracks + pageSize - 1U) / pageSize);
+    const std::size_t activeTrack = (totalTracks == 0)
+                                        ? 0U
+                                        : std::min<std::size_t>(state.transport.activeTrack, totalTracks - 1U);
+    std::size_t pageIndex = (totalTracks == 0) ? 0U : (activeTrack / pageSize);
+    if (pageOverride.has_value() && totalTracks > 0) {
+        pageIndex = std::min<std::size_t>(pageOverride.value(), totalPages - 1U);
+    }
+    const std::size_t pageStart = pageIndex * pageSize;
+    const std::size_t pageEnd = std::min<std::size_t>(pageStart + pageSize, totalTracks);
+
+    std::snprintf(line, sizeof(line), " ACTIVE:T%u XRUN:%llu PG:%u/%u ",
+                  static_cast<unsigned>(activeTrack + 1U),
+                  static_cast<unsigned long long>(state.telemetry.xruns),
+                  static_cast<unsigned>(pageIndex + 1U),
+                  static_cast<unsigned>(totalPages));
     out << "║" << padRight(line, inner) << "║\n";
     out << "╠" << repeatUtf8("═", inner) << "╣\n";
 
-    for (std::size_t i = 0; i < state.tracks.size(); ++i) {
+    if (totalTracks == 0) {
+        out << "║" << padRight(" no tracks configured ", inner) << "║\n";
+    }
+
+    for (std::size_t i = pageStart; i < pageEnd; ++i) {
         const auto& tr = state.tracks[i];
-        const bool active = (tr.id == state.transport.activeTrack);
+        const bool active = (tr.id == activeTrack);
         const char* marker = active ? "▶" : " ";
 
         std::snprintf(line, sizeof(line), " %s T%u %-5s clip:%s",
@@ -172,13 +192,13 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
                       makeBar(tr.gain01, meterWidth).c_str());
         out << "║" << padRight(line, inner) << "║\n";
 
-        if (i + 1U < state.tracks.size()) {
+        if (i + 1U < pageEnd) {
             out << "╟" << repeatUtf8("─", inner) << "╢\n";
         }
     }
 
     out << "╠" << repeatUtf8("═", inner) << "╣\n";
-    out << "║" << padRight(" keys [1/2] [p/s] [-/=] [z/x/c] [[/]] [q] ", inner) << "║\n";
+    out << "║" << padRight(" keys [1< /2>] [,< /.>] [p/s] [-/=] [z/x/c] [[/]] [q] ", inner) << "║\n";
     out << "╚" << repeatUtf8("═", inner) << "╝\n";
     return out.str();
 }

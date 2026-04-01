@@ -1,10 +1,10 @@
 #pragma once
 
-#include <array>
 #include <atomic>
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "app/SamplerEngineLayer.h"
 #include "app/SamplerIoLayer.h"
@@ -17,10 +17,19 @@ namespace avantgarde {
 
 // Конфигурация верхнего уровня для запуска приложения.
 struct SamplerAppConfig {
+    struct StartupClipLoad {
+        // Индекс трека, в который нужно загрузить файл.
+        uint8_t track{0};
+        // Путь к аудиофайлу.
+        std::string path{};
+    };
+
     // Параметры аудио/движка.
     SamplerEngineConfig engine{};
     // Параметры слоя ввода/вывода.
     SamplerIoConfig io{};
+    // Стартовые загрузки клипов (произвольный список пар track/path).
+    std::vector<StartupClipLoad> startupClipLoads{};
     // Базовая текстовая ширина GB-кадра.
     uint16_t gbTextWidth{60};
 };
@@ -38,8 +47,8 @@ public:
     int run(const SamplerAppConfig& config);
 
 private:
-    // Ограничение UI-индекса трека в диапазон [0..1].
-    static uint8_t clampUiTrack_(uint8_t track) noexcept;
+    // Ограничение UI-индекса трека в диапазон [0..N-1].
+    uint8_t clampUiTrack_(uint8_t track) const noexcept;
 
     // Применение интентов, пришедших от scene-виджетов.
     void handleIntent_(const UiIntent& intent);
@@ -63,7 +72,7 @@ private:
     UiSceneHost sceneHost_{};
 
     // Кэш track state на control-уровне.
-    std::array<UiTrackStateView, 2> tracksCtl_{};
+    std::vector<UiTrackStateView> tracksCtl_{};
     // Кэш transport state на control-уровне.
     UiTransportState trCtl_{};
 

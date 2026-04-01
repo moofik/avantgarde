@@ -30,24 +30,55 @@ TEST_CASE("UiSceneHost: registers widget and renders active scene") {
     REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));
 
     UiState state{};
+    state.tracks.resize(2);
     UiTextBuffer out{};
     REQUIRE(host.renderActive(out, state));
     REQUIRE(out.lines.size() == 1);
     REQUIRE(out.lines[0] == "track0");
 }
 
-TEST_CASE("UiSceneHost: handles global track selection and delegates local input") {
+TEST_CASE("UiSceneHost: handles global track navigation and delegates local input") {
     UiSceneHost host;
     REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));
 
     UiState state{};
+    state.tracks.resize(2);
 
-    const WidgetOutput globalOut = host.handleInput(UiInputAction::SelectTrack1, state);
-    REQUIRE(globalOut.handled);
+    const WidgetOutput prevOut = host.handleInput(UiInputAction::SelectPrevTrack, state);
+    REQUIRE(prevOut.handled);
     REQUIRE(host.nav().selectedTrack == 1);
+
+    const WidgetOutput nextOut = host.handleInput(UiInputAction::SelectNextTrack, state);
+    REQUIRE(nextOut.handled);
+    REQUIRE(host.nav().selectedTrack == 0);
+
+    host.nav().trackPage = 0;
+    const WidgetOutput pagePrevOut = host.handleInput(UiInputAction::TrackPagePrev, state);
+    REQUIRE(pagePrevOut.handled);
+    REQUIRE(host.nav().trackPage == 0);
+
+    const WidgetOutput pageNextOut = host.handleInput(UiInputAction::TrackPageNext, state);
+    REQUIRE(pageNextOut.handled);
+    REQUIRE(host.nav().trackPage == 0);
 
     const WidgetOutput localOut = host.handleInput(UiInputAction::BpmUp, state);
     REQUIRE(localOut.handled);
     REQUIRE(host.nav().cursor == 1);
 }
 
+TEST_CASE("UiSceneHost: track page navigation wraps for multi-page track list") {
+    UiSceneHost host;
+    REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));
+
+    UiState state{};
+    state.tracks.resize(4);
+
+    host.nav().trackPage = 0;
+    const WidgetOutput pagePrevOut = host.handleInput(UiInputAction::TrackPagePrev, state);
+    REQUIRE(pagePrevOut.handled);
+    REQUIRE(host.nav().trackPage == 1);
+
+    const WidgetOutput pageNextOut = host.handleInput(UiInputAction::TrackPageNext, state);
+    REQUIRE(pageNextOut.handled);
+    REQUIRE(host.nav().trackPage == 0);
+}

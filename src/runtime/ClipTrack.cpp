@@ -262,6 +262,11 @@ namespace avantgarde {
         ~ClipTrackImpl() override = default;
 
         // ---- ITrack ----
+        bool healthcheck() const noexcept override {
+            // Объект всегда валиден после конструирования; отдельной внешней инициализации нет.
+            return true;
+        }
+
         void addModule(std::unique_ptr<IAudioModule> mod) override {
             if (!mod) return;
             // outside-RT: module is fully prepared here

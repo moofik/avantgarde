@@ -18,8 +18,8 @@ public:
 
     // Call periodically on the main thread to dispatch window events.
     void pumpEvents() noexcept;
-    // Poll mapped keyboard action captured from the window event loop.
-    bool pollInput(UiInputEvent& out) noexcept;
+    // Забрать следующее действие клавиатуры из внутренней очереди окна.
+    bool readNextInputEvent(UiInputEvent& out) noexcept;
 
 private:
     struct Impl;

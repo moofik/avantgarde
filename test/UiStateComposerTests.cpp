@@ -8,6 +8,7 @@ TEST_CASE("UiStateComposer: merges runtime telemetry with UiState snapshot") {
     UiStateComposer composer;
 
     UiState base{};
+    base.tracks.resize(2);
     base.transport.playing = true;
     base.transport.bpm = 127.0f;
     base.transport.tsNum = 7;

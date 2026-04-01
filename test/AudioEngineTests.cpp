@@ -21,6 +21,7 @@ struct MockTrack : ITrack {
     int calls = 0;
     std::vector<RtCommand> seen;
 
+    bool healthcheck() const noexcept override { return true; }
     void addModule(std::unique_ptr<IAudioModule>) override {}
     IAudioModule* getModule(std::size_t) override { return nullptr; }
 

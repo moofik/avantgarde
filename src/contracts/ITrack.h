@@ -16,6 +16,9 @@ namespace avantgarde {
 // Трек владеет модулями и последовательно прогоняет через них сигнал.
     struct ITrack {
         virtual ~ITrack() = default;
+        // Проверка базовой готовности трека к работе.
+        // Используется control-слоем как легкий guard перед non-RT операциями.
+        [[nodiscard]] virtual bool healthcheck() const noexcept = 0;
         virtual void addModule(std::unique_ptr<IAudioModule> mod) = 0; // вне RT
         virtual IAudioModule* getModule(std::size_t index) = 0; // конфигурация/снапшоты
         virtual void process(const AudioProcessContext& ctx) = 0; // RT‑safe

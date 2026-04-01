@@ -73,7 +73,7 @@ std::string GothicGbUiRenderer::colorizeFrame_(const UiState& state, const std::
                               line.find("╠") == 0 || line.find("╟") == 0;
         const bool isHeader = line.find(" AVANTGARDE ") != std::string::npos;
         const bool isTransport = line.find(" TRN:") != std::string::npos || line.find(" ACTIVE:") != std::string::npos;
-        const bool isActiveTrackLine = line.find("▶ T1") != std::string::npos || line.find("▶ T2") != std::string::npos;
+        const bool isActiveTrackLine = line.find("▶ T") != std::string::npos;
 
         if (isBorder) {
             out << withStyle(line, palette_.mid, palette_.bg) << '\n';

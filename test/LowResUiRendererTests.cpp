@@ -71,6 +71,7 @@ TEST_CASE("LowResUiRenderer: renders compact transport and two tracks") {
     LowResUiRenderer renderer(display);
 
     UiState state{};
+    state.tracks.resize(2);
     state.transport.playing = true;
     state.transport.bpm = 128.0f;
     state.transport.tsNum = 4;
@@ -118,6 +119,7 @@ TEST_CASE("LowResUiRenderer: long clip name is shortened") {
     LowResUiRenderer renderer(display);
 
     UiState state{};
+    state.tracks.resize(2);
     state.tracks[0].id = 0;
     state.tracks[0].state = UiTrackState::Stopped;
     state.tracks[0].clipName = "very_very_long_clip_filename.wav";

@@ -10,12 +10,6 @@
 #include "service/ui/UiWidgetFactory.h"
 
 namespace avantgarde {
-namespace {
-
-// В MVP поддерживаем два трека.
-constexpr uint8_t kTrackCount = 2;
-
-} // namespace
 
 SamplerApplication::~SamplerApplication() {
     // Безопасное завершение всех циклов/потоков в любом сценарии выхода.
@@ -32,7 +26,7 @@ SamplerApplication::~SamplerApplication() {
 
 int SamplerApplication::run(const SamplerAppConfig& config) {
     // 1) Инициализация движка и IO.
-    SamplerEngineBootstrap bootstrap{};
+    UiState bootstrap{};
     std::string error;
     if (!engine_.init(config.engine, bootstrap, error)) {
         std::printf("%s\n", error.c_str());
@@ -45,10 +39,31 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
 
     trCtl_ = bootstrap.transport;
     tracksCtl_ = bootstrap.tracks;
+    trCtl_.activeTrack = clampUiTrack_(trCtl_.activeTrack);
+
+    // Стартовая загрузка клипов живет в application-слое, а не в config движка.
+    for (const SamplerAppConfig::StartupClipLoad& load : config.startupClipLoads) {
+        if (load.path.empty()) {
+            continue;
+        }
+        if (load.track >= tracksCtl_.size()) {
+            continue;
+        }
+        const uint8_t t = load.track;
+        std::string clipName;
+        if (!engine_.loadSampleToTrack(t, load.path, clipName)) {
+            continue;
+        }
+        tracksCtl_[t].clipName = clipName;
+        tracksCtl_[t].state = UiTrackState::Stopped;
+        tracksCtl_[t].loop = true;
+    }
+
     // Публикуем начальный снапшот в UI store.
-    uiStore_.setTransport(trCtl_);
-    uiStore_.setTrack(0, tracksCtl_[0]);
-    uiStore_.setTrack(1, tracksCtl_[1]);
+    UiState initialState{};
+    initialState.transport = trCtl_;
+    initialState.tracks = tracksCtl_;
+    uiStore_.setState(initialState);
 
     // 2) Сборка scene-графа (каждая функциональная сцена = виджет).
     UiWidgetFactory widgetFactory(
@@ -60,6 +75,7 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
     (void)sceneHost_.registerWidget(UiScene::Manager, widgetFactory.create(UiScene::Manager));
     sceneHost_.setScene(UiScene::Tracks);
     sceneHost_.nav().selectedTrack = trCtl_.activeTrack;
+    sceneHost_.nav().trackPage = static_cast<uint16_t>(trCtl_.activeTrack / 2U);
 
     // 3) Запуск аудио.
     if (!engine_.start(error)) {
@@ -74,7 +90,7 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
     controlThread_ = std::thread([this]() {
         while (!stopUi_.load(std::memory_order_acquire)) {
             UiInputEvent ev{};
-            if (!io_.pollInput(ev)) {
+            if (!io_.readNextInputEvent(ev)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
@@ -98,7 +114,7 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
 
     // 6) Главный цикл: pump событий окна + рендер.
     while (!stopUi_.load(std::memory_order_acquire)) {
-        if (io_.pumpWindowInput()) {
+        if (io_.readWindowEvents()) {
             renderUiOnce_();
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         } else {
@@ -119,13 +135,19 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
     return 0;
 }
 
-uint8_t SamplerApplication::clampUiTrack_(uint8_t track) noexcept {
-    return (track >= kTrackCount) ? static_cast<uint8_t>(kTrackCount - 1) : track;
+uint8_t SamplerApplication::clampUiTrack_(uint8_t track) const noexcept {
+    if (tracksCtl_.empty()) {
+        return 0;
+    }
+    return (track >= tracksCtl_.size()) ? static_cast<uint8_t>(tracksCtl_.size() - 1) : track;
 }
 
 void SamplerApplication::handleIntent_(const UiIntent& intent) {
     switch (intent.type) {
         case UiIntentType::LoadSampleToTrack: {
+            if (tracksCtl_.empty()) {
+                break;
+            }
             const uint8_t t = clampUiTrack_(intent.track);
             std::string clipName;
             if (!engine_.loadSampleToTrack(t, intent.path, clipName)) {
@@ -163,8 +185,13 @@ void SamplerApplication::handleIntent_(const UiIntent& intent) {
 }
 
 bool SamplerApplication::recomputePlaying_() const noexcept {
-    // Transport "playing" = дизъюнкция play state двух треков.
-    return tracksCtl_[0].state == UiTrackState::Playing || tracksCtl_[1].state == UiTrackState::Playing;
+    // Transport "playing" = хотя бы один трек в состоянии Playing.
+    for (const UiTrackStateView& track : tracksCtl_) {
+        if (track.state == UiTrackState::Playing) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void SamplerApplication::renderUiOnce_() {
@@ -206,22 +233,20 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
         return false;
     }
 
-    // Глобальные горячие клавиши выбора активного трека.
-    if (action == UiInputAction::SelectTrack0 || action == UiInputAction::SelectTrack1) {
-        trCtl_.activeTrack = (action == UiInputAction::SelectTrack0) ? 0 : 1;
-        {
-            std::lock_guard<std::mutex> lock(sceneMutex_);
-            sceneHost_.nav().selectedTrack = trCtl_.activeTrack;
-        }
-        uiStore_.setTransport(trCtl_);
-    }
-
     // ВАЖНО: snapshot берем до sceneMutex_, чтобы избежать lock inversion с UiStateStore.
     const UiState widgetState = uiStore_.snapshot();
     WidgetOutput widgetOut{};
+    bool activeTrackChanged = false;
     {
         std::lock_guard<std::mutex> lock(sceneMutex_);
         widgetOut = sceneHost_.handleInput(action, widgetState);
+        if (action == UiInputAction::SelectPrevTrack || action == UiInputAction::SelectNextTrack) {
+            trCtl_.activeTrack = clampUiTrack_(sceneHost_.nav().selectedTrack);
+            activeTrackChanged = true;
+        }
+    }
+    if (activeTrackChanged) {
+        uiStore_.setTransport(trCtl_);
     }
     for (const UiIntent& intent : widgetOut.intents) {
         handleIntent_(intent);
@@ -238,8 +263,10 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
     }
 
     switch (action) {
-        case UiInputAction::SelectTrack0:
-        case UiInputAction::SelectTrack1:
+        case UiInputAction::SelectPrevTrack:
+        case UiInputAction::SelectNextTrack:
+        case UiInputAction::TrackPagePrev:
+        case UiInputAction::TrackPageNext:
         case UiInputAction::OpenManager:
         case UiInputAction::BackScene:
         case UiInputAction::ListUp:
@@ -250,6 +277,9 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
         case UiInputAction::PreviewAutoToggle:
             break;
         case UiInputAction::PlayActiveTrack: {
+            if (tracksCtl_.empty()) {
+                break;
+            }
             const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
             (void)engine_.playTrack(t);
             if (tracksCtl_[t].state != UiTrackState::Empty) {
@@ -262,6 +292,9 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
             uiStore_.setTransport(trCtl_);
         } break;
         case UiInputAction::StopActiveTrack: {
+            if (tracksCtl_.empty()) {
+                break;
+            }
             const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
             (void)engine_.stopTrack(t);
             if (tracksCtl_[t].state != UiTrackState::Empty) {
@@ -273,12 +306,18 @@ bool SamplerApplication::handleInputEvent_(UiInputAction action) {
             uiStore_.setTransport(trCtl_);
         } break;
         case UiInputAction::TrackSpeedUp: {
+            if (tracksCtl_.empty()) {
+                break;
+            }
             const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
             tracksCtl_[t].stretchRatio = std::clamp(tracksCtl_[t].stretchRatio + 0.05f, 0.25f, 4.0f);
             (void)engine_.setTrackSpeed(t, tracksCtl_[t].stretchRatio);
             uiStore_.setTrack(t, tracksCtl_[t]);
         } break;
         case UiInputAction::TrackSpeedDown: {
+            if (tracksCtl_.empty()) {
+                break;
+            }
             const uint8_t t = clampUiTrack_(trCtl_.activeTrack);
             tracksCtl_[t].stretchRatio = std::clamp(tracksCtl_[t].stretchRatio - 0.05f, 0.25f, 4.0f);
             (void)engine_.setTrackSpeed(t, tracksCtl_[t].stretchRatio);

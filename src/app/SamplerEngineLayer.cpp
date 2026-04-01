@@ -1,9 +1,9 @@
 #include "app/SamplerEngineLayer.h"
 
 #include <algorithm>
-#include <array>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "contracts/IAudioEngine.h"
 #include "contracts/IClipTrack.h"
@@ -25,16 +25,25 @@
 namespace avantgarde {
 namespace {
 
-// Третий (скрытый) трек используется под preview.
-constexpr int16_t kPreviewTrackId = 2;
-// В текущем MVP UI/движок держит 2 пользовательских трека.
-constexpr uint8_t kTrackCount = 2;
+constexpr uint8_t kMinTrackCount = 1;
+constexpr uint8_t kMaxTrackCount = 32;
 
 // Резолвер ParamBridge использует эти указатели для адресации модулей.
-std::array<ITrack*, kTrackCount> gParamTracks{};
+std::vector<ITrack*> gParamTracks{};
 
-uint8_t clampTrack(uint8_t track) noexcept {
-    return (track >= kTrackCount) ? static_cast<uint8_t>(kTrackCount - 1) : track;
+uint8_t sanitizeTrackCount(uint8_t trackCount) noexcept {
+    if (trackCount < kMinTrackCount) {
+        return kMinTrackCount;
+    }
+    if (trackCount > kMaxTrackCount) {
+        return kMaxTrackCount;
+    }
+    return trackCount;
+}
+
+uint8_t clampTrack(uint8_t track, uint8_t trackCount) noexcept {
+    const uint8_t safeCount = sanitizeTrackCount(trackCount);
+    return (track >= safeCount) ? static_cast<uint8_t>(safeCount - 1) : track;
 }
 
 IParameterized* resolveParamTarget(Target target) noexcept {
@@ -88,8 +97,12 @@ struct SamplerEngineLayer::Impl {
     ControlCommandDispatcher controlDispatcher{&qUi};
     // Отправка immediate команд в обход scheduler (preview).
     ControlCommandDispatcher immediateDispatcher{&qRt};
+    // Количество пользовательских треков.
+    uint8_t trackCount{0};
+    // ID скрытого preview-трека внутри AudioEngine.
+    int16_t previewTrackId{-1};
     // Сырые указатели на track instances (для non-RT операций загрузки).
-    std::array<IClipTrack*, kTrackCount> clipCtl{nullptr, nullptr};
+    std::vector<IClipTrack*> clipCtl{};
     // Указатель на preview-голос.
     IClipTrack* previewClip{nullptr};
     // Активный аудиострим.
@@ -111,54 +124,41 @@ SamplerEngineLayer::~SamplerEngineLayer() {
 }
 
 bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
-                              SamplerEngineBootstrap& bootstrap,
+                              UiState& bootstrapOut,
                               std::string& errorOut) {
     if (!impl_) {
         errorOut = "engine impl is null";
         return false;
     }
-    if (config.track0Path.empty()) {
-        errorOut = "track0 path is empty";
-        return false;
-    }
 
     impl_->engine.setSampleRate(config.sampleRate);
+    impl_->trackCount = sanitizeTrackCount(config.trackCount);
+    impl_->previewTrackId = static_cast<int16_t>(impl_->trackCount);
 
-    // Создаем рабочие треки и preview-голос.
-    auto clip0 = std::make_unique<ClipTrackImpl>();
-    IClipTrack* clipPtr0 = clip0.get();
-    auto clip1 = std::make_unique<ClipTrackImpl>();
-    IClipTrack* clipPtr1 = clip1.get();
+    // Создаем пользовательские треки и preview-голос.
+    std::vector<std::unique_ptr<IClipTrack>> userTracks(impl_->trackCount);
+    std::vector<IClipTrack*> userTrackPtrs(impl_->trackCount, nullptr);
+    for (uint8_t t = 0; t < impl_->trackCount; ++t) {
+        userTracks[t] = std::make_unique<ClipTrackImpl>();
+        userTrackPtrs[t] = userTracks[t].get();
+    }
     auto previewClip = std::make_unique<ClipTrackImpl>();
     IClipTrack* previewClipPtr = previewClip.get();
 
-    // T1 обязателен к загрузке.
-    if (!clipPtr0->loadSlotFromFile(0, config.track0Path.c_str())) {
-        errorOut = "loadSlotFromFile failed: " + config.track0Path;
-        return false;
-    }
-    (void)clipPtr0->setSlotLooping(0, true);
-
-    // T2 опционален.
-    bool track1Loaded = false;
-    if (config.hasTrack1) {
-        track1Loaded = clipPtr1->loadSlotFromFile(0, config.track1Path.c_str());
-        if (track1Loaded) {
-            (void)clipPtr1->setSlotLooping(0, true);
-        }
-    }
-
     // Публикуем треки для resolver'а параметров.
-    impl_->clipCtl[0] = clipPtr0;
-    impl_->clipCtl[1] = clipPtr1;
+    impl_->clipCtl.assign(impl_->trackCount, nullptr);
+    gParamTracks.assign(impl_->trackCount, nullptr);
+    for (uint8_t t = 0; t < impl_->trackCount; ++t) {
+        impl_->clipCtl[t] = userTrackPtrs[t];
+        gParamTracks[t] = userTrackPtrs[t];
+    }
     impl_->previewClip = previewClipPtr;
-    gParamTracks[0] = clipPtr0;
-    gParamTracks[1] = clipPtr1;
     impl_->pb.setResolver(&resolveParamTarget);
 
-    // Регистрируем треки в engine (порядок важен: [T1, T2, Preview]).
-    impl_->engine.registerTrack(std::move(clip0));
-    impl_->engine.registerTrack(std::move(clip1));
+    // Регистрируем треки в engine (порядок важен: [T1..Tn, Preview]).
+    for (uint8_t t = 0; t < impl_->trackCount; ++t) {
+        impl_->engine.registerTrack(std::move(userTracks[t]));
+    }
     impl_->engine.registerTrack(std::move(previewClip));
 
     // Включаем транспорт и scheduler extension.
@@ -168,50 +168,43 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
     impl_->engine.addRtExtension(impl_->scheduler.get());
 
     // Инициализируем стартовое состояние транспорта.
-    bootstrap.transport.playing = false;
-    bootstrap.transport.bpm = 120.0f;
-    bootstrap.transport.tsNum = 4;
-    bootstrap.transport.tsDen = 4;
-    bootstrap.transport.quant = QuantizeMode::Bar;
-    bootstrap.transport.activeTrack = 0;
+    bootstrapOut.transport.playing = false;
+    bootstrapOut.transport.bpm = 120.0f;
+    bootstrapOut.transport.tsNum = 4;
+    bootstrapOut.transport.tsDen = 4;
+    bootstrapOut.transport.quant = QuantizeMode::Bar;
+    bootstrapOut.transport.activeTrack = 0;
 
     // Синхронизируем transport в control + RT слоях.
-    impl_->transport.setTempo(bootstrap.transport.bpm);
-    impl_->transport.setTimeSignature(bootstrap.transport.tsNum, bootstrap.transport.tsDen);
-    impl_->transport.setQuantize(bootstrap.transport.quant);
-    impl_->transport.setPlaying(bootstrap.transport.playing);
+    impl_->transport.setTempo(bootstrapOut.transport.bpm);
+    impl_->transport.setTimeSignature(bootstrapOut.transport.tsNum, bootstrapOut.transport.tsDen);
+    impl_->transport.setQuantize(bootstrapOut.transport.quant);
+    impl_->transport.setPlaying(bootstrapOut.transport.playing);
 
     // Стартовые команды идут через стандартный dispatcher-путь.
-    impl_->controlDispatcher.setQuantizeMode(bootstrap.transport.quant);
-    impl_->controlDispatcher.setTempoBpm(bootstrap.transport.bpm);
-    impl_->controlDispatcher.setTimeSignature(bootstrap.transport.tsNum, bootstrap.transport.tsDen);
+    impl_->controlDispatcher.setQuantizeMode(bootstrapOut.transport.quant);
+    impl_->controlDispatcher.setTempoBpm(bootstrapOut.transport.bpm);
+    impl_->controlDispatcher.setTimeSignature(bootstrapOut.transport.tsNum, bootstrapOut.transport.tsDen);
 
     // Preview: тише и без loop по умолчанию.
-    impl_->immediateDispatcher.sendTrackParamSet(kPreviewTrackId, TrackParamId::Gain01, 0.25f);
-    impl_->immediateDispatcher.sendTrackParamSet(kPreviewTrackId, TrackParamId::LoopEnabled, kRtValueOff);
+    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::Gain01, 0.25f);
+    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::LoopEnabled, kRtValueOff);
 
-    // Готовим стартовый UI state треков.
-    UiTrackStateView track0{};
-    track0.id = 0;
-    track0.state = UiTrackState::Stopped;
-    track0.bars = 4;
-    track0.stretchRatio = 1.0f;
-    track0.gain01 = 1.0f;
-    track0.loop = true;
-    track0.fxCount = 0;
-    track0.clipName = clipNameFromPath(config.track0Path);
-    bootstrap.tracks[0] = track0;
-
-    UiTrackStateView track1{};
-    track1.id = 1;
-    track1.state = track1Loaded ? UiTrackState::Stopped : UiTrackState::Empty;
-    track1.bars = 4;
-    track1.stretchRatio = 1.0f;
-    track1.gain01 = 1.0f;
-    track1.loop = track1Loaded;
-    track1.fxCount = 0;
-    track1.clipName = track1Loaded ? clipNameFromPath(config.track1Path) : std::string{};
-    bootstrap.tracks[1] = track1;
+    // Готовим стартовый UI state треков (без автозагрузки файлов).
+    bootstrapOut.tracks.clear();
+    bootstrapOut.tracks.resize(impl_->trackCount);
+    for (uint8_t t = 0; t < impl_->trackCount; ++t) {
+        UiTrackStateView track{};
+        track.id = t;
+        track.state = UiTrackState::Empty;
+        track.bars = 4;
+        track.stretchRatio = 1.0f;
+        track.gain01 = 1.0f;
+        track.loop = false;
+        track.fxCount = 0;
+        track.clipName.clear();
+        bootstrapOut.tracks[t] = std::move(track);
+    }
 
     // Конфиг потока хоста сохраняем до этапа start().
     impl_->streamCfg = StreamConfig{
@@ -313,26 +306,35 @@ void SamplerEngineLayer::setTimeSignature(uint8_t num, uint8_t den) noexcept {
 }
 
 bool SamplerEngineLayer::playTrack(uint8_t track) noexcept {
-    if (!impl_) {
+    if (!impl_ || impl_->clipCtl.empty()) {
         return false;
     }
-    const uint8_t t = clampTrack(track);
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+        return false;
+    }
     return impl_->controlDispatcher.sendPlay(static_cast<int16_t>(t), kRtClipSlot0);
 }
 
 bool SamplerEngineLayer::stopTrack(uint8_t track) noexcept {
-    if (!impl_) {
+    if (!impl_ || impl_->clipCtl.empty()) {
         return false;
     }
-    const uint8_t t = clampTrack(track);
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+        return false;
+    }
     return impl_->controlDispatcher.sendStop(static_cast<int16_t>(t), kRtClipSlot0);
 }
 
 bool SamplerEngineLayer::setTrackSpeed(uint8_t track, float speed) noexcept {
-    if (!impl_) {
+    if (!impl_ || impl_->clipCtl.empty()) {
         return false;
     }
-    const uint8_t t = clampTrack(track);
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+        return false;
+    }
     return impl_->controlDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::PlaybackInc, speed);
 }
 
@@ -342,8 +344,11 @@ bool SamplerEngineLayer::loadSampleToTrack(uint8_t track,
     if (!impl_ || path.empty()) {
         return false;
     }
-    const uint8_t t = clampTrack(track);
-    if (!impl_->clipCtl[t]) {
+    if (impl_->clipCtl.empty()) {
+        return false;
+    }
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
         return false;
     }
     // Load и loop-настройка строго вне RT.
@@ -360,22 +365,28 @@ void SamplerEngineLayer::previewRequest(const std::string& path) noexcept {
         return;
     }
     // Любой новый preview начинается с мгновенного stop предыдущего.
-    (void)impl_->immediateDispatcher.sendStop(kPreviewTrackId, kRtClipSlot0);
-    if (path.empty() || !impl_->previewClip) {
+    if (impl_->previewTrackId < 0) {
+        return;
+    }
+    (void)impl_->immediateDispatcher.sendStop(impl_->previewTrackId, kRtClipSlot0);
+    if (path.empty() || !impl_->previewClip || !impl_->previewClip->healthcheck()) {
         return;
     }
     if (!impl_->previewClip->loadSlotFromFile(0, path.c_str())) {
         return;
     }
     (void)impl_->previewClip->setSlotLooping(0, false);
-    (void)impl_->immediateDispatcher.sendPlay(kPreviewTrackId, kRtClipSlot0);
+    (void)impl_->immediateDispatcher.sendPlay(impl_->previewTrackId, kRtClipSlot0);
 }
 
 void SamplerEngineLayer::previewStop() noexcept {
     if (!impl_) {
         return;
     }
-    (void)impl_->immediateDispatcher.sendStop(kPreviewTrackId, kRtClipSlot0);
+    if (impl_->previewTrackId < 0) {
+        return;
+    }
+    (void)impl_->immediateDispatcher.sendStop(impl_->previewTrackId, kRtClipSlot0);
 }
 
 } // namespace avantgarde

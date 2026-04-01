@@ -7,8 +7,10 @@ namespace avantgarde {
 enum class UiInputAction : uint8_t {
     None = 0,
     Quit,
-    SelectTrack0,
-    SelectTrack1,
+    SelectPrevTrack,
+    SelectNextTrack,
+    TrackPagePrev,
+    TrackPageNext,
     OpenManager,
     BackScene,
     ListUp,

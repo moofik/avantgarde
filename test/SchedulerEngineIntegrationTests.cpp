@@ -50,6 +50,7 @@ struct ProbeTrack final : ITrack {
     int commandBlock = -1;
     std::vector<RtCommand> seen;
 
+    bool healthcheck() const noexcept override { return true; }
     void addModule(std::unique_ptr<IAudioModule>) override {}
     IAudioModule* getModule(std::size_t) override { return nullptr; }
     void process(const AudioProcessContext&) override {}

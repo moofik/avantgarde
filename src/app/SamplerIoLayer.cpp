@@ -87,20 +87,20 @@ void SamplerIoLayer::stopTerminalInput() noexcept {
     }
 }
 
-bool SamplerIoLayer::pumpWindowInput() {
+bool SamplerIoLayer::readWindowEvents() {
     if (!windowRenderer_) {
         return false;
     }
     windowRenderer_->pumpEvents();
     UiInputEvent ev{};
     // Собираем все события из окна в общую очередь.
-    while (windowRenderer_->pollInput(ev)) {
+    while (windowRenderer_->readNextInputEvent(ev)) {
         inputQueue_.push(ev);
     }
     return true;
 }
 
-bool SamplerIoLayer::pollInput(UiInputEvent& out) {
+bool SamplerIoLayer::readNextInputEvent(UiInputEvent& out) {
     return inputQueue_.tryPop(out);
 }
 

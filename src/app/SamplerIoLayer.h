@@ -56,10 +56,10 @@ public:
     // Остановка terminal input потока.
     void stopTerminalInput() noexcept;
 
-    // Pump оконных событий (актуально для gb-window).
-    bool pumpWindowInput();
-    // Получить следующее накопленное input событие.
-    bool pollInput(UiInputEvent& out);
+    // Считать накопленные события окна (актуально для gb-window) и положить их в общую очередь.
+    bool readWindowEvents();
+    // Получить следующее событие ввода из общей очереди.
+    bool readNextInputEvent(UiInputEvent& out);
 
     // true, если рендер нужно выполнять в main thread (AppKit).
     bool renderOnMainThread() const noexcept;

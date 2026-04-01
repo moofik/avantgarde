@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -16,7 +17,8 @@ public:
     // width is total character width including left/right frame borders.
     static std::string buildMonochromeFrame(const UiState& state,
                                             uint16_t width,
-                                            std::string_view headerTitle = "AVANTGARDE");
+                                            std::string_view headerTitle = "AVANTGARDE",
+                                            std::optional<std::size_t> pageOverride = std::nullopt);
 };
 
 } // namespace avantgarde

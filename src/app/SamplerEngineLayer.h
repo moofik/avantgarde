@@ -1,6 +1,5 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <string>
 
@@ -11,12 +10,8 @@ namespace avantgarde {
 
 // Конфигурация аудио слоя.
 struct SamplerEngineConfig {
-    // Путь к обязательному сэмплу трека T1.
-    std::string track0Path{};
-    // Путь к сэмплу трека T2 (опционально).
-    std::string track1Path{};
-    // Признак, что T2 должен быть загружен при старте.
-    bool hasTrack1{false};
+    // Количество пользовательских треков в пуле.
+    uint8_t trackCount{4};
     // Базовая частота рендера.
     double sampleRate{48000.0};
     // Размер аудио-блока.
@@ -25,14 +20,6 @@ struct SamplerEngineConfig {
     int numInput{0};
     // Число выходных каналов хоста.
     int numOutput{2};
-};
-
-// Начальный UI-снимок, который engine отдает application после init.
-struct SamplerEngineBootstrap {
-    // Стартовый transport state.
-    UiTransportState transport{};
-    // Стартовые состояния треков.
-    std::array<UiTrackStateView, 2> tracks{};
 };
 
 // Runtime метрики из аудиохоста/RT очередей.
@@ -54,9 +41,9 @@ public:
     SamplerEngineLayer();
     ~SamplerEngineLayer();
 
-    // Инициализация графа движка и загрузка стартовых сэмплов.
+    // Инициализация графа движка. Начальное состояние UI отдается в bootstrapOut.
     bool init(const SamplerEngineConfig& config,
-              SamplerEngineBootstrap& bootstrap,
+              UiState& bootstrapOut,
               std::string& errorOut);
     // Запуск аудиострима.
     bool start(std::string& errorOut);

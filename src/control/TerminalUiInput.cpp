@@ -64,9 +64,13 @@ UiInputAction TerminalUiInput::mapKey(char ch) noexcept {
         case 'Q':
             return UiInputAction::Quit;
         case '1':
-            return UiInputAction::SelectTrack0;
+            return UiInputAction::SelectPrevTrack;
         case '2':
-            return UiInputAction::SelectTrack1;
+            return UiInputAction::SelectNextTrack;
+        case ',':
+            return UiInputAction::TrackPagePrev;
+        case '.':
+            return UiInputAction::TrackPageNext;
         case 'm':
         case 'M':
             return UiInputAction::OpenManager;

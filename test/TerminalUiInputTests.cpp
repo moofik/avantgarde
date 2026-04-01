@@ -6,8 +6,10 @@ using namespace avantgarde;
 
 TEST_CASE("TerminalUiInput: key mapping") {
     REQUIRE(TerminalUiInput::mapKey('q') == UiInputAction::Quit);
-    REQUIRE(TerminalUiInput::mapKey('1') == UiInputAction::SelectTrack0);
-    REQUIRE(TerminalUiInput::mapKey('2') == UiInputAction::SelectTrack1);
+    REQUIRE(TerminalUiInput::mapKey('1') == UiInputAction::SelectPrevTrack);
+    REQUIRE(TerminalUiInput::mapKey('2') == UiInputAction::SelectNextTrack);
+    REQUIRE(TerminalUiInput::mapKey(',') == UiInputAction::TrackPagePrev);
+    REQUIRE(TerminalUiInput::mapKey('.') == UiInputAction::TrackPageNext);
     REQUIRE(TerminalUiInput::mapKey('p') == UiInputAction::PlayActiveTrack);
     REQUIRE(TerminalUiInput::mapKey('s') == UiInputAction::StopActiveTrack);
     REQUIRE(TerminalUiInput::mapKey('=') == UiInputAction::TrackSpeedUp);

@@ -16,11 +16,12 @@ const char* TracksWidget::id() const noexcept {
     return "tracks";
 }
 
-void TracksWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNavState&) {
+void TracksWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNavState& navState) {
     // Всегда рендерим полный кадр заново, чтобы не копить артефакты.
     out.clear();
     // Композер собирает готовый монохромный GB-кадр.
-    const std::string frame = GbFrameComposer::buildMonochromeFrame(rtState, frameWidth_, headerTitle_);
+    const std::string frame = GbFrameComposer::buildMonochromeFrame(
+        rtState, frameWidth_, headerTitle_, static_cast<std::size_t>(navState.trackPage));
 
     // Конвертируем цельный текст кадра в line-buffer виджета.
     std::istringstream in(frame);

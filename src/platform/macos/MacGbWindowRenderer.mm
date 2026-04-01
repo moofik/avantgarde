@@ -140,8 +140,10 @@ UiInputAction mapWindowKeyCode(unsigned short keyCode) noexcept {
     switch (keyCode) {
         case 53: return UiInputAction::BackScene;       // Esc
         case 12: return UiInputAction::Quit;            // Q
-        case 18: return UiInputAction::SelectTrack0;    // 1
-        case 19: return UiInputAction::SelectTrack1;    // 2
+        case 18: return UiInputAction::SelectPrevTrack; // 1
+        case 19: return UiInputAction::SelectNextTrack; // 2
+        case 43: return UiInputAction::TrackPagePrev;   // ,
+        case 47: return UiInputAction::TrackPageNext;   // .
         case 46: return UiInputAction::OpenManager;     // M
         case 38: return UiInputAction::ListDown;        // J
         case 40: return UiInputAction::ListUp;          // K
@@ -179,6 +181,10 @@ UiInputAction mapWindowChars(NSString* chars) noexcept {
             return UiInputAction::ListParent;
         case ' ':
             return UiInputAction::PreviewPlay;
+        case ',':
+            return UiInputAction::TrackPagePrev;
+        case '.':
+            return UiInputAction::TrackPageNext;
         default:
             return UiInputAction::None;
     }
@@ -471,7 +477,7 @@ void MacGbWindowRenderer::pumpEvents() noexcept {
     [NSApp updateWindows];
 }
 
-bool MacGbWindowRenderer::pollInput(UiInputEvent& out) noexcept {
+bool MacGbWindowRenderer::readNextInputEvent(UiInputEvent& out) noexcept {
     out.action = UiInputAction::None;
     if (!impl_) {
         return false;
