@@ -1,6 +1,7 @@
 #include <catch2/catch_all.hpp>
 
 #include "runtime/TransportBridgeDualBuffer.h"
+#include "contracts/ids.h"
 
 using namespace avantgarde;
 
@@ -69,4 +70,23 @@ TEST_CASE("TransportBridgeDualBuffer: invalid values are normalized") {
     REQUIRE(rt.tsNum == 4);
     REQUIRE(rt.tsDen == 4);
     REQUIRE(rt.swing == Catch::Approx(1.0f));
+}
+
+TEST_CASE("TransportBridgeDualBuffer: IParameterized surface controls transport") {
+    TransportBridgeDualBuffer tr;
+
+    REQUIRE(tr.getParamCount() == 6);
+    REQUIRE(tr.getParamMeta(toParamIndex(TransportParamId::TempoNorm)).name == "transport.tempo_norm");
+
+    tr.setParam(toParamIndex(TransportParamId::Playing), 1.0f);
+    tr.setParam(toParamIndex(TransportParamId::TempoNorm), 0.0f);   // 20 BPM
+    tr.setParam(toParamIndex(TransportParamId::QuantizeNorm), 0.5f); // Beat
+    tr.setParam(toParamIndex(TransportParamId::Swing01), 0.75f);
+
+    tr.swapBuffers();
+    const auto& rt = tr.rt();
+    REQUIRE(rt.playing == true);
+    REQUIRE(rt.bpm == Catch::Approx(20.0f));
+    REQUIRE(rt.quant == QuantizeMode::Beat);
+    REQUIRE(rt.swing == Catch::Approx(0.75f));
 }

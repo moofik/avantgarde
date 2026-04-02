@@ -281,6 +281,42 @@ namespace avantgarde {
             return modules_[index].get();
         }
 
+        // ---- IParameterized (track-level surface) ----
+        std::size_t getParamCount() const override {
+            return trackParamMeta_().size();
+        }
+
+        float getParam(std::size_t index) const override {
+            switch (static_cast<TrackParamId>(index)) {
+                case TrackParamId::Gain01:
+                    return detail_interp::clampf(playbackRt_.gain, 0.0f, 1.0f);
+                case TrackParamId::LoopEnabled:
+                    return playbackRt_.loop ? 1.0f : 0.0f;
+                case TrackParamId::PlaybackInc:
+                    return detail_interp::clampf(playbackRt_.playbackInc, 0.05f, 8.0f);
+                case TrackParamId::MuteEnabled:
+                    return playbackRt_.muted ? 1.0f : 0.0f;
+                case TrackParamId::ArmEnabled:
+                    return playbackRt_.armed ? 1.0f : 0.0f;
+                case TrackParamId::FollowTransportEnabled:
+                    return playbackRt_.followTransport ? 1.0f : 0.0f;
+                default:
+                    return 0.0f;
+            }
+        }
+
+        void setParam(std::size_t index, float value) override {
+            applyTrackParam_(static_cast<uint16_t>(index), value);
+        }
+
+        const ParamMeta& getParamMeta(std::size_t index) const override {
+            const auto& meta = trackParamMeta_();
+            if (index >= meta.size()) {
+                return trackNoMeta_();
+            }
+            return meta[index];
+        }
+
         bool removeModuleAt(std::size_t index) override {
             if (index >= modules_.size()) {
                 return false;
@@ -432,32 +468,7 @@ namespace avantgarde {
                             break;
                         }
                     }
-
-                    // контракт: RtCommand.index + RtCommand.value
-                    // значения параметров по договору нормализованы [0..1]
-                    if (cmd.index == toParamIndex(TrackParamId::Gain01)) {
-                        // gain (0..1) — MVP
-                        playbackRt_.gain = detail_interp::clampf(cmd.value, 0.0f, 1.0f);
-                    } else if (cmd.index == toParamIndex(TrackParamId::LoopEnabled)) {
-                        // loop bool
-                        playbackRt_.loop = (cmd.value >= 0.5f);
-                    } else if (cmd.index == toParamIndex(TrackParamId::PlaybackInc)) {
-                        // varispeed playback increment (1.0 = normal)
-                        playbackRt_.playbackInc = detail_interp::clampf(cmd.value, 0.05f, 8.0f);
-                        playbackRt_.stretchToBars = false;
-                    } else if (cmd.index == toParamIndex(TrackParamId::MuteEnabled)) {
-                        playbackRt_.muted = (cmd.value >= 0.5f);
-                    } else if (cmd.index == toParamIndex(TrackParamId::ArmEnabled)) {
-                        const bool armed = (cmd.value >= 0.5f);
-                        playbackRt_.armed = armed;
-                        recArmed_.store(armed, std::memory_order_relaxed);
-                    } else if (cmd.index == toParamIndex(TrackParamId::FollowTransportEnabled)) {
-                        const bool followTransport = (cmd.value >= 0.5f);
-                        playbackRt_.followTransport = followTransport;
-                        if (followTransport) {
-                            playbackRt_.oneshotRunning = false;
-                        }
-                    }
+                    applyTrackParam_(cmd.index, cmd.value);
                 } break;
 
                 case CmdId::SetTempoBpm: {
@@ -626,6 +637,63 @@ namespace avantgarde {
             bool oneshotRunning = false;
             bool loop = false;
         };
+
+    private:
+        static const ParamMeta& trackNoMeta_() {
+            static const ParamMeta kNoMeta{
+                .name = "track.unknown",
+                .minValue = 0.0f,
+                .maxValue = 1.0f,
+                .logarithmic = false,
+                .unit = ""
+            };
+            return kNoMeta;
+        }
+
+        static const std::array<ParamMeta, 6>& trackParamMeta_() {
+            static const std::array<ParamMeta, 6> kMeta{{
+                ParamMeta{.name = "track.gain", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "norm"},
+                ParamMeta{.name = "track.loop", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
+                ParamMeta{.name = "track.playback_inc", .minValue = 0.05f, .maxValue = 8.0f, .logarithmic = false, .unit = "ratio"},
+                ParamMeta{.name = "track.mute", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
+                ParamMeta{.name = "track.arm", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
+                ParamMeta{.name = "track.follow_transport", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
+            }};
+            return kMeta;
+        }
+
+        void applyTrackParam_(uint16_t index, float value) noexcept {
+            // контракт: значения параметров трека задаются через единый IParameterized путь
+            switch (static_cast<TrackParamId>(index)) {
+                case TrackParamId::Gain01:
+                    playbackRt_.gain = detail_interp::clampf(value, 0.0f, 1.0f);
+                    break;
+                case TrackParamId::LoopEnabled:
+                    playbackRt_.loop = (value >= 0.5f);
+                    break;
+                case TrackParamId::PlaybackInc:
+                    playbackRt_.playbackInc = detail_interp::clampf(value, 0.05f, 8.0f);
+                    playbackRt_.stretchToBars = false;
+                    break;
+                case TrackParamId::MuteEnabled:
+                    playbackRt_.muted = (value >= 0.5f);
+                    break;
+                case TrackParamId::ArmEnabled: {
+                    const bool armed = (value >= 0.5f);
+                    playbackRt_.armed = armed;
+                    recArmed_.store(armed, std::memory_order_relaxed);
+                } break;
+                case TrackParamId::FollowTransportEnabled: {
+                    const bool followTransport = (value >= 0.5f);
+                    playbackRt_.followTransport = followTransport;
+                    if (followTransport) {
+                        playbackRt_.oneshotRunning = false;
+                    }
+                } break;
+                default:
+                    break;
+            }
+        }
 
     private:
         static uint8_t sanitizeTsNum_(int num) noexcept {

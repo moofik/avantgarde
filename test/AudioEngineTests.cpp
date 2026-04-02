@@ -132,6 +132,14 @@ struct MockTransportBridge : ITransportBridge {
     void setQuantize(QuantizeMode) override {}
     void setSwing(float) override {}
 
+    std::size_t getParamCount() const override { return 0; }
+    float getParam(std::size_t) const override { return 0.0f; }
+    void setParam(std::size_t, float) override {}
+    const ParamMeta& getParamMeta(std::size_t) const override {
+        static const ParamMeta kMeta{};
+        return kMeta;
+    }
+
     // RT-side
     void swapBuffers() noexcept override {
         ++swaps;

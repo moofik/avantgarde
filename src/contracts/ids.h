@@ -52,6 +52,17 @@ namespace avantgarde {
         FollowTransportEnabled = 5
     };
 
+    // Индексы параметров транспорта для IParameterized-поверхности global target:
+    // Target{trackId=kRtTrackGlobal, slotId=kRtSlotTrackParams}.
+    enum class TransportParamId : uint16_t {
+        Playing = 0,
+        TempoNorm = 1,      // нормализованный tempo [0..1] -> [20..300] BPM
+        QuantizeNorm = 2,   // [0..1] -> None/Beat/Bar
+        TimeSigNumNorm = 3, // [0..1] -> [1..32]
+        TimeSigDenNorm = 4, // [0..1] -> {1,2,4,8,16,32}
+        Swing01 = 5
+    };
+
     // Параметры встроенного Schroeder reverb.
     // Эти индексы используются в UiIntent::paramIndex для SetFxParam.
     enum class ReverbParamId : uint16_t {
@@ -73,6 +84,10 @@ namespace avantgarde {
     };
 
     constexpr uint16_t toParamIndex(TrackParamId id) noexcept {
+        return static_cast<uint16_t>(id);
+    }
+
+    constexpr uint16_t toParamIndex(TransportParamId id) noexcept {
         return static_cast<uint16_t>(id);
     }
 

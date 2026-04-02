@@ -2,6 +2,7 @@
 #pragma once
 #include <cstdint>
 #include <type_traits>
+#include "IParameterized.h"
 
 namespace avantgarde {
 
@@ -159,7 +160,7 @@ namespace avantgarde {
     static_assert(std::is_trivially_copyable_v<TransportRtSnapshot>,
                   "TransportRtSnapshot must be POD for RT safety");
 
-    struct ITransportBridge {
+    struct ITransportBridge : IParameterized {
         virtual ~ITransportBridge() = default;
 
         // Control-side: задать параметры транспорта (часто, неблокирующе).

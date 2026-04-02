@@ -4,6 +4,7 @@
 #include "contracts/ids.h"
 #include "service/ui/FxEditorWidget.h"
 #include "service/ui/FxListWidget.h"
+#include "service/ui/UiLayoutTomlLoader.h"
 
 using namespace avantgarde;
 
@@ -135,4 +136,112 @@ TEST_CASE("FxListWidget: remove action emits RemoveFxFromTrack intent") {
     REQUIRE(out.intents[0].track == 0);
     REQUIRE(out.intents[0].fxSlot == 1);
     REQUIRE(nav.selectedFx == 0);
+}
+
+TEST_CASE("FxEditorWidget: uses TOML layout title and knobs when template provided") {
+    const char* toml = R"(
+id = "fx_editor"
+[layout]
+type = "column"
+[[layout.children]]
+type = "statusbar"
+text = "FX TOML"
+[[layout.children]]
+type = "row"
+[[layout.children.children]]
+type = "knob"
+label = "WET"
+bind = "scene.fx.param.value.0"
+)";
+
+    UiLayoutTemplate tpl{};
+    std::string err{};
+    REQUIRE(UiLayoutTomlLoader::loadFromString(toml, tpl, err));
+
+    FxEditorWidget widget(60, 0.1f, tpl);
+    UiState state{};
+    state.tracks.resize(1);
+    state.tracks[0].id = 0;
+    state.tracks[0].fxCount = 1;
+    state.tracks[0].fxChainIds.push_back("fx.reverb.schroeder");
+
+    UiNavState nav{};
+    nav.scene = UiScene::FxEditor;
+    nav.selectedTrack = 0;
+    nav.selectedFx = 0;
+    nav.cursor = 0;
+
+    UiTextBuffer out{};
+    widget.render(out, state, nav);
+    REQUIRE_FALSE(out.lines.empty());
+
+    bool hasTomlTitle = false;
+    bool hasKnobLabel = false;
+    for (const std::string& line : out.lines) {
+        if (line.find("FX TOML") != std::string::npos) {
+            hasTomlTitle = true;
+        }
+        if (line.find("WET") != std::string::npos) {
+            hasKnobLabel = true;
+        }
+    }
+    REQUIRE(hasTomlTitle);
+    REQUIRE(hasKnobLabel);
+}
+
+TEST_CASE("FxEditorWidget: knob label priority is template over descriptor") {
+    const char* toml = R"(
+id = "fx_editor"
+[layout]
+type = "column"
+[[layout.children]]
+type = "statusbar"
+text = "FX LABEL TEST"
+[[layout.children]]
+type = "row"
+gap = 1
+[[layout.children.children]]
+type = "knob"
+id = "wet_custom"
+label = "CUSTOM WET"
+bind = "scene.fx.param.value.0"
+[[layout.children.children]]
+type = "knob"
+id = "room_auto"
+bind = "scene.fx.param.value.1"
+)";
+
+    UiLayoutTemplate tpl{};
+    std::string err{};
+    REQUIRE(UiLayoutTomlLoader::loadFromString(toml, tpl, err));
+
+    FxEditorWidget widget(60, 0.1f, tpl);
+    UiState state{};
+    state.tracks.resize(1);
+    state.tracks[0].id = 0;
+    state.tracks[0].fxCount = 1;
+    state.tracks[0].fxChainIds.push_back("fx.reverb.schroeder");
+
+    UiNavState nav{};
+    nav.scene = UiScene::FxEditor;
+    nav.selectedTrack = 0;
+    nav.selectedFx = 0;
+    nav.cursor = 0;
+
+    UiTextBuffer out{};
+    widget.render(out, state, nav);
+    REQUIRE_FALSE(out.lines.empty());
+
+    bool hasTemplateLabel = false;
+    bool hasDescriptorFallbackLabel = false;
+    for (const std::string& line : out.lines) {
+        if (line.find("CUSTOM WET") != std::string::npos) {
+            hasTemplateLabel = true;
+        }
+        if (line.find("Room") != std::string::npos) {
+            hasDescriptorFallbackLabel = true;
+        }
+    }
+    REQUIRE(hasTemplateLabel);
+    REQUIRE(hasDescriptorFallbackLabel);
 }

@@ -1,0 +1,92 @@
+id = "fx_editor"
+
+[layout]
+type = "column"
+padding = 0
+gap = 0
+
+[[layout.children]]
+type = "statusbar"
+id = "header_title"
+text = "FX EDITOR"
+bind = "status.scene.title"
+width = "100%"
+
+[[layout.children]]
+type = "separator"
+id = "sep_top"
+height = 1
+width = "100%"
+
+[[layout.children]]
+type = "fx_editor_view"
+id = "fx_view"
+height = "auto"
+width = "100%"
+gap = 1
+
+[[layout.children.children]]
+type = "text"
+id = "fx_meta"
+bind = "status.fx.meta"
+width = "100%"
+
+[[layout.children.children]]
+type = "row"
+id = "fx_knobs_row"
+width = "100%"
+gap = 2
+
+[[layout.children.children.children]]
+type = "knob"
+id = "wet"
+label = "WET"
+bind = "scene.fx.param.value.0"
+width = "49%"
+
+[[layout.children.children.children]]
+type = "knob"
+id = "room"
+label = "ROOM"
+bind = "scene.fx.param.value.1"
+width = "49%"
+
+[[layout.children.children.children]]
+type = "knob"
+id = "damp"
+label = "DAMP"
+bind = "scene.fx.param.value.2"
+width = "49%"
+
+[[layout.children.children.children]]
+type = "knob"
+id = "width"
+label = "WIDTH"
+bind = "scene.fx.param.value.3"
+width = "49%"
+
+[[layout.children.children]]
+type = "anim_slot"
+id = "fx_anim"
+width = "100%"
+height = 5
+bind = "fx.anim.current"
+
+[[layout.children]]
+type = "separator"
+id = "sep_bottom"
+height = 1
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "action_status"
+bind = "status.action"
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "keys_hint"
+text = " keys [j/k focus] [/? adjust] [o apply] [esc back] "
+bind = "status.keys"
+width = "100%"

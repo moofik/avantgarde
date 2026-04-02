@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "contracts/IUiWidget.h"
 
@@ -18,6 +19,12 @@ struct UiWidgetFactoryOptions {
     float tracksBpmStep{1.0f};
     // Шаг изменения параметров в FX редакторе.
     float fxParamStep{0.05f};
+    // Включает загрузку декларативных TOML-лейаутов.
+    // В текущей strict-модели должен быть true, иначе фабрика кидает исключение.
+    bool enableTomlLayouts{true};
+    // Каталог(и), где ищем шаблоны `*.toml`.
+    // Первый найденный валидный шаблон используется.
+    std::vector<std::string> layoutSearchRoots{"assets/ui", "../assets/ui", "../../assets/ui"};
 };
 
 // Простая фабрика виджетов сцены.

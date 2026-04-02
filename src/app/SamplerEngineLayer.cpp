@@ -1,6 +1,7 @@
 #include "app/SamplerEngineLayer.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
@@ -29,6 +30,7 @@ constexpr uint8_t kMaxTrackCount = 32;
 
 // Резолвер ParamBridge использует эти указатели для адресации модулей.
 std::vector<ITrack*> gParamTracks{};
+IParameterized* gParamGlobalTransport{nullptr};
 
 uint8_t sanitizeTrackCount(uint8_t trackCount) noexcept {
     if (trackCount < kMinTrackCount) {
@@ -45,18 +47,66 @@ uint8_t clampTrack(uint8_t track, uint8_t trackCount) noexcept {
     return (track >= safeCount) ? static_cast<uint8_t>(safeCount - 1) : track;
 }
 
+float tempoToNorm(float bpm) noexcept {
+    constexpr float kMinTempo = 20.0f;
+    constexpr float kMaxTempo = 300.0f;
+    const float clamped = std::clamp(bpm, kMinTempo, kMaxTempo);
+    return (clamped - kMinTempo) / (kMaxTempo - kMinTempo);
+}
+
+float tsNumToNorm(uint8_t num) noexcept {
+    const int n = std::clamp<int>(static_cast<int>(num), 1, 32);
+    return static_cast<float>(n - 1) / 31.0f;
+}
+
+float tsDenToNorm(uint8_t den) noexcept {
+    constexpr std::array<uint8_t, 6> kAllowed{{1, 2, 4, 8, 16, 32}};
+    for (std::size_t i = 0; i < kAllowed.size(); ++i) {
+        if (kAllowed[i] == den) {
+            return static_cast<float>(i) / static_cast<float>(kAllowed.size() - 1);
+        }
+    }
+    return 0.4f; // индекс для 4/4 в сетке {1,2,4,8,16,32}
+}
+
+float quantToNorm(QuantizeMode q) noexcept {
+    switch (q) {
+        case QuantizeMode::None: return 0.0f;
+        case QuantizeMode::Beat: return 0.5f;
+        case QuantizeMode::Bar:
+        default:
+            return 1.0f;
+    }
+}
+
 IParameterized* resolveParamTarget(Target target) noexcept {
+    // Global transport surface:
+    // Target{trackId = -1, slotId = -1} -> ITransportBridge(IParameterized)
+    if (target.trackId == kRtTrackGlobal && target.slotId == kRtSlotTrackParams) {
+        return gParamGlobalTransport;
+    }
+
     if (target.trackId < 0 || static_cast<std::size_t>(target.trackId) >= gParamTracks.size()) {
         return nullptr;
     }
-    if (target.slotId < 0) {
-        return nullptr;
-    }
+
     ITrack* tr = gParamTracks[static_cast<std::size_t>(target.trackId)];
     if (!tr) {
         return nullptr;
     }
-    return tr->getModule(static_cast<std::size_t>(target.slotId));
+
+    // Track-local surface:
+    // Target{trackId = N, slotId = -1} -> ITrack(IParameterized)
+    if (target.slotId == kRtSlotTrackParams) {
+        return tr;
+    }
+
+    // FX-local surface:
+    // Target{trackId = N, slotId >= 0} -> IAudioModule(IParameterized)
+    if (target.slotId >= 0) {
+        return tr->getModule(static_cast<std::size_t>(target.slotId));
+    }
+    return nullptr;
 }
 
 std::string clipNameFromPath(const std::string& path) {
@@ -118,6 +168,8 @@ SamplerEngineLayer::SamplerEngineLayer()
 
 SamplerEngineLayer::~SamplerEngineLayer() {
     stop();
+    gParamGlobalTransport = nullptr;
+    gParamTracks.clear();
     delete impl_;
     impl_ = nullptr;
 }
@@ -155,12 +207,14 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
 
     // Публикуем треки для resolver'а параметров.
     impl_->clipCtl.assign(impl_->trackCount, nullptr);
-    gParamTracks.assign(impl_->trackCount, nullptr);
+    gParamTracks.assign(static_cast<std::size_t>(impl_->trackCount) + 1u, nullptr);
     for (uint8_t t = 0; t < impl_->trackCount; ++t) {
         impl_->clipCtl[t] = userTrackPtrs[t];
         gParamTracks[t] = userTrackPtrs[t];
     }
+    gParamTracks[impl_->trackCount] = previewClipPtr;
     impl_->previewClip = previewClipPtr;
+    gParamGlobalTransport = &impl_->transport;
     impl_->pb.setResolver(&resolveParamTarget);
 
     // Регистрируем треки в engine (порядок важен: [T1..Tn, Preview]).
@@ -304,7 +358,7 @@ void SamplerEngineLayer::setTransportPlaying(bool playing) noexcept {
     if (!impl_) {
         return;
     }
-    impl_->transport.setPlaying(playing);
+    impl_->transport.setParam(toParamIndex(TransportParamId::Playing), playing ? kRtValueOn : kRtValueOff);
 
     // Прокидываем global Play/Stop в треки (чтобы user tracks следовали transport gate).
     RtCommand cmd{};
@@ -322,7 +376,7 @@ void SamplerEngineLayer::setTempo(float bpm) noexcept {
     }
     // Обновляем и queue-команду, и control-копию транспорта.
     (void)impl_->controlDispatcher.setTempoBpm(bpm);
-    impl_->transport.setTempo(bpm);
+    impl_->transport.setParam(toParamIndex(TransportParamId::TempoNorm), tempoToNorm(bpm));
 }
 
 void SamplerEngineLayer::setQuantize(QuantizeMode q) noexcept {
@@ -330,7 +384,7 @@ void SamplerEngineLayer::setQuantize(QuantizeMode q) noexcept {
         return;
     }
     (void)impl_->controlDispatcher.setQuantizeMode(q);
-    impl_->transport.setQuantize(q);
+    impl_->transport.setParam(toParamIndex(TransportParamId::QuantizeNorm), quantToNorm(q));
 }
 
 void SamplerEngineLayer::setTimeSignature(uint8_t num, uint8_t den) noexcept {
@@ -338,7 +392,8 @@ void SamplerEngineLayer::setTimeSignature(uint8_t num, uint8_t den) noexcept {
         return;
     }
     (void)impl_->controlDispatcher.setTimeSignature(num, den);
-    impl_->transport.setTimeSignature(num, den);
+    impl_->transport.setParam(toParamIndex(TransportParamId::TimeSigNumNorm), tsNumToNorm(num));
+    impl_->transport.setParam(toParamIndex(TransportParamId::TimeSigDenNorm), tsDenToNorm(den));
 }
 
 bool SamplerEngineLayer::setTrackMuted(uint8_t track, bool muted) noexcept {

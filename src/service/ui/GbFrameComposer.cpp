@@ -113,7 +113,8 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
                                                   uint16_t width,
                                                   std::string_view headerTitle,
                                                   std::optional<std::size_t> pageOverride,
-                                                  std::string_view actionStatusLine) {
+                                                  std::string_view actionStatusLine,
+                                                  std::string_view keysHintLine) {
     if (width < 4) {
         return {};
     }
@@ -204,7 +205,9 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
     if (!actionStatusLine.empty()) {
         out << "║" << padRight(std::string(actionStatusLine), inner) << "║\n";
     }
-    out << "║" << padRight(" keys [j/k focus] [/? adj] [o apply] [F2 undo] [F9 redo] [p/s] [u/i/t/r] [q] ", inner)
+    const std::string defaultKeys = " keys [j/k focus] [/? adj] [o apply] [F2 undo] [F9 redo] [p/s] [u/i/t/r] [q] ";
+    const std::string keys = keysHintLine.empty() ? defaultKeys : std::string(keysHintLine);
+    out << "║" << padRight(keys, inner)
         << "║\n";
     out << "╚" << repeatUtf8("═", inner) << "╝\n";
     return out.str();

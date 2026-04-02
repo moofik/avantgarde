@@ -12,7 +12,12 @@
 using namespace avantgarde;
 
 int main(int argc, char** argv) {
-    SamplerUiMode uiMode = SamplerUiMode::Ansi;
+    SamplerUiMode uiMode =
+#if defined(__APPLE__)
+        SamplerUiMode::GbWindow;
+#else
+        SamplerUiMode::Ansi;
+#endif
     UiTheme uiTheme = UiTheme::Default;
     bool uiThemeProvided = false;
     uint8_t trackCount = 4;

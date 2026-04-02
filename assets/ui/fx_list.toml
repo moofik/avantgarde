@@ -1,0 +1,44 @@
+id = "fx_list"
+
+[layout]
+type = "column"
+padding = 0
+gap = 0
+
+[[layout.children]]
+type = "statusbar"
+id = "header_title"
+text = "FX LIST"
+bind = "status.scene.title"
+width = "100%"
+
+[[layout.children]]
+type = "separator"
+id = "sep_top"
+height = 1
+width = "100%"
+
+[[layout.children]]
+type = "list"
+id = "fx_list"
+height = "auto"
+width = "100%"
+
+[[layout.children]]
+type = "separator"
+id = "sep_bottom"
+height = 1
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "action_status"
+bind = "status.action"
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "keys_hint"
+text = " keys [j/k slot] [;/' focus] [/? adjust] [o apply] [esc back] "
+bind = "status.keys"
+width = "100%"

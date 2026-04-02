@@ -3,30 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <string_view>
 
 #include "contracts/FxRegistry.h"
+#include "service/ui/layout/SceneFrameAsciiRenderer.h"
 
 namespace avantgarde {
 namespace {
-
-constexpr const char* kFrameTop = "╔";
-constexpr const char* kFrameTopRight = "╗";
-constexpr const char* kFrameMid = "╠";
-constexpr const char* kFrameMidRight = "╣";
-constexpr const char* kFrameBottom = "╚";
-constexpr const char* kFrameBottomRight = "╝";
-constexpr const char* kFrameVert = "║";
-constexpr const char* kFrameH = "═";
-
-std::string repeatToken(std::string_view token, std::size_t count) {
-    std::string out;
-    out.reserve(token.size() * count);
-    for (std::size_t i = 0; i < count; ++i) {
-        out += token;
-    }
-    return out;
-}
 
 std::string trimMiddle(const std::string& s, std::size_t width) {
     if (s.size() <= width) {
@@ -51,8 +33,14 @@ std::string padRight(const std::string& s, std::size_t width) {
 
 } // namespace
 
-FxListWidget::FxListWidget(uint16_t frameWidth) noexcept
-    : frameWidth_(frameWidth) {}
+FxListWidget::FxListWidget(uint16_t frameWidth,
+                           std::optional<UiLayoutTemplate> layoutTemplate) noexcept
+    : frameWidth_(frameWidth) {
+    if (layoutTemplate.has_value()) {
+        layoutTemplate_ = layoutTemplate;
+        buildLayoutModel_(*layoutTemplate);
+    }
+}
 
 const char* FxListWidget::id() const noexcept {
     return "fx_list";
@@ -85,7 +73,84 @@ std::string FxListWidget::fxName_(const UiTrackStateView& track, uint16_t slot) 
     return "Unknown FX";
 }
 
+bool FxListWidget::buildPreparedLayout(UiPreparedLayout& out,
+                                       const UiState& rtState,
+                                       const UiNavState& navState) const {
+    if (!layoutTemplate_.has_value() || !layout_.enabled) {
+        return false;
+    }
+
+    const uint16_t frameWidth = std::max<uint16_t>(frameWidth_, 28U);
+    const std::size_t inner = static_cast<std::size_t>(frameWidth - 2U);
+    const uint8_t track = clampTrack_(navState.selectedTrack, rtState.tracks.size());
+    const UiTrackStateView* tr = rtState.tracks.empty() ? nullptr : &rtState.tracks[track];
+    const std::size_t fxCount = tr ? tr->fxCount : 0U;
+    const uint16_t selectedFx = clampFx_(navState.selectedFx, fxCount);
+
+    std::vector<std::string> rows{};
+    rows.reserve(listRows_);
+    int32_t selectedRow = -1;
+    const std::size_t listWidth = (inner > 10U) ? (inner - 10U) : inner;
+    const std::size_t start = (fxCount > listRows_ && selectedFx >= listRows_)
+                                  ? static_cast<std::size_t>(selectedFx + 1U - listRows_)
+                                  : 0U;
+    for (std::size_t row = 0; row < listRows_; ++row) {
+        const std::size_t idx = start + row;
+        if (idx >= fxCount || tr == nullptr) {
+            if (fxCount == 0U && row == 0U) {
+                rows.emplace_back("(empty) add effect via action: Add FX");
+            } else {
+                rows.emplace_back(" ");
+            }
+            continue;
+        }
+
+        std::string line = "S";
+        line += std::to_string(static_cast<unsigned>(idx + 1U));
+        line += " ";
+        line += trimMiddle(fxName_(*tr, static_cast<uint16_t>(idx)), listWidth);
+        rows.push_back(std::move(line));
+        if (idx == selectedFx) {
+            selectedRow = static_cast<int32_t>(row);
+        }
+    }
+    if (selectedRow < 0 && fxCount > 0U) {
+        selectedRow = 0;
+    }
+
+    char title[160]{};
+    std::snprintf(title,
+                  sizeof(title),
+                  " %s T%u slots:%u ",
+                  layout_.title.c_str(),
+                  static_cast<unsigned>(track + 1U),
+                  static_cast<unsigned>(fxCount));
+    const std::string keys = !layout_.keysHint.empty()
+                                 ? layout_.keysHint
+                                 : " keys [j/k slot] [;/' focus] [/? adj] [o apply] [esc] ";
+
+    UiPreparedLayoutBuilder builder{};
+    builder.sceneId("fx_list")
+        .templateRef(&(*layoutTemplate_))
+        .frameWidth(frameWidth)
+        .frameHeightHint(static_cast<uint16_t>(6U + listRows_))
+        .addComponent(UiStatusBarBuilder("header_title").text(title))
+        .addComponent(UiSeparatorBuilder("sep_top").style(UiSeparatorComponent::Style::Heavy))
+        .addComponent(UiListBuilder("fx_list")
+                          .rows(std::move(rows))
+                          .selectedRow(selectedRow)
+                          .marker(UiListComponent::Marker::Arrow))
+        .addComponent(UiSeparatorBuilder("sep_bottom").style(UiSeparatorComponent::Style::Heavy))
+        .addComponent(UiTextBuilder("action_status").text(buildActionStatusLine_(rtState, navState)))
+        .addComponent(UiTextBuilder("keys_hint").text(keys));
+
+    out = std::move(builder).build();
+    return true;
+}
+
 void FxListWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNavState& navState) {
+    out.clear();
+
     const std::size_t width = frameWidth_ < 28 ? 28 : frameWidth_;
     const std::size_t inner = width - 2U;
     const std::size_t listWidth = inner > 6 ? inner - 6 : inner;
@@ -97,25 +162,41 @@ void FxListWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNav
                                   ? static_cast<std::size_t>(selectedFx + 1U - listRows_)
                                   : 0U;
 
-    out.clear();
-    out.lines.reserve(static_cast<std::size_t>(listRows_) + 10U);
+    SceneFrame frame{};
+    frame.width = static_cast<uint16_t>(width);
+    frame.height = static_cast<uint16_t>(static_cast<std::size_t>(listRows_) + 7U);
+    frame.rects.push_back(SceneFrameRect{
+        .x = 0,
+        .y = 0,
+        .width = static_cast<uint16_t>(width),
+        .height = frame.height,
+    });
 
-    out.lines.push_back(std::string(kFrameTop) + repeatToken(kFrameH, inner) + kFrameTopRight);
-    {
-        char title[128]{};
-        std::snprintf(title,
-                      sizeof(title),
-                      " FX LIST T%u  slots:%u ",
-                      static_cast<unsigned>(track + 1U),
-                      static_cast<unsigned>(fxCount));
-        out.lines.push_back(std::string(kFrameVert) + padRight(title, inner) + kFrameVert);
-    }
-    out.lines.push_back(std::string(kFrameMid) + repeatToken(kFrameH, inner) + kFrameMidRight);
+    int y = 1;
+    char title[160]{};
+    std::snprintf(title,
+                  sizeof(title),
+                  " %s T%u slots:%u ",
+                  layout_.title.c_str(),
+                  static_cast<unsigned>(track + 1U),
+                  static_cast<unsigned>(fxCount));
+    frame.texts.push_back(SceneFrameText{.x = 1, .y = static_cast<int16_t>(y++), .text = padRight(title, inner)});
+    frame.hlines.push_back(SceneFrameHLine{
+        .x = 1,
+        .y = static_cast<int16_t>(y++),
+        .length = static_cast<uint16_t>(inner),
+        .glyph = "═"});
 
     if (fxCount == 0) {
-        out.lines.push_back(std::string(kFrameVert) + padRight(" (empty) add effect via action: Add FX ", inner) + kFrameVert);
+        frame.texts.push_back(SceneFrameText{
+            .x = 1,
+            .y = static_cast<int16_t>(y++),
+            .text = padRight(" (empty) add effect via action: Add FX ", inner)});
         for (std::size_t i = 1; i < listRows_; ++i) {
-            out.lines.push_back(std::string(kFrameVert) + padRight(" ", inner) + kFrameVert);
+            frame.texts.push_back(SceneFrameText{
+                .x = 1,
+                .y = static_cast<int16_t>(y++),
+                .text = padRight(" ", inner)});
         }
     } else {
         for (std::size_t row = 0; row < listRows_; ++row) {
@@ -129,14 +210,31 @@ void FxListWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNav
                 line += " ";
                 line += trimMiddle(fxName_(*tr, static_cast<uint16_t>(idx)), listWidth);
             }
-            out.lines.push_back(std::string(kFrameVert) + padRight(line, inner) + kFrameVert);
+            frame.texts.push_back(SceneFrameText{
+                .x = 1,
+                .y = static_cast<int16_t>(y++),
+                .text = padRight(line, inner)});
         }
     }
 
-    out.lines.push_back(std::string(kFrameMid) + repeatToken(kFrameH, inner) + kFrameMidRight);
-    out.lines.push_back(std::string(kFrameVert) + padRight(buildActionStatusLine_(rtState, navState), inner) + kFrameVert);
-    out.lines.push_back(std::string(kFrameVert) + padRight(" keys [j/k slot] [;/' focus] [/? adj] [o apply] [esc] ", inner) + kFrameVert);
-    out.lines.push_back(std::string(kFrameBottom) + repeatToken(kFrameH, inner) + kFrameBottomRight);
+    frame.hlines.push_back(SceneFrameHLine{
+        .x = 1,
+        .y = static_cast<int16_t>(y++),
+        .length = static_cast<uint16_t>(inner),
+        .glyph = "═"});
+    frame.texts.push_back(SceneFrameText{
+        .x = 1,
+        .y = static_cast<int16_t>(y++),
+        .text = padRight(buildActionStatusLine_(rtState, navState), inner)});
+    const std::string keysHint = (layout_.enabled && !layout_.keysHint.empty())
+                                     ? layout_.keysHint
+                                     : " keys [j/k slot] [;/' focus] [/? adj] [o apply] [esc] ";
+    frame.texts.push_back(SceneFrameText{
+        .x = 1,
+        .y = static_cast<int16_t>(y++),
+        .text = padRight(keysHint, inner)});
+
+    out.lines = SceneFrameAsciiRenderer::render(frame);
 }
 
 WidgetOutput FxListWidget::onGesture(UiGesture action, const UiState& rtState, UiNavState& navState) {
@@ -402,6 +500,36 @@ std::string FxListWidget::buildActionStatusLine_(const UiState& rtState, const U
             break;
     }
     return std::string(buf);
+}
+
+void FxListWidget::collectNodes_(const UiLayoutNode& root, std::vector<const UiLayoutNode*>& out) noexcept {
+    out.push_back(&root);
+    for (const UiLayoutNode& child : root.children) {
+        collectNodes_(child, out);
+    }
+}
+
+void FxListWidget::buildLayoutModel_(const UiLayoutTemplate& tpl) {
+    layout_ = LayoutModel{};
+    if (tpl.widgetId != "fx_list") {
+        return;
+    }
+    std::vector<const UiLayoutNode*> nodes{};
+    collectNodes_(tpl.root, nodes);
+    for (const UiLayoutNode* node : nodes) {
+        if (!node) {
+            continue;
+        }
+        if (node->type == UiLayoutNodeType::StatusBar && !node->text.empty()) {
+            layout_.title = node->text;
+        }
+        if (node->type == UiLayoutNodeType::Text &&
+            node->id == "keys_hint" &&
+            !node->text.empty()) {
+            layout_.keysHint = node->text;
+        }
+    }
+    layout_.enabled = true;
 }
 
 } // namespace avantgarde

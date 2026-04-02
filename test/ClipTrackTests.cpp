@@ -499,3 +499,36 @@ TEST_CASE("ClipTrack: clearSlot resets audio (no playback after clear)") {
     for (float v: t.out0) sumAfter += absf(v);
     REQUIRE(sumAfter < 1e-4f);
 }
+
+TEST_CASE("ClipTrack: IParameterized surface exposes and applies track params") {
+    avantgarde::ClipTrackImpl tr;
+
+    REQUIRE(tr.getParamCount() == 6);
+    REQUIRE(tr.getParamMeta(avantgarde::toParamIndex(avantgarde::TrackParamId::MuteEnabled)).name == "track.mute");
+
+    tr.setParam(avantgarde::toParamIndex(avantgarde::TrackParamId::Gain01), 0.25f);
+    REQUIRE(absf(tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::Gain01)) - 0.25f) < 1e-6f);
+
+    const int sr = 48000;
+    std::vector<int16_t> pcm = { 32767,32767,32767,32767 };
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_param_iface.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLooping(0, true) == true);
+
+    auto t = make_ctx(4);
+
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+    clear_out(t);
+    tr.process(t.ctx);
+    float sumBeforeMute = 0.0f;
+    for (float v : t.out0) sumBeforeMute += absf(v);
+    REQUIRE(sumBeforeMute > 0.05f);
+
+    tr.setParam(avantgarde::toParamIndex(avantgarde::TrackParamId::MuteEnabled), 1.0f);
+    clear_out(t);
+    tr.process(t.ctx);
+    float sumAfterMute = 0.0f;
+    for (float v : t.out0) sumAfterMute += absf(v);
+    REQUIRE(sumAfterMute < 1e-4f);
+}

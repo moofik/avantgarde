@@ -21,6 +21,12 @@ public:
     const TransportRtSnapshot& rt() const noexcept override;
     void advanceSampleTime(uint64_t frames) noexcept override;
 
+    // IParameterized (global transport surface).
+    std::size_t getParamCount() const override;
+    float getParam(std::size_t index) const override;
+    void setParam(std::size_t index, float value) override;
+    const ParamMeta& getParamMeta(std::size_t index) const override;
+
 private:
     std::atomic<bool> playingWrite_{false};
     std::atomic<uint8_t> tsNumWrite_{4};

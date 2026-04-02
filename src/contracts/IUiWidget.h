@@ -8,6 +8,7 @@
 #include "contracts/IUiGestureInput.h"
 #include "contracts/UiIntent.h"
 #include "contracts/UiNavState.h"
+#include "contracts/UiPreparedLayout.h"
 
 namespace avantgarde {
 
@@ -45,6 +46,15 @@ struct IUiWidget {
     virtual void render(UiTextBuffer& out,
                         const UiState& rtState,
                         const UiNavState& navState) = 0;
+
+    // Новый контракт (pipeline vNext):
+    // виджет подготавливает декларативную модель кадра без отрисовки.
+    // По умолчанию возвращает false (еще не реализовано конкретным виджетом).
+    virtual bool buildPreparedLayout(UiPreparedLayout&,
+                                     const UiState&,
+                                     const UiNavState&) const {
+        return false;
+    }
 
     // Обработка одного gesture-события.
     // navState можно менять напрямую (курсор/selection/scene-local state).

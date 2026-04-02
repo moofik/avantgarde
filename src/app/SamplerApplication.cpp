@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <exception>
 #include <string>
 #include <utility>
 
@@ -71,15 +72,20 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
     history_.clear();
 
     // 2) Сборка scene-графа (каждая функциональная сцена = виджет).
-    UiWidgetFactory widgetFactory(
-        UiWidgetFactoryOptions{
-            .frameWidth = config.gbTextWidth,
-            .tracksHeaderTitle = "AVANTGARDE",
-        });
-    (void)sceneHost_.registerWidget(UiScene::Tracks, widgetFactory.create(UiScene::Tracks));
-    (void)sceneHost_.registerWidget(UiScene::Manager, widgetFactory.create(UiScene::Manager));
-    (void)sceneHost_.registerWidget(UiScene::FxList, widgetFactory.create(UiScene::FxList));
-    (void)sceneHost_.registerWidget(UiScene::FxEditor, widgetFactory.create(UiScene::FxEditor));
+    try {
+        UiWidgetFactory widgetFactory(
+            UiWidgetFactoryOptions{
+                .frameWidth = config.gbTextWidth,
+                .tracksHeaderTitle = "AVANTGARDE",
+            });
+        (void)sceneHost_.registerWidget(UiScene::Tracks, widgetFactory.create(UiScene::Tracks));
+        (void)sceneHost_.registerWidget(UiScene::Manager, widgetFactory.create(UiScene::Manager));
+        (void)sceneHost_.registerWidget(UiScene::FxList, widgetFactory.create(UiScene::FxList));
+        (void)sceneHost_.registerWidget(UiScene::FxEditor, widgetFactory.create(UiScene::FxEditor));
+    } catch (const std::exception& ex) {
+        std::fprintf(stderr, "[APP][INIT][ERROR] %s\n", ex.what());
+        return 4;
+    }
     sceneHost_.setScene(UiScene::Tracks);
     sceneHost_.nav().selectedTrack = trCtl_.activeTrack;
     sceneHost_.nav().trackPage = static_cast<uint16_t>(trCtl_.activeTrack / 2U);
@@ -92,7 +98,11 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
 
     // 4) Запуск фонового input (terminal) и control-потока.
     stopUi_.store(false, std::memory_order_release);
-    io_.startTerminalInput(stopUi_);
+    // В оконном режиме input должен идти из окна, без зависимости от terminal focus.
+    // Поэтому terminal input thread запускаем только для неоконных backend-ов.
+    if (!io_.renderOnMainThread()) {
+        io_.startTerminalInput(stopUi_);
+    }
 
     controlThread_ = std::thread([this]() {
         while (!stopUi_.load(std::memory_order_acquire)) {

@@ -6,12 +6,38 @@ using namespace avantgarde;
 
 namespace {
 
+const UiLayoutTemplate& fakeTemplate() {
+    static const UiLayoutTemplate tpl = []() {
+        UiLayoutTemplate t{};
+        t.widgetId = "fake";
+        t.root.type = UiLayoutNodeType::Column;
+        UiLayoutNode line{};
+        line.type = UiLayoutNodeType::Text;
+        line.id = "main_line";
+        line.width.unit = UiLayoutSize::Unit::Percent;
+        line.width.value = 100.0f;
+        t.root.children.push_back(std::move(line));
+        return t;
+    }();
+    return tpl;
+}
+
 class FakeWidget final : public IUiWidget {
 public:
     const char* id() const noexcept override { return "fake"; }
 
     void render(UiTextBuffer& out, const UiState&, const UiNavState& navState) override {
         out.lines.push_back(navState.selectedTrack == 0 ? "track0" : "track1");
+    }
+
+    bool buildPreparedLayout(UiPreparedLayout& out, const UiState&, const UiNavState& navState) const override {
+        UiPreparedLayoutBuilder b{};
+        b.sceneId("fake")
+            .templateRef(&fakeTemplate())
+            .frameWidth(32)
+            .addComponent(UiTextBuilder("main_line").text(navState.selectedTrack == 0 ? "track0" : "track1"));
+        out = std::move(b).build();
+        return true;
     }
 
     WidgetOutput onGesture(UiGesture action, const UiState&, UiNavState& navState) override {
@@ -64,6 +90,29 @@ public:
     }
 };
 
+class FakePreparedWidget final : public IUiWidget {
+public:
+    const char* id() const noexcept override { return "fake_prepared"; }
+
+    void render(UiTextBuffer&, const UiState&, const UiNavState&) override {
+        renderCalled = true;
+    }
+
+    bool buildPreparedLayout(UiPreparedLayout& out, const UiState&, const UiNavState&) const override {
+        UiPreparedLayoutBuilder b{};
+        b.sceneId("fake_prepared")
+            .templateRef(&fakeTemplate())
+            .frameWidth(32)
+            .addComponent(UiTextBuilder("main_line").text("PREPARED"));
+        out = std::move(b).build();
+        return true;
+    }
+
+    WidgetOutput onGesture(UiGesture, const UiState&, UiNavState&) override { return {}; }
+
+    mutable bool renderCalled{false};
+};
+
 } // namespace
 
 TEST_CASE("UiSceneHost: registers widget and renders active scene") {
@@ -74,8 +123,28 @@ TEST_CASE("UiSceneHost: registers widget and renders active scene") {
     state.tracks.resize(2);
     UiTextBuffer out{};
     REQUIRE(host.renderActive(out, state));
-    REQUIRE(out.lines.size() == 1);
-    REQUIRE(out.lines[0] == "track0");
+    REQUIRE_FALSE(out.lines.empty());
+    bool hasTrack0 = false;
+    for (const std::string& line : out.lines) {
+        if (line.find("track0") != std::string::npos) {
+            hasTrack0 = true;
+            break;
+        }
+    }
+    REQUIRE(hasTrack0);
+}
+
+TEST_CASE("UiSceneHost: prefers prepared layout path over legacy widget render") {
+    UiSceneHost host;
+    auto widget = std::make_unique<FakePreparedWidget>();
+    FakePreparedWidget* ptr = widget.get();
+    REQUIRE(host.registerWidget(UiScene::Tracks, std::move(widget)));
+
+    UiState state{};
+    UiTextBuffer out{};
+    REQUIRE(host.renderActive(out, state));
+    REQUIRE(ptr != nullptr);
+    REQUIRE_FALSE(ptr->renderCalled);
 }
 
 TEST_CASE("UiSceneHost: handles global track navigation and delegates local input") {

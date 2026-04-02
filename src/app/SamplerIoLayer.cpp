@@ -109,6 +109,7 @@ bool SamplerIoLayer::renderOnMainThread() const noexcept {
 }
 
 void SamplerIoLayer::render(const UiState& state, const std::string& sceneFrame, bool showHeaderOverlay) {
+    (void)showHeaderOverlay;
     if (!renderer_) {
         return;
     }
@@ -116,7 +117,9 @@ void SamplerIoLayer::render(const UiState& state, const std::string& sceneFrame,
     // в backends, которые умеют custom frame.
     if (!sceneFrame.empty()) {
         if (auto* windowRenderer = dynamic_cast<MacGbWindowRenderer*>(renderer_.get())) {
-            windowRenderer->renderCustomFrame(sceneFrame, showHeaderOverlay);
+            // Для декларативного scene-frame renderer не должен подмешивать
+            // legacy header-overlay поверх пользовательского заголовка.
+            windowRenderer->renderCustomFrame(sceneFrame, /*showHeaderOverlay=*/false);
             return;
         }
         if (auto* gbRenderer = dynamic_cast<GothicGbUiRenderer*>(renderer_.get())) {

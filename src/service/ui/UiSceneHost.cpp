@@ -1,6 +1,11 @@
 #include "service/ui/UiSceneHost.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <stdexcept>
+#include <string>
+
+#include "service/ui/layout/UiPreparedLayoutAsciiRenderer.h"
 
 namespace avantgarde {
 namespace {
@@ -155,13 +160,23 @@ const UiNavState& UiSceneHost::nav() const noexcept {
 }
 
 bool UiSceneHost::renderActive(UiTextBuffer& out, const UiState& rtState) const {
-    // Always start with a clean frame buffer for deterministic rendering.
+    // Всегда начинаем с чистого кадрового буфера для детерминированного рендера.
     out.clear();
     const auto& widget = widgets_[sceneIndex_(nav_.scene)];
     if (!widget) {
-        return false;
+        const std::string msg = "UiSceneHost: no widget registered for active scene";
+        std::fprintf(stderr, "[UI][RENDER][ERROR] %s\n", msg.c_str());
+        throw std::runtime_error(msg);
     }
-    widget->render(out, rtState, nav_);
+    UiPreparedLayout prepared{};
+    if (!widget->buildPreparedLayout(prepared, rtState, nav_)) {
+        std::string msg = "UiSceneHost: widget '";
+        msg += widget->id();
+        msg += "' failed to build prepared layout";
+        std::fprintf(stderr, "[UI][RENDER][ERROR] %s\n", msg.c_str());
+        throw std::runtime_error(msg);
+    }
+    out.lines = UiPreparedLayoutAsciiRenderer::render(prepared);
     return true;
 }
 

@@ -1,9 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "contracts/IUiWidget.h"
+#include "contracts/UiLayout.h"
+#include "service/ui/layout/UiPreparedParams.h"
 
 namespace avantgarde {
 
@@ -21,6 +25,8 @@ public:
         float speedStep{0.05f};
         // Шаг BPM для pointer-режима.
         float bpmStep{1.0f};
+        // Декларативный TOML-лейаут (опционально).
+        std::optional<UiLayoutTemplate> layoutTemplate{};
     };
 
     TracksWidget() noexcept;
@@ -31,6 +37,10 @@ public:
     const char* id() const noexcept override;
     // Рендер текущего UiState в набор строк.
     void render(UiTextBuffer& out, const UiState& rtState, const UiNavState& navState) override;
+    // Подготовка vNext layout-модели (без геометрии и рендера).
+    bool buildPreparedLayout(UiPreparedLayout& out,
+                             const UiState& rtState,
+                             const UiNavState& navState) const override;
     // Обработка input для экрана треков (пока без локальных интентов).
     WidgetOutput onGesture(UiGesture action, const UiState& rtState, UiNavState& navState) override;
     // Возвращает scene-local action catalog (tracks screen).
@@ -39,8 +49,21 @@ public:
     WidgetOutput onAction(UiAction& action, const UiState& rtState, UiNavState& navState) override;
 
 private:
+    struct LayoutModel {
+        // true, если модель собрана из TOML-шаблона.
+        bool enabled{false};
+        // Кастомный заголовок главной рамки.
+        std::string title{};
+        // Кастомная строка подсказки клавиш.
+        std::string keysHint{};
+    };
+
     // Формирование строки статуса активного action pointer.
     std::string buildActionStatusLine_(const UiState& rtState, const UiNavState& navState) const;
+    // Подготовить карту параметров кадра (bind/id -> value) для composer-слоя.
+    UiPreparedParams buildPreparedLayoutParams_(const UiState& rtState, const UiNavState& navState) const;
+    // Построить runtime-модель из TOML-шаблона tracks-экрана.
+    void buildLayoutModel_(const UiLayoutTemplate& tpl);
     // Фактическая ширина рендера рамок.
     uint16_t frameWidth_{60};
     // Текст шапки экрана.
@@ -48,6 +71,10 @@ private:
     // Конфиг шагов pointer-редактирования.
     float speedStep_{0.05f};
     float bpmStep_{1.0f};
+    // Runtime-модель TOML-представления.
+    LayoutModel layout_{};
+    // Полный шаблон layout-дерева для fallback renderer.
+    std::optional<UiLayoutTemplate> layoutTemplate_{};
 };
 
 } // namespace avantgarde

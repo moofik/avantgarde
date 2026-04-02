@@ -1,0 +1,50 @@
+id = "manager"
+
+[layout]
+type = "column"
+padding = 0
+gap = 0
+
+[[layout.children]]
+type = "statusbar"
+id = "header_title"
+text = "MANAGER"
+bind = "status.scene.title"
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "cwd_line"
+bind = "status.cwd"
+width = "100%"
+
+[[layout.children]]
+type = "separator"
+id = "sep_top"
+height = 1
+width = "100%"
+
+[[layout.children]]
+type = "list"
+id = "manager_list"
+height = "auto"
+width = "100%"
+
+[[layout.children]]
+type = "separator"
+id = "sep_bottom"
+height = 1
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "status_line"
+bind = "status.message"
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "keys_hint"
+text = " keys [j/k] [enter/open] [h/up] [space preview] [a auto] [esc back] "
+bind = "status.keys"
+width = "100%"

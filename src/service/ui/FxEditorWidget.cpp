@@ -6,26 +6,11 @@
 #include <string>
 #include <string_view>
 
+#include "service/ui/UiBindResolver.h"
+#include "service/ui/layout/SceneFrameAsciiRenderer.h"
+
 namespace avantgarde {
 namespace {
-
-constexpr const char* kFrameTop = "╔";
-constexpr const char* kFrameTopRight = "╗";
-constexpr const char* kFrameMid = "╠";
-constexpr const char* kFrameMidRight = "╣";
-constexpr const char* kFrameBottom = "╚";
-constexpr const char* kFrameBottomRight = "╝";
-constexpr const char* kFrameVert = "║";
-constexpr const char* kFrameH = "═";
-
-std::string repeatToken(std::string_view token, std::size_t count) {
-    std::string out;
-    out.reserve(token.size() * count);
-    for (std::size_t i = 0; i < count; ++i) {
-        out += token;
-    }
-    return out;
-}
 
 std::string padRight(const std::string& s, std::size_t width) {
     if (s.size() >= width) {
@@ -52,9 +37,16 @@ std::string progressBar(float value01, std::size_t width) {
 
 } // namespace
 
-FxEditorWidget::FxEditorWidget(uint16_t frameWidth, float paramStep) noexcept
+FxEditorWidget::FxEditorWidget(uint16_t frameWidth,
+                               float paramStep,
+                               std::optional<UiLayoutTemplate> layoutTemplate) noexcept
     : frameWidth_(frameWidth),
-      paramStep_(paramStep > 0.0f ? paramStep : 0.05f) {}
+      paramStep_(paramStep > 0.0f ? paramStep : 0.05f) {
+    if (layoutTemplate.has_value()) {
+        layoutTemplate_ = layoutTemplate;
+        buildLayoutModel_(*layoutTemplate);
+    }
+}
 
 const char* FxEditorWidget::id() const noexcept {
     return "fx_editor";
@@ -133,7 +125,116 @@ const FxEditorWidget::SlotCache* FxEditorWidget::cacheForConst_(uint8_t track,
     return &it->second;
 }
 
+bool FxEditorWidget::buildPreparedLayout(UiPreparedLayout& out,
+                                         const UiState& rtState,
+                                         const UiNavState& navState) const {
+    if (!layoutTemplate_.has_value() || !layout_.enabled) {
+        return false;
+    }
+
+    const uint16_t frameWidth = std::max<uint16_t>(frameWidth_, 34U);
+    const uint8_t track = clampTrack_(navState.selectedTrack, rtState.tracks.size());
+    const std::size_t fxCount = (rtState.tracks.empty()) ? 0U : rtState.tracks[track].fxCount;
+    const uint16_t fxSlot = clampFx_(navState.selectedFx, fxCount);
+    const FxDescriptor* descriptor = resolveDescriptor_(rtState, track, fxSlot);
+    const std::size_t paramCount = descriptor ? descriptor->paramCount : 0U;
+    const uint16_t selectedParam = clampParamIndex_(navState.cursor, paramCount);
+    const SlotCache* cache = descriptor ? cacheForConst_(track, fxSlot, *descriptor) : nullptr;
+
+    auto resolveValue = [cache](const FxDescriptor& d, uint16_t idx) -> float {
+        if (idx >= d.paramCount) {
+            return 0.0f;
+        }
+        if (cache && idx < cache->values.size()) {
+            return cache->values[idx];
+        }
+        return d.params[idx].defaultValue;
+    };
+
+    char title[192]{};
+    const std::string titlePrefix = !layout_.title.empty() ? layout_.title : "FX EDITOR";
+    std::snprintf(title,
+                  sizeof(title),
+                  " %s T%u S%u (%s) ",
+                  titlePrefix.c_str(),
+                  static_cast<unsigned>(track + 1U),
+                  static_cast<unsigned>(fxSlot + 1U),
+                  descriptor ? std::string(descriptor->displayName).c_str() : "No FX");
+
+    const std::string keys = !layout_.keysHint.empty()
+                                 ? layout_.keysHint
+                                 : " keys [j/k focus] [/? adjust] [o apply] [esc back] ";
+
+    UiPreparedLayoutBuilder builder{};
+    builder.sceneId("fx_editor")
+        .templateRef(&(*layoutTemplate_))
+        .frameWidth(frameWidth)
+        .frameHeightHint(12U)
+        .addComponent(UiStatusBarBuilder("header_title").text(title))
+        .addComponent(UiSeparatorBuilder("sep_top").style(UiSeparatorComponent::Style::Heavy));
+
+    const std::string viewId = layout_.viewNodeId.empty() ? std::string("fx_view") : layout_.viewNodeId;
+    UiFxEditorViewBuilder view(viewId);
+
+    if (!layout_.metaNodeId.empty()) {
+        char meta[192]{};
+        std::snprintf(meta,
+                      sizeof(meta),
+                      " fx:%s  params:%u  sel:%u ",
+                      descriptor ? std::string(descriptor->displayName).c_str() : "none",
+                      static_cast<unsigned>(paramCount),
+                      static_cast<unsigned>(selectedParam + 1U));
+        view.addToSlot(layout_.metaNodeId, UiTextBuilder(layout_.metaNodeId).text(meta));
+    }
+
+    if (descriptor && paramCount > 0U) {
+        for (const LayoutKnob& knobCfg : layout_.knobs) {
+            if (knobCfg.nodeId.empty()) {
+                continue;
+            }
+            const uint16_t idx = resolveKnobParam_(knobCfg, selectedParam, paramCount);
+            const FxParamDescriptor& def = descriptor->params[idx];
+            const float value = std::clamp(resolveValue(*descriptor, idx), def.minValue, def.maxValue);
+            const float range = std::max(1e-6f, def.maxValue - def.minValue);
+            const float value01 = std::clamp((value - def.minValue) / range, 0.0f, 1.0f);
+            const std::string label = !knobCfg.label.empty() ? knobCfg.label : std::string(def.label);
+            view.addToSlot(knobCfg.nodeId,
+                           UiKnobBuilder(knobCfg.nodeId)
+                               .label(label)
+                               .value01(value01)
+                               .selected(idx == selectedParam));
+        }
+    }
+
+    if (layout_.anim.enabled && !layout_.anim.nodeId.empty()) {
+        float intensity01 = 0.0f;
+        if (descriptor && paramCount > 0U) {
+            const uint16_t idx = clampParamIndex_(selectedParam, paramCount);
+            const FxParamDescriptor& def = descriptor->params[idx];
+            const float value = std::clamp(resolveValue(*descriptor, idx), def.minValue, def.maxValue);
+            const float range = std::max(1e-6f, def.maxValue - def.minValue);
+            intensity01 = std::clamp((value - def.minValue) / range, 0.0f, 1.0f);
+        }
+        view.addToSlot(layout_.anim.nodeId,
+                       UiAnimSlotBuilder(layout_.anim.nodeId)
+                           .label(layout_.anim.bindCanonical)
+                           .animKey(layout_.anim.bindCanonical)
+                           .intensity01(intensity01));
+    }
+
+    builder.addComponent(std::move(view));
+
+    builder.addComponent(UiSeparatorBuilder("sep_bottom").style(UiSeparatorComponent::Style::Heavy))
+        .addComponent(UiTextBuilder("action_status").text(buildActionStatusLine_(rtState, navState)))
+        .addComponent(UiTextBuilder("keys_hint").text(keys));
+
+    out = std::move(builder).build();
+    return true;
+}
+
 void FxEditorWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNavState& navState) {
+    out.clear();
+
     const std::size_t width = frameWidth_ < 34 ? 34 : frameWidth_;
     const std::size_t inner = width - 2U;
 
@@ -145,62 +246,244 @@ void FxEditorWidget::render(UiTextBuffer& out, const UiState& rtState, const UiN
     const uint16_t selectedParam = clampParamIndex_(navState.cursor, paramCount);
     SlotCache* cache = descriptor ? &cacheFor_(track, fxSlot, *descriptor) : nullptr;
 
-    out.clear();
-    out.lines.reserve(14);
+    SceneFrame frame{};
+    frame.width = static_cast<uint16_t>(width);
+    frame.height = 14;
+    frame.rects.push_back(SceneFrameRect{
+        .x = 0,
+        .y = 0,
+        .width = static_cast<uint16_t>(width),
+        .height = frame.height,
+    });
 
-    out.lines.push_back(std::string(kFrameTop) + repeatToken(kFrameH, inner) + kFrameTopRight);
+    int y = 1;
     {
         char title[192]{};
+        const std::string titlePrefix = layout_.enabled ? layout_.title : "FX EDITOR";
         std::snprintf(title,
                       sizeof(title),
-                      " FX EDITOR T%u S%u (%s) ",
+                      " %s T%u S%u (%s) ",
+                      titlePrefix.c_str(),
                       static_cast<unsigned>(track + 1U),
                       static_cast<unsigned>(fxSlot + 1U),
                       descriptor ? std::string(descriptor->displayName).c_str() : "No FX");
-        out.lines.push_back(std::string(kFrameVert) + padRight(title, inner) + kFrameVert);
+        frame.texts.push_back(SceneFrameText{
+            .x = 1,
+            .y = static_cast<int16_t>(y++),
+            .text = padRight(title, inner)});
     }
-    out.lines.push_back(std::string(kFrameMid) + repeatToken(kFrameH, inner) + kFrameMidRight);
+    frame.hlines.push_back(SceneFrameHLine{
+        .x = 1,
+        .y = static_cast<int16_t>(y++),
+        .length = static_cast<uint16_t>(inner),
+        .glyph = "═"});
 
     if (!descriptor || paramCount == 0U || !cache) {
-        out.lines.push_back(std::string(kFrameVert) + padRight(" no fx params in current slot ", inner) + kFrameVert);
+        frame.texts.push_back(SceneFrameText{
+            .x = 1,
+            .y = static_cast<int16_t>(y++),
+            .text = padRight(" no fx params in current slot ", inner)});
         for (std::size_t i = 0; i < 6; ++i) {
-            out.lines.push_back(std::string(kFrameVert) + padRight(" ", inner) + kFrameVert);
+            frame.texts.push_back(SceneFrameText{
+                .x = 1,
+                .y = static_cast<int16_t>(y++),
+                .text = padRight(" ", inner)});
         }
     } else {
-        constexpr std::size_t kListRows = 7;
-        constexpr std::size_t kBarWidth = 14;
-        const std::size_t start = (paramCount > kListRows && selectedParam >= kListRows)
-                                      ? static_cast<std::size_t>(selectedParam + 1U - kListRows)
-                                      : 0U;
-
-        for (std::size_t row = 0; row < kListRows; ++row) {
-            const std::size_t idx = start + row;
-            std::string line = " ";
-            if (idx < paramCount) {
-                const bool selected = (idx == selectedParam);
+        if (layout_.enabled && !layout_.knobs.empty()) {
+            constexpr std::size_t kBarWidth = 10;
+            constexpr std::size_t kRows = 7;
+            std::size_t rendered = 0;
+            for (const LayoutKnob& knob : layout_.knobs) {
+                if (rendered >= kRows) {
+                    break;
+                }
+                const uint16_t idx = resolveKnobParam_(knob, selectedParam, paramCount);
                 const FxParamDescriptor& def = descriptor->params[idx];
                 const float value = std::clamp(cache->values[idx], def.minValue, def.maxValue);
                 const float range = std::max(1e-6f, def.maxValue - def.minValue);
                 const float norm = (value - def.minValue) / range;
-                char head[96]{};
-                std::snprintf(head,
-                              sizeof(head),
-                              "%c P%u %-8s %0.2f ",
+                const bool selected = (idx == selectedParam);
+
+                const std::string label = !knob.label.empty() ? knob.label : std::string(def.label);
+                char line[192]{};
+                std::snprintf(line,
+                              sizeof(line),
+                              " %c %-10s %5.2f %s",
                               selected ? '>' : ' ',
-                              static_cast<unsigned>(idx + 1U),
-                              std::string(def.label).c_str(),
-                              value);
-                line += head;
-                line += progressBar(norm, kBarWidth);
+                              label.c_str(),
+                              value,
+                              progressBar(norm, kBarWidth).c_str());
+                frame.texts.push_back(SceneFrameText{
+                    .x = 1,
+                    .y = static_cast<int16_t>(y++),
+                    .text = padRight(line, inner)});
+                ++rendered;
             }
-            out.lines.push_back(std::string(kFrameVert) + padRight(line, inner) + kFrameVert);
+
+            if (layout_.anim.enabled && rendered < kRows) {
+                char animLine[192]{};
+                std::snprintf(animLine,
+                              sizeof(animLine),
+                              "   anim:%s %ux%u ",
+                              layout_.anim.bindCanonical.c_str(),
+                              static_cast<unsigned>(layout_.anim.width),
+                              static_cast<unsigned>(layout_.anim.height));
+                frame.texts.push_back(SceneFrameText{
+                    .x = 1,
+                    .y = static_cast<int16_t>(y++),
+                    .text = padRight(animLine, inner)});
+                ++rendered;
+            }
+
+            for (; rendered < kRows; ++rendered) {
+                frame.texts.push_back(SceneFrameText{
+                    .x = 1,
+                    .y = static_cast<int16_t>(y++),
+                    .text = padRight(" ", inner)});
+            }
+        } else {
+            constexpr std::size_t kListRows = 7;
+            constexpr std::size_t kBarWidth = 14;
+            const std::size_t start = (paramCount > kListRows && selectedParam >= kListRows)
+                                          ? static_cast<std::size_t>(selectedParam + 1U - kListRows)
+                                          : 0U;
+
+            for (std::size_t row = 0; row < kListRows; ++row) {
+                const std::size_t idx = start + row;
+                std::string line = " ";
+                if (idx < paramCount) {
+                    const bool selected = (idx == selectedParam);
+                    const FxParamDescriptor& def = descriptor->params[idx];
+                    const float value = std::clamp(cache->values[idx], def.minValue, def.maxValue);
+                    const float range = std::max(1e-6f, def.maxValue - def.minValue);
+                    const float norm = (value - def.minValue) / range;
+                    char head[96]{};
+                    std::snprintf(head,
+                                  sizeof(head),
+                                  "%c P%u %-8s %0.2f ",
+                                  selected ? '>' : ' ',
+                                  static_cast<unsigned>(idx + 1U),
+                                  std::string(def.label).c_str(),
+                                  value);
+                    line += head;
+                    line += progressBar(norm, kBarWidth);
+                }
+                frame.texts.push_back(SceneFrameText{
+                    .x = 1,
+                    .y = static_cast<int16_t>(y++),
+                    .text = padRight(line, inner)});
+            }
         }
     }
 
-    out.lines.push_back(std::string(kFrameMid) + repeatToken(kFrameH, inner) + kFrameMidRight);
-    out.lines.push_back(std::string(kFrameVert) + padRight(buildActionStatusLine_(rtState, navState), inner) + kFrameVert);
-    out.lines.push_back(std::string(kFrameVert) + padRight(" keys [j/k focus] [/? adj] [o apply] [esc] ", inner) + kFrameVert);
-    out.lines.push_back(std::string(kFrameBottom) + repeatToken(kFrameH, inner) + kFrameBottomRight);
+    frame.hlines.push_back(SceneFrameHLine{
+        .x = 1,
+        .y = static_cast<int16_t>(y++),
+        .length = static_cast<uint16_t>(inner),
+        .glyph = "═"});
+    frame.texts.push_back(SceneFrameText{
+        .x = 1,
+        .y = static_cast<int16_t>(y++),
+        .text = padRight(buildActionStatusLine_(rtState, navState), inner)});
+    const std::string keysHint = (layout_.enabled && !layout_.keysHint.empty())
+                                     ? layout_.keysHint
+                                     : " keys [j/k focus] [/? adj] [o apply] [esc] ";
+    frame.texts.push_back(SceneFrameText{
+        .x = 1,
+        .y = static_cast<int16_t>(y++),
+        .text = padRight(keysHint, inner)});
+
+    out.lines = SceneFrameAsciiRenderer::render(frame);
+}
+
+uint16_t FxEditorWidget::resolveKnobParam_(const LayoutKnob& knob,
+                                           uint16_t selectedParam,
+                                           std::size_t paramCount) const noexcept {
+    if (paramCount == 0U) {
+        return 0U;
+    }
+    if (knob.paramIndex < 0) {
+        return clampParamIndex_(selectedParam, paramCount);
+    }
+    return clampParamIndex_(static_cast<uint16_t>(knob.paramIndex), paramCount);
+}
+
+void FxEditorWidget::collectNodes_(const UiLayoutNode& root,
+                                   std::vector<const UiLayoutNode*>& out) noexcept {
+    out.push_back(&root);
+    for (const UiLayoutNode& child : root.children) {
+        collectNodes_(child, out);
+    }
+}
+
+void FxEditorWidget::buildLayoutModel_(const UiLayoutTemplate& tpl) {
+    layout_ = LayoutModel{};
+    if (tpl.widgetId != "fx_editor") {
+        return;
+    }
+
+    std::vector<const UiLayoutNode*> nodes{};
+    collectNodes_(tpl.root, nodes);
+
+    for (const UiLayoutNode* n : nodes) {
+        if (!n) {
+            continue;
+        }
+        if (n->type == UiLayoutNodeType::FxEditorView && !n->id.empty()) {
+            layout_.viewNodeId = n->id;
+        }
+        if (n->type == UiLayoutNodeType::StatusBar && !n->text.empty()) {
+            layout_.title = n->text;
+        }
+        if (n->type == UiLayoutNodeType::Text &&
+            n->bind == "status.fx.meta" &&
+            !n->id.empty()) {
+            layout_.metaNodeId = n->id;
+        }
+        if (n->type == UiLayoutNodeType::Text &&
+            n->id == "keys_hint" &&
+            !n->text.empty()) {
+            layout_.keysHint = n->text;
+        }
+        if (n->type == UiLayoutNodeType::Knob) {
+            const UiBindResolution resolved = UiBindResolver::resolve(UiScene::FxEditor, UiLayoutNodeType::Knob, n->bind);
+            if (!resolved.ok) {
+                continue;
+            }
+            LayoutKnob k{};
+            k.nodeId = n->id;
+            k.label = n->label;
+            k.paramIndex = resolved.paramIndex;
+            k.bindCanonical = resolved.canonical;
+            layout_.knobs.push_back(std::move(k));
+        }
+        if (n->type == UiLayoutNodeType::AnimSlot && !layout_.anim.enabled) {
+            const UiBindResolution resolved = UiBindResolver::resolve(UiScene::FxEditor, UiLayoutNodeType::AnimSlot, n->bind);
+            if (!resolved.ok) {
+                continue;
+            }
+            layout_.anim.enabled = true;
+            layout_.anim.nodeId = n->id.empty() ? "fx_anim" : n->id;
+            layout_.anim.bindCanonical = resolved.canonical;
+            if (n->width.unit == UiLayoutSize::Unit::Px && n->width.value > 0.0f) {
+                layout_.anim.width = static_cast<uint16_t>(n->width.value);
+            }
+            if (n->height.unit == UiLayoutSize::Unit::Px && n->height.value > 0.0f) {
+                layout_.anim.height = static_cast<uint16_t>(n->height.value);
+            }
+            if (layout_.anim.width == 0U) {
+                layout_.anim.width = 128;
+            }
+            if (layout_.anim.height == 0U) {
+                layout_.anim.height = 128;
+            }
+        }
+    }
+
+    if (!layout_.knobs.empty() || layout_.anim.enabled || !layout_.title.empty()) {
+        layout_.enabled = true;
+    }
 }
 
 WidgetOutput FxEditorWidget::onGesture(UiGesture action, const UiState& rtState, UiNavState& navState) {

@@ -19,7 +19,8 @@ public:
                                             uint16_t width,
                                             std::string_view headerTitle = "AVANTGARDE",
                                             std::optional<std::size_t> pageOverride = std::nullopt,
-                                            std::string_view actionStatusLine = {});
+                                            std::string_view actionStatusLine = {},
+                                            std::string_view keysHintLine = {});
 };
 
 } // namespace avantgarde

@@ -1,0 +1,87 @@
+id = "tracks"
+
+[layout]
+type = "column"
+padding = 0
+gap = 0
+
+[[layout.children]]
+type = "statusbar"
+id = "header_title"
+text = "AVANTGARDE"
+bind = "status.scene.title"
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "transport_line"
+bind = "status.transport"
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "active_line"
+bind = "status.transport.active"
+width = "100%"
+
+[[layout.children]]
+type = "separator"
+id = "sep_top"
+height = 1
+width = "100%"
+
+[[layout.children]]
+type = "track_view"
+id = "track_view"
+height = "auto"
+width = "100%"
+gap = 1
+
+[[layout.children.children]]
+type = "list"
+id = "tracks_body"
+width = "100%"
+
+[[layout.children.children]]
+type = "row"
+id = "track_knobs_row"
+width = "100%"
+gap = 1
+
+[[layout.children.children.children]]
+type = "knob"
+id = "track_speed"
+label = "SPD"
+bind = "speed"
+
+[[layout.children.children.children]]
+type = "knob"
+id = "track_gain"
+label = "GAIN"
+bind = "c"
+
+[[layout.children.children]]
+type = "anim_slot"
+id = "track_anim"
+bind = "current"
+height = 3
+width = "100%"
+
+[[layout.children]]
+type = "separator"
+id = "sep_bottom"
+height = 1
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "action_status"
+bind = "status.action"
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "keys_hint"
+text = " keys [j/k focus] [/? adjust] [o apply] [F2 undo] [F9 redo] [F11/F12 pages] [q] "
+bind = "status.keys"
+width = "100%"

@@ -3,39 +3,26 @@
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
-#include <string_view>
+#include <cstdio>
+
+#include "service/ui/layout/SceneFrameAsciiRenderer.h"
 
 namespace avantgarde {
-namespace {
 
-constexpr const char* kFrameTop = "╔";
-constexpr const char* kFrameTopRight = "╗";
-constexpr const char* kFrameMid = "╠";
-constexpr const char* kFrameMidRight = "╣";
-constexpr const char* kFrameBottom = "╚";
-constexpr const char* kFrameBottomRight = "╝";
-constexpr const char* kFrameVert = "║";
-constexpr const char* kFrameH = "═";
-
-std::string repeatToken(std::string_view token, std::size_t count) {
-    std::string out;
-    out.reserve(token.size() * count);
-    for (std::size_t i = 0; i < count; ++i) {
-        out += token;
+ManagerWidget::ManagerWidget(uint16_t frameWidth,
+                             std::optional<UiLayoutTemplate> layoutTemplate) noexcept
+    : frameWidth_(frameWidth) {
+    if (layoutTemplate.has_value()) {
+        layoutTemplate_ = layoutTemplate;
+        buildLayoutModel_(*layoutTemplate);
     }
-    return out;
 }
-
-} // namespace
-
-ManagerWidget::ManagerWidget(uint16_t frameWidth) noexcept
-    : frameWidth_(frameWidth) {}
 
 const char* ManagerWidget::id() const noexcept {
     return "manager";
 }
 
-void ManagerWidget::refresh_(UiNavState& navState) {
+void ManagerWidget::refresh_(UiNavState& navState) const {
     if (navState.managerCwd.empty()) {
         navState.managerCwd = ".";
     }
@@ -110,6 +97,82 @@ const ManagerWidget::Entry* ManagerWidget::selected_(const UiNavState& navState)
     return &entries_[idx];
 }
 
+bool ManagerWidget::buildPreparedLayout(UiPreparedLayout& out,
+                                        const UiState&,
+                                        const UiNavState& navState) const {
+    if (!layoutTemplate_.has_value() || !layout_.enabled) {
+        return false;
+    }
+
+    // Подготовка списка файлов может менять только UI-кэш, поэтому работаем с
+    // локальной копией navState и не мутируем исходный стейт хоста.
+    UiNavState nav = navState;
+    refresh_(nav);
+
+    const uint16_t frameWidth = std::max<uint16_t>(frameWidth_, 20U);
+    const std::size_t inner = static_cast<std::size_t>(frameWidth - 2U);
+    const std::size_t nameWidth = (inner > 8U) ? (inner - 8U) : inner;
+
+    std::vector<std::string> rows{};
+    rows.reserve(listRows_);
+    int32_t selectedRow = -1;
+    const std::size_t start = std::min<std::size_t>(nav.scroll, entries_.size());
+    for (std::size_t row = 0; row < listRows_; ++row) {
+        const std::size_t idx = start + row;
+        if (idx >= entries_.size()) {
+            rows.emplace_back(" ");
+            continue;
+        }
+        const Entry& e = entries_[idx];
+        std::string line = e.isDir ? "[D] " : "[F] ";
+        line += trimMiddle_(e.name + (e.isDir ? "/" : ""), nameWidth);
+        rows.push_back(std::move(line));
+        if (idx == nav.cursor) {
+            selectedRow = static_cast<int32_t>(row);
+        }
+    }
+    if (selectedRow < 0 && !rows.empty() && !entries_.empty()) {
+        selectedRow = 0;
+    }
+
+    char title[196]{};
+    std::snprintf(title,
+                  sizeof(title),
+                  " %s T%u AUTO:%c ",
+                  layout_.title.c_str(),
+                  static_cast<unsigned>(nav.selectedTrack + 1U),
+                  autoPreview_ ? 'Y' : 'N');
+    const std::size_t cwdAvail = (inner > 6U) ? (inner - 6U) : inner;
+    const std::string cwdLine = " CWD:" + trimMiddle_(nav.managerCwd, cwdAvail);
+
+    std::string status = " status: ready ";
+    if (!lastError_.empty()) {
+        status = " err:" + lastError_ + " ";
+    }
+    const std::string keys = !layout_.keysHint.empty()
+                                 ? layout_.keysHint
+                                 : " keys [j/k] [enter/open] [h/up] [space preview] [a auto] [esc back] ";
+
+    UiPreparedLayoutBuilder builder{};
+    builder.sceneId("manager")
+        .templateRef(&(*layoutTemplate_))
+        .frameWidth(frameWidth)
+        .frameHeightHint(static_cast<uint16_t>(6U + listRows_))
+        .addComponent(UiStatusBarBuilder("header_title").text(title))
+        .addComponent(UiTextBuilder("cwd_line").text(std::move(cwdLine)))
+        .addComponent(UiSeparatorBuilder("sep_top").style(UiSeparatorComponent::Style::Heavy))
+        .addComponent(UiListBuilder("manager_list")
+                          .rows(std::move(rows))
+                          .selectedRow(selectedRow)
+                          .marker(UiListComponent::Marker::Arrow))
+        .addComponent(UiSeparatorBuilder("sep_bottom").style(UiSeparatorComponent::Style::Heavy))
+        .addComponent(UiTextBuilder("status_line").text(std::move(status)))
+        .addComponent(UiTextBuilder("keys_hint").text(keys));
+
+    out = std::move(builder).build();
+    return true;
+}
+
 bool ManagerWidget::isAudioFile_(const std::string& name) {
     const std::string lower = toLower_(name);
     return lower.ends_with(".wav") || lower.ends_with(".aiff") || lower.ends_with(".aif") || lower.ends_with(".flac");
@@ -147,21 +210,33 @@ void ManagerWidget::render(UiTextBuffer& out, const UiState&, const UiNavState& 
     UiNavState nav = navState;
     refresh_(nav);
 
-    const std::size_t width = frameWidth_ < 20 ? 20 : frameWidth_;
+    out.clear();
+    const uint16_t width = frameWidth_ < 20 ? 20 : frameWidth_;
+
     const std::size_t inner = width - 2U;
     const std::size_t listWidth = inner > 4 ? inner - 4 : inner;
+    SceneFrame frame{};
+    frame.width = width;
+    frame.height = static_cast<uint16_t>(static_cast<std::size_t>(listRows_) + 7U);
+    frame.rects.push_back(SceneFrameRect{
+        .x = 0,
+        .y = 0,
+        .width = width,
+        .height = frame.height,
+    });
 
-    out.clear();
-    out.lines.reserve(static_cast<std::size_t>(listRows_) + 10U);
-
-    out.lines.push_back(std::string(kFrameTop) + repeatToken(kFrameH, inner) + kFrameTopRight);
-    const std::string title = " MANAGER T" + std::to_string(static_cast<unsigned>(nav.selectedTrack + 1U)) +
-                              " AUTO:" + (autoPreview_ ? "Y" : "N") + " ";
-    out.lines.push_back(std::string(kFrameVert) + padRight_(title, inner) + kFrameVert);
-
+    int y = 1;
+    char title[196]{};
+    std::snprintf(title,
+                  sizeof(title),
+                  " %s T%u AUTO:%c ",
+                  layout_.title.c_str(),
+                  static_cast<unsigned>(nav.selectedTrack + 1U),
+                  autoPreview_ ? 'Y' : 'N');
+    frame.texts.push_back(SceneFrameText{.x = 1, .y = static_cast<int16_t>(y++), .text = padRight_(title, inner)});
     const std::string cwdLine = " CWD:" + trimMiddle_(nav.managerCwd, inner > 6 ? inner - 6 : inner);
-    out.lines.push_back(std::string(kFrameVert) + padRight_(cwdLine, inner) + kFrameVert);
-    out.lines.push_back(std::string(kFrameMid) + repeatToken(kFrameH, inner) + kFrameMidRight);
+    frame.texts.push_back(SceneFrameText{.x = 1, .y = static_cast<int16_t>(y++), .text = padRight_(cwdLine, inner)});
+    frame.hlines.push_back(SceneFrameHLine{.x = 1, .y = static_cast<int16_t>(y++), .length = static_cast<uint16_t>(inner), .glyph = "═"});
 
     const std::size_t start = std::min<std::size_t>(nav.scroll, entries_.size());
     for (std::size_t row = 0; row < listRows_; ++row) {
@@ -174,16 +249,20 @@ void ManagerWidget::render(UiTextBuffer& out, const UiState&, const UiNavState& 
             std::string name = e.name + (e.isDir ? "/" : "");
             line += trimMiddle_(name, listWidth);
         }
-        out.lines.push_back(std::string(kFrameVert) + padRight_(line, inner) + kFrameVert);
+        frame.texts.push_back(SceneFrameText{
+            .x = 1,
+            .y = static_cast<int16_t>(y++),
+            .text = padRight_(line, inner)});
     }
-
-    out.lines.push_back(std::string(kFrameMid) + repeatToken(kFrameH, inner) + kFrameMidRight);
+    frame.hlines.push_back(SceneFrameHLine{.x = 1, .y = static_cast<int16_t>(y++), .length = static_cast<uint16_t>(inner), .glyph = "═"});
     std::string status = " keys [j/k] [enter] [h] [space] [a] [esc] ";
     if (!lastError_.empty()) {
         status = " err:" + lastError_ + " ";
+    } else if (layout_.enabled && !layout_.keysHint.empty()) {
+        status = layout_.keysHint;
     }
-    out.lines.push_back(std::string(kFrameVert) + padRight_(status, inner) + kFrameVert);
-    out.lines.push_back(std::string(kFrameBottom) + repeatToken(kFrameH, inner) + kFrameBottomRight);
+    frame.texts.push_back(SceneFrameText{.x = 1, .y = static_cast<int16_t>(y++), .text = padRight_(status, inner)});
+    out.lines = SceneFrameAsciiRenderer::render(frame);
 }
 
 WidgetOutput ManagerWidget::onGesture(UiGesture action, const UiState&, UiNavState& navState) {
@@ -289,6 +368,36 @@ WidgetOutput ManagerWidget::onGesture(UiGesture action, const UiState&, UiNavSta
     }
 
     return out;
+}
+
+void ManagerWidget::collectNodes_(const UiLayoutNode& root, std::vector<const UiLayoutNode*>& out) noexcept {
+    out.push_back(&root);
+    for (const UiLayoutNode& child : root.children) {
+        collectNodes_(child, out);
+    }
+}
+
+void ManagerWidget::buildLayoutModel_(const UiLayoutTemplate& tpl) {
+    layout_ = LayoutModel{};
+    if (tpl.widgetId != "manager") {
+        return;
+    }
+    std::vector<const UiLayoutNode*> nodes{};
+    collectNodes_(tpl.root, nodes);
+    for (const UiLayoutNode* node : nodes) {
+        if (!node) {
+            continue;
+        }
+        if (node->type == UiLayoutNodeType::StatusBar && !node->text.empty()) {
+            layout_.title = node->text;
+        }
+        if (node->type == UiLayoutNodeType::Text &&
+            node->id == "keys_hint" &&
+            !node->text.empty()) {
+            layout_.keysHint = node->text;
+        }
+    }
+    layout_.enabled = true;
 }
 
 } // namespace avantgarde

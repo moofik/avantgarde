@@ -26,7 +26,8 @@ public:
     const UiNavState& nav() const noexcept;
 
     // Рендер активной сцены в буфер.
-    // Возвращает false, если для сцены не зарегистрирован виджет.
+    // В strict-режиме кидает исключение, если для сцены нет виджета
+    // или виджет не смог построить prepared-layout.
     bool renderActive(UiTextBuffer& out, const UiState& rtState) const;
 
     // Обрабатывает input:

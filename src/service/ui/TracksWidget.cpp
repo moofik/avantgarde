@@ -3,9 +3,12 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <sstream>
+#include <string>
+#include <vector>
 
-#include "service/ui/GbFrameComposer.h"
+#include "service/ui/layout/UiNodeComponentComposer.h"
+#include "service/ui/layout/SceneFrameAsciiRenderer.h"
+#include "service/ui/layout/TracksSceneFrameBuilder.h"
 
 namespace avantgarde {
 namespace {
@@ -74,6 +77,47 @@ const char* onOff(bool v) noexcept {
     return v ? "ON" : "OFF";
 }
 
+std::string clipShort(const std::string& clipName, std::size_t maxLen) {
+    if (clipName.empty()) {
+        return "-";
+    }
+    if (clipName.size() <= maxLen) {
+        return clipName;
+    }
+    if (maxLen <= 3U) {
+        return clipName.substr(0, maxLen);
+    }
+    return clipName.substr(0, maxLen - 3U) + "...";
+}
+
+std::string makeBar(float value01, std::size_t width) {
+    const float v = std::clamp(value01, 0.0f, 1.0f);
+    const std::size_t filled = static_cast<std::size_t>(v * static_cast<float>(width));
+    std::string out;
+    out.reserve(width);
+    for (std::size_t i = 0; i < width; ++i) {
+        out.push_back(i < filled ? '#' : '.');
+    }
+    return out;
+}
+
+float speedTo01(float speed) noexcept {
+    constexpr float kMin = 0.25f;
+    constexpr float kMax = 4.0f;
+    const float clamped = std::clamp(speed, kMin, kMax);
+    return (clamped - kMin) / (kMax - kMin);
+}
+
+const char* trackStateToStr(UiTrackState s) noexcept {
+    switch (s) {
+        case UiTrackState::Empty: return "EMPTY";
+        case UiTrackState::Stopped: return "STOP ";
+        case UiTrackState::Playing: return "PLAY ";
+        case UiTrackState::Recording: return "REC  ";
+        default: return "UNK  ";
+    }
+}
+
 } // namespace
 
 TracksWidget::TracksWidget() noexcept = default;
@@ -82,29 +126,204 @@ TracksWidget::TracksWidget(const Options& options) noexcept
     : frameWidth_(options.frameWidth),
       headerTitle_(options.headerTitle),
       speedStep_(options.speedStep > 0.0f ? options.speedStep : 0.05f),
-      bpmStep_(options.bpmStep > 0.0f ? options.bpmStep : 1.0f) {}
+      bpmStep_(options.bpmStep > 0.0f ? options.bpmStep : 1.0f) {
+    if (options.layoutTemplate.has_value()) {
+        layoutTemplate_ = options.layoutTemplate;
+        buildLayoutModel_(*options.layoutTemplate);
+    }
+}
 
 const char* TracksWidget::id() const noexcept {
     return "tracks";
 }
 
+bool TracksWidget::buildPreparedLayout(UiPreparedLayout& out,
+                                       const UiState& rtState,
+                                       const UiNavState& navState) const {
+    if (!layoutTemplate_.has_value() || !layout_.enabled) {
+        return false;
+    }
+
+    const uint16_t frameWidth = std::max<uint16_t>(frameWidth_, 34U);
+    UiPreparedParams preparedParams = buildPreparedLayoutParams_(rtState, navState);
+    uint16_t frameHeightHint = 12U;
+    if (auto h = preparedParams.findInteger("frame.heightHint"); h.has_value()) {
+        frameHeightHint = static_cast<uint16_t>(std::clamp<int32_t>(*h, 4, 4096));
+    }
+
+    UiPreparedLayoutBuilder builder{};
+    builder.sceneId("tracks")
+        .templateRef(&(*layoutTemplate_))
+        .frameWidth(frameWidth)
+        .frameHeightHint(frameHeightHint);
+
+    UiNodeComponentComposer::compose(UiScene::Tracks, *layoutTemplate_, preparedParams, builder);
+
+    out = std::move(builder).build();
+    return true;
+}
+
+UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState,
+                                                          const UiNavState& navState) const {
+    UiPreparedParams params{};
+
+    const std::size_t totalTracks = rtState.tracks.size();
+    const std::size_t totalPages = std::max<std::size_t>(1U, (totalTracks + kTracksPerPage - 1U) / kTracksPerPage);
+    const uint8_t selectedTrack = clampTrackIndex(navState.selectedTrack, totalTracks);
+    const uint8_t activeTrack = (totalTracks == 0U)
+                                    ? 0U
+                                    : clampTrackIndex(rtState.transport.activeTrack, totalTracks);
+    const std::size_t pageIndex = (totalTracks == 0U)
+                                      ? 0U
+                                      : std::min<std::size_t>(navState.trackPage, totalPages - 1U);
+    const std::size_t pageStart = pageIndex * kTracksPerPage;
+    const std::size_t pageEnd = std::min<std::size_t>(pageStart + kTracksPerPage, totalTracks);
+
+    const uint16_t frameWidth = std::max<uint16_t>(frameWidth_, 34U);
+    const std::size_t inner = static_cast<std::size_t>(frameWidth - 2U);
+    const std::size_t clipWidth = (inner > 38U) ? (inner - 38U) : 16U;
+    const std::size_t meterWidth = (inner > 40U) ? std::min<std::size_t>(inner - 40U, 24U) : 12U;
+
+    std::string transportLine{};
+    {
+        char line[256]{};
+        std::snprintf(line, sizeof(line), " TRN:%s BPM:%5.1f TS:%u/%u Q:%s OVF:%c ",
+                      rtState.transport.playing ? "PLAY" : "STOP",
+                      rtState.transport.bpm,
+                      static_cast<unsigned>(rtState.transport.tsNum),
+                      static_cast<unsigned>(rtState.transport.tsDen),
+                      quantToStr(rtState.transport.quant),
+                      rtState.telemetry.rtQueueOverflow ? 'Y' : 'N');
+        transportLine = line;
+    }
+
+    std::string activeLine{};
+    {
+        char line[256]{};
+        std::snprintf(line, sizeof(line), " ACTIVE:T%u XRUN:%llu PG:%u/%u ",
+                      static_cast<unsigned>(activeTrack + 1U),
+                      static_cast<unsigned long long>(rtState.telemetry.xruns),
+                      static_cast<unsigned>(pageIndex + 1U),
+                      static_cast<unsigned>(totalPages));
+        activeLine = line;
+    }
+
+    std::vector<std::string> trackRows{};
+    int32_t selectedRow = -1;
+    if (totalTracks == 0U) {
+        trackRows.push_back(" no tracks configured ");
+        selectedRow = 0;
+    } else {
+        char line[256]{};
+        for (std::size_t i = pageStart; i < pageEnd; ++i) {
+            const UiTrackStateView& tr = rtState.tracks[i];
+            const bool isActive = (tr.id == activeTrack);
+            const bool isSelected = (tr.id == selectedTrack);
+            if (isSelected && selectedRow < 0) {
+                selectedRow = static_cast<int32_t>(trackRows.size());
+            }
+
+            std::snprintf(line, sizeof(line), " %s T%u %-5s clip:%s",
+                          isActive ? "▶" : " ",
+                          static_cast<unsigned>(tr.id + 1U),
+                          trackStateToStr(tr.state),
+                          clipShort(tr.clipName, clipWidth).c_str());
+            trackRows.emplace_back(line);
+
+            std::snprintf(line, sizeof(line), "   bars:%u  fx:%u  loop:%c  m:%c  a:%c",
+                          static_cast<unsigned>(tr.bars),
+                          static_cast<unsigned>(tr.fxCount),
+                          tr.loop ? 'Y' : 'N',
+                          tr.muted ? 'Y' : 'N',
+                          tr.armed ? 'Y' : 'N');
+            trackRows.emplace_back(line);
+
+            std::snprintf(line, sizeof(line), "   spd:%1.2f [%s]",
+                          tr.stretchRatio,
+                          makeBar(speedTo01(tr.stretchRatio), meterWidth).c_str());
+            trackRows.emplace_back(line);
+
+            std::snprintf(line, sizeof(line), "   g  :%1.2f [%s]",
+                          tr.gain01,
+                          makeBar(tr.gain01, meterWidth).c_str());
+            trackRows.emplace_back(line);
+
+            if (i + 1U < pageEnd) {
+                trackRows.emplace_back(" ");
+            }
+        }
+        if (selectedRow < 0) {
+            selectedRow = 0;
+        }
+    }
+
+    const std::string title = !layout_.title.empty() ? layout_.title : headerTitle_;
+    const std::string actionLine = buildActionStatusLine_(rtState, navState);
+    const std::string keys = !layout_.keysHint.empty()
+                                 ? layout_.keysHint
+                                 : " keys [j/k focus] [/? adj] [o apply] [F2 undo] [F9 redo] [q] ";
+
+    params.text["status.scene.title"] = title;
+    params.text["status.transport"] = transportLine;
+    params.text["status.transport.active"] = activeLine;
+    params.text["status.action"] = actionLine;
+    params.text["status.keys"] = keys;
+    params.text["header_title"] = title;
+    params.text["transport_line"] = transportLine;
+    params.text["active_line"] = activeLine;
+    params.text["action_status"] = actionLine;
+    params.text["keys_hint"] = keys;
+
+    params.rows["tracks_body"] = trackRows;
+    params.integer["tracks_body.selected"] = selectedRow;
+    params.integer["frame.heightHint"] = static_cast<int32_t>(8U + std::max<std::size_t>(1U, trackRows.size()));
+
+    const UiTrackStateView* selectedTrackView = nullptr;
+    if (totalTracks > 0U) {
+        selectedTrackView = &rtState.tracks[selectedTrack];
+    }
+    const float selectedSpeed01 = selectedTrackView ? speedTo01(selectedTrackView->stretchRatio) : 0.0f;
+    const float selectedGain01 = selectedTrackView ? std::clamp(selectedTrackView->gain01, 0.0f, 1.0f) : 0.0f;
+    constexpr float kMinBpm = 40.0f;
+    constexpr float kMaxBpm = 220.0f;
+    const float bpm01 = std::clamp((rtState.transport.bpm - kMinBpm) / (kMaxBpm - kMinBpm), 0.0f, 1.0f);
+
+    params.number["track.selected.speed"] = selectedSpeed01;
+    params.number["track.selected.gain"] = selectedGain01;
+    params.number["transport.bpm"] = bpm01;
+    params.number["fx.anim.current"] = selectedGain01;
+    params.number["current"] = selectedGain01;
+    params.text["fx.anim.current.label"] = "track.anim";
+    params.text["fx.anim.current.animKey"] = "fx.anim.current";
+    params.text["current.label"] = "track.anim";
+    params.text["current.animKey"] = "fx.anim.current";
+
+    UiAction::Id selectedActionId = UiAction::Id::None;
+    {
+        const UiActionCatalog actions = queryAvailableActions(rtState, navState);
+        if (!actions.actions.empty()) {
+            const uint16_t idx = std::min<uint16_t>(actions.currentIndex, static_cast<uint16_t>(actions.actions.size() - 1U));
+            selectedActionId = actions.actions[idx].def.id;
+        }
+    }
+    params.flag["track.selected.speed.selected"] = (selectedActionId == UiAction::Id::SceneTrackSpeed);
+    params.flag["track.selected.gain.selected"] = (selectedActionId == UiAction::Id::SceneTrackGain);
+    params.flag["transport.bpm.selected"] = (selectedActionId == UiAction::Id::SceneTempoBpm);
+
+    return params;
+}
+
 void TracksWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNavState& navState) {
     // Всегда рендерим полный кадр заново, чтобы не копить артефакты.
     out.clear();
-    // Композер собирает готовый монохромный GB-кадр.
-    const std::string frame = GbFrameComposer::buildMonochromeFrame(
+    const SceneFrame frame = TracksSceneFrameBuilder::build(
         rtState,
+        navState,
         frameWidth_,
-        headerTitle_,
-        static_cast<std::size_t>(navState.trackPage),
-        buildActionStatusLine_(rtState, navState));
-
-    // Конвертируем цельный текст кадра в line-buffer виджета.
-    std::istringstream in(frame);
-    std::string line;
-    while (std::getline(in, line)) {
-        out.lines.push_back(line);
-    }
+        layout_.enabled && !layout_.title.empty() ? layout_.title : headerTitle_,
+        buildActionStatusLine_(rtState, navState),
+        layout_.enabled && !layout_.keysHint.empty() ? layout_.keysHint : std::string_view{});
+    out.lines = SceneFrameAsciiRenderer::render(frame);
 }
 
 WidgetOutput TracksWidget::onGesture(UiGesture, const UiState&, UiNavState&) {
@@ -433,6 +652,29 @@ std::string TracksWidget::buildActionStatusLine_(const UiState& rtState, const U
             break;
     }
     return std::string(buf);
+}
+
+void TracksWidget::buildLayoutModel_(const UiLayoutTemplate& tpl) {
+    layout_ = LayoutModel{};
+    if (tpl.widgetId != "tracks") {
+        return;
+    }
+
+    tpl.forEachNode([&](const UiLayoutNode& node) {
+        if (layout_.title.empty() &&
+            node.type == UiLayoutNodeType::StatusBar &&
+            !node.text.empty()) {
+            layout_.title = node.text;
+        }
+        // Кастомную строку подсказок удобно задавать через text-узел
+        // с id="keys_hint".
+        if (node.type == UiLayoutNodeType::Text &&
+            node.id == "keys_hint" &&
+            !node.text.empty()) {
+            layout_.keysHint = node.text;
+        }
+    });
+    layout_.enabled = true;
 }
 
 } // namespace avantgarde

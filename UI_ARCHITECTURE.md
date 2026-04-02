@@ -190,6 +190,26 @@ struct IClipLoadService {
 
 This keeps scene logic backend-agnostic.
 
+## Transparent Bind (v0)
+- Введен контракт декларативного layout-дерева: `src/contracts/UiLayout.h`
+- Введен резолвер bind-алиасов: `src/service/ui/UiBindResolver.{h,cpp}`
+- Принцип:
+  - для параметров FX bind отражает смысл `UiAction`
+  - базовый формат: `Scene.SceneFxParamValue.<index>`
+  - резолвер преобразует его в канонический ключ `action.scene.fx.param.value.<index>`
+  - пустой bind получает безопасный дефолт по scene/node-type
+
+Примеры (FxEditor):
+- `knob bind = "Scene.SceneFxParamValue.0"` -> `action.scene.fx.param.value.0`
+- `knob bind = "scene.fx.param.value.2"` -> `action.scene.fx.param.value.2`
+- `knob bind = ""` -> `action.scene.fx.param.value.selected`
+- `anim_slot bind = "reverb"` -> `fx.anim.reverb`
+- `anim_slot bind = ""` -> `fx.anim.current`
+
+Важно:
+- индекс `<index>` — это индекс параметра в `FxDescriptor::params` конкретного эффекта;
+- маппинг индексов для каждого FX хранится в `src/contracts/FxRegistry.h`.
+
 ## Migration Plan (safe incremental)
 1. Introduce contracts: `UiScene`, `UiNavState`, `UiIntent`, `IUiWidget`, `UiSceneHost`
 2. Move current track screen into `TracksWidget` with no behavior changes
