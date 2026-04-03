@@ -199,10 +199,10 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
     std::vector<std::unique_ptr<IClipTrack>> userTracks(impl_->trackCount);
     std::vector<IClipTrack*> userTrackPtrs(impl_->trackCount, nullptr);
     for (uint8_t t = 0; t < impl_->trackCount; ++t) {
-        userTracks[t] = std::make_unique<ClipTrackImpl>();
+        userTracks[t] = std::make_unique<ClipTrackImpl>(config.sampleRate);
         userTrackPtrs[t] = userTracks[t].get();
     }
-    auto previewClip = std::make_unique<ClipTrackImpl>();
+    auto previewClip = std::make_unique<ClipTrackImpl>(config.sampleRate);
     IClipTrack* previewClipPtr = previewClip.get();
 
     // Публикуем треки для resolver'а параметров.
@@ -277,7 +277,9 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
         track.loop = false;
         track.fxCount = 0;
         track.fxChainIds.clear();
+        track.fxEnabled.clear();
         track.clipName.clear();
+        track.clipPath.clear();
         bootstrapOut.tracks[t] = std::move(track);
     }
 
@@ -477,6 +479,24 @@ bool SamplerEngineLayer::setFxParam(uint8_t track,
         static_cast<int16_t>(fxSlot),
         paramIndex,
         normalizedValue);
+}
+
+bool SamplerEngineLayer::setFxEnabled(uint8_t track, uint8_t fxSlot, bool enabled) noexcept {
+    if (!impl_ || impl_->clipCtl.empty()) {
+        return false;
+    }
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+        return false;
+    }
+    if (!impl_->clipCtl[t]->getModule(static_cast<std::size_t>(fxSlot))) {
+        return false;
+    }
+    return impl_->controlDispatcher.sendParamSet(
+        static_cast<int16_t>(t),
+        static_cast<int16_t>(fxSlot),
+        toParamIndex(FxCommonParamId::Enabled),
+        enabled ? kRtValueOn : kRtValueOff);
 }
 
 bool SamplerEngineLayer::loadSampleToTrack(uint8_t track,

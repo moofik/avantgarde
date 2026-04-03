@@ -1,0 +1,53 @@
+id = "fx_profile_reverb"
+
+[layout]
+type = "column"
+padding = 0
+gap = 1
+
+[[layout.children]]
+type = "text"
+id = "fx_meta"
+bind = "status.fx.meta"
+width = "100%"
+
+[[layout.children]]
+type = "row"
+id = "fx_knobs_row"
+width = "100%"
+gap = 2
+
+[[layout.children.children]]
+type = "knob"
+id = "wet"
+label = "WET"
+bind = "scene.fx.param.value.0"
+width = "49%"
+
+[[layout.children.children]]
+type = "knob"
+id = "room"
+label = "ROOM"
+bind = "scene.fx.param.value.1"
+width = "49%"
+
+[[layout.children.children]]
+type = "knob"
+id = "damp"
+label = "DAMP"
+bind = "scene.fx.param.value.2"
+width = "49%"
+
+[[layout.children.children]]
+type = "knob"
+id = "width"
+label = "WIDTH"
+bind = "scene.fx.param.value.3"
+width = "49%"
+
+[[layout.children]]
+type = "anim_slot"
+id = "fx_anim"
+width = "100%"
+height = 5
+bind = "fx.anim.reverb"

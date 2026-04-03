@@ -259,7 +259,9 @@ namespace avantgarde {
 
     class ClipTrackImpl final : public IClipTrack {
     public:
-        ClipTrackImpl() = default;
+        explicit ClipTrackImpl(double outputSampleRate = 48000.0) noexcept
+            : moduleSampleRate_(sanitizeSampleRate_(outputSampleRate)),
+              outputSampleRate_(sanitizeSampleRate_(outputSampleRate)) {}
         ~ClipTrackImpl() override = default;
 
         // ---- ITrack ----
@@ -274,6 +276,7 @@ namespace avantgarde {
             mod->init(moduleSampleRate_, kFxScratchFrames);
             mod->reset();
             modules_.push_back(std::move(mod));
+            moduleEnabled_.push_back(true);
         }
 
         IAudioModule* getModule(std::size_t index) override {
@@ -322,6 +325,9 @@ namespace avantgarde {
                 return false;
             }
             modules_.erase(modules_.begin() + static_cast<std::ptrdiff_t>(index));
+            if (index < moduleEnabled_.size()) {
+                moduleEnabled_.erase(moduleEnabled_.begin() + static_cast<std::ptrdiff_t>(index));
+            }
             return true;
         }
 
@@ -354,12 +360,26 @@ namespace avantgarde {
             const double lenD = static_cast<double>(len);
             const float g = playbackRt_.gain;
             const bool loop = playbackRt_.loop;
-            const double inc = static_cast<double>(detail_interp::clampf(playbackRt_.playbackInc, 0.05f, 8.0f));
+            // Базовый шаг по исходному клипу:
+            // 1) компенсация sample rate clip -> output (иначе 44.1k клип в 48k host звучит быстрее);
+            // 2) пользовательский speed (playbackInc).
+            const double speed = static_cast<double>(detail_interp::clampf(playbackRt_.playbackInc, 0.05f, 8.0f));
+            const double clipToOutRate =
+                    (clip->sampleRate > 0 && outputSampleRate_ > 1.0)
+                    ? (static_cast<double>(clip->sampleRate) / outputSampleRate_)
+                    : 1.0;
+            const double inc = std::max(1e-6, clipToOutRate * speed);
 
-            const bool hasFx = !modules_.empty() && !muted;
+            const bool hasEnabledFx =
+                !modules_.empty() &&
+                std::any_of(moduleEnabled_.begin(), moduleEnabled_.end(), [](bool e) { return e; });
+            const bool hasFx = hasEnabledFx && !muted;
             if (hasFx) {
-                for (auto& mod : modules_) {
-                    mod->beginBlock();
+                for (std::size_t i = 0; i < modules_.size(); ++i) {
+                    if (i < moduleEnabled_.size() && !moduleEnabled_[i]) {
+                        continue;
+                    }
+                    modules_[i]->beginBlock();
                 }
             }
 
@@ -384,7 +404,11 @@ namespace avantgarde {
 
                 if (hasFx) {
                     bool useAasInput = true;
-                    for (auto& mod : modules_) {
+                    for (std::size_t i = 0; i < modules_.size(); ++i) {
+                        if (i < moduleEnabled_.size() && !moduleEnabled_[i]) {
+                            continue;
+                        }
+                        auto& mod = modules_[i];
                         const float* inPtrs[2];
                         float* outPtrs[2];
                         if (useAasInput) {
@@ -402,6 +426,17 @@ namespace avantgarde {
                         modCtx.in = inPtrs;
                         modCtx.out = outPtrs;
                         modCtx.nframes = produced;
+                        // FX внутри трека должны видеть тот же transport snapshot,
+                        // что и сам трек в текущем аудио-блоке.
+                        modCtx.transportValid = ctx.transportValid;
+                        modCtx.transportPlaying = ctx.transportPlaying;
+                        modCtx.transportTsNum = ctx.transportTsNum;
+                        modCtx.transportTsDen = ctx.transportTsDen;
+                        modCtx.transportBpm = ctx.transportBpm;
+                        modCtx.transportQuant = ctx.transportQuant;
+                        // Важно для tempo-sync FX: время должно идти внутри блока,
+                        // иначе LFO/step-логика будет "перезапускаться" на каждом chunk.
+                        modCtx.transportSampleTime = ctx.transportSampleTime + static_cast<uint64_t>(offset);
                         mod->process(modCtx);
                         useAasInput = !useAasInput;
                     }
@@ -464,6 +499,12 @@ namespace avantgarde {
                     if (cmd.slot >= 0) {
                         const std::size_t fxSlot = static_cast<std::size_t>(cmd.slot);
                         if (fxSlot < modules_.size()) {
+                            if (cmd.index == toParamIndex(FxCommonParamId::Enabled)) {
+                                if (fxSlot < moduleEnabled_.size()) {
+                                    moduleEnabled_[fxSlot] = (cmd.value >= 0.5f);
+                                }
+                                break;
+                            }
                             modules_[fxSlot]->setParam(cmd.index, detail_interp::clampf(cmd.value, 0.0f, 1.0f));
                             break;
                         }
@@ -531,7 +572,6 @@ namespace avantgarde {
             // Контракт: если слот был в воспроизведении, реализация должна безопасно остановить.
             // Мы останавливаем RT на границе блока через pendingPublish_.
             publishClip_(std::move(b));
-            moduleSampleRate_ = (sr > 0) ? static_cast<double>(sr) : moduleSampleRate_;
             for (auto& mod : modules_) {
                 mod->init(moduleSampleRate_, kFxScratchFrames);
                 mod->reset();
@@ -696,6 +736,11 @@ namespace avantgarde {
         }
 
     private:
+        static double sanitizeSampleRate_(double sr) noexcept {
+            return (sr > 1.0) ? sr : 48000.0;
+        }
+
+    private:
         static uint8_t sanitizeTsNum_(int num) noexcept {
             if (num < 1 || num > 32) return 4;
             return static_cast<uint8_t>(num);
@@ -781,7 +826,9 @@ namespace avantgarde {
 
     private:
         std::vector<std::unique_ptr<IAudioModule>> modules_;
+        std::vector<bool> moduleEnabled_{};
         double moduleSampleRate_{48000.0};
+        double outputSampleRate_{48000.0};
 
         std::array<float, kFxScratchFrames> fxA0_{};
         std::array<float, kFxScratchFrames> fxA1_{};

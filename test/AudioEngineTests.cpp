@@ -260,6 +260,57 @@ TEST_CASE("TransportBridge::sampleTime is not advanced when transport is stopped
     REQUIRE(tr.advanced == 0);
 }
 
+TEST_CASE("AudioProcessContext carries transport snapshot into track process") {
+    MockRtQueue q;
+    MockParamBridge p;
+    auto eng = avantgarde::MakeAudioEngine(&q, &p);
+
+    MockTransportBridge tr;
+    tr.snap.playing = true;
+    tr.snap.tsNum = 7;
+    tr.snap.tsDen = 8;
+    tr.snap.bpm = 123.5f;
+    tr.snap.quant = QuantizeMode::Beat;
+    tr.snap.sampleTime = 4242;
+    eng->setTransportBridge(&tr);
+
+    struct TransportAwareTrack : MockTrack {
+        bool seenValid{false};
+        bool seenPlaying{false};
+        uint8_t seenTsNum{0};
+        uint8_t seenTsDen{0};
+        float seenBpm{0.0f};
+        uint8_t seenQuant{0};
+        uint64_t seenSampleTime{0};
+        void process(const AudioProcessContext& c) override {
+            seenValid = c.transportValid;
+            seenPlaying = c.transportPlaying;
+            seenTsNum = c.transportTsNum;
+            seenTsDen = c.transportTsDen;
+            seenBpm = c.transportBpm;
+            seenQuant = c.transportQuant;
+            seenSampleTime = c.transportSampleTime;
+            ++calls;
+        }
+    };
+
+    auto t = std::make_unique<TransportAwareTrack>();
+    auto* tp = t.get();
+    eng->registerTrack(std::move(t));
+
+    auto ctx = makeCtx(128);
+    eng->processBlock(ctx.ctx);
+
+    REQUIRE(tp->calls == 1);
+    REQUIRE(tp->seenValid == true);
+    REQUIRE(tp->seenPlaying == true);
+    REQUIRE(tp->seenTsNum == 7);
+    REQUIRE(tp->seenTsDen == 8);
+    REQUIRE(tp->seenBpm == Catch::Approx(123.5f));
+    REQUIRE(tp->seenQuant == static_cast<uint8_t>(QuantizeMode::Beat));
+    REQUIRE(tp->seenSampleTime == 4242);
+}
+
 TEST_CASE("TransportBridge is not called when nullptr") {
     MockRtQueue q;
     MockParamBridge p;

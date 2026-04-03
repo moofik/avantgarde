@@ -1,4 +1,5 @@
 #include <catch2/catch_all.hpp>
+#include <algorithm>
 
 #include "service/ui/TracksWidget.h"
 #include "service/ui/UiLayoutTomlLoader.h"
@@ -62,3 +63,33 @@ text = " keys [TEST KEYS] "
     REQUIRE(hasCustomKeys);
 }
 
+TEST_CASE("TracksWidget: Detect BPM action emits intent for selected track") {
+    TracksWidget widget(TracksWidget::Options{});
+
+    UiState state{};
+    state.tracks.resize(2);
+    state.tracks[0].id = 0;
+    state.tracks[0].clipName = "loop.wav";
+    state.tracks[0].clipPath = "/tmp/loop.wav";
+    state.tracks[0].stretchRatio = 1.0f;
+    state.tracks[1].id = 1;
+
+    UiNavState nav{};
+    nav.scene = UiScene::Tracks;
+    nav.selectedTrack = 0;
+
+    UiActionCatalog catalog = widget.queryAvailableActions(state, nav);
+    auto it = std::find_if(catalog.actions.begin(), catalog.actions.end(), [](const UiAction& a) {
+        return a.def.id == UiAction::Id::SceneDetectProjectBpm;
+    });
+    REQUIRE(it != catalog.actions.end());
+    REQUIRE(it->state.enabled);
+
+    UiAction action = *it;
+    action.op = UiAction::Op::Apply;
+    const WidgetOutput out = widget.onAction(action, state, nav);
+    REQUIRE(out.handled);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::DetectProjectBpmFromTrack);
+    REQUIRE(out.intents[0].track == 0);
+}

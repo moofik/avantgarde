@@ -1,4 +1,4 @@
-id = "fx_list"
+id = "fx_editor"
 
 [layout]
 type = "column"
@@ -8,7 +8,7 @@ gap = 0
 [[layout.children]]
 type = "statusbar"
 id = "header_title"
-text = "FX LIST"
+text = "FX EDITOR"
 bind = "status.scene.title"
 width = "100%"
 
@@ -19,16 +19,18 @@ height = 1
 width = "100%"
 
 [[layout.children]]
-type = "text"
-id = "fx_type_status"
-text = " quick: F1 edit/add | F7 bypass | F8 remove "
-width = "100%"
-
-[[layout.children]]
-type = "list"
-id = "fx_list"
+type = "fx_editor_view"
+id = "fx_view"
 height = "auto"
 width = "100%"
+gap = 1
+
+[[layout.children.children]]
+type = "column"
+id = "fx_body"
+width = "100%"
+height = "auto"
+gap = 1
 
 [[layout.children]]
 type = "separator"
@@ -45,6 +47,6 @@ width = "100%"
 [[layout.children]]
 type = "text"
 id = "keys_hint"
-text = " keys [F5/F6 slot] [F1 apply] [F7 bypass] [F8 remove] [esc] "
+text = " keys [F5/F6 param] [F7/F8 value] [F1 bypass] [esc] "
 bind = "status.keys"
 width = "100%"

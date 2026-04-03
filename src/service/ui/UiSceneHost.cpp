@@ -10,7 +10,7 @@
 namespace avantgarde {
 namespace {
 
-constexpr std::size_t kTracksPerPage = 2;
+constexpr std::size_t kTracksPerPage = 1;
 
 uint8_t selectPrevTrack(uint8_t current, std::size_t totalTracks) noexcept {
     if (totalTracks == 0) {
@@ -40,34 +40,6 @@ uint16_t pageForTrack(uint8_t track, std::size_t totalTracks) noexcept {
     }
     const uint8_t safeTrack = (track >= totalTracks) ? static_cast<uint8_t>(totalTracks - 1U) : track;
     return static_cast<uint16_t>(safeTrack / kTracksPerPage);
-}
-
-uint16_t wrapPrevPage(uint16_t currentPage, std::size_t totalTracks) noexcept {
-    if (totalTracks == 0) {
-        return 0;
-    }
-    const uint16_t totalPages = static_cast<uint16_t>((totalTracks + kTracksPerPage - 1U) / kTracksPerPage);
-    if (totalPages <= 1) {
-        return 0;
-    }
-    if (currentPage >= totalPages) {
-        return static_cast<uint16_t>(totalPages - 1U);
-    }
-    return (currentPage == 0U) ? static_cast<uint16_t>(totalPages - 1U) : static_cast<uint16_t>(currentPage - 1U);
-}
-
-uint16_t wrapNextPage(uint16_t currentPage, std::size_t totalTracks) noexcept {
-    if (totalTracks == 0) {
-        return 0;
-    }
-    const uint16_t totalPages = static_cast<uint16_t>((totalTracks + kTracksPerPage - 1U) / kTracksPerPage);
-    if (totalPages <= 1) {
-        return 0;
-    }
-    if (currentPage >= totalPages) {
-        return 0;
-    }
-    return (currentPage + 1U >= totalPages) ? 0U : static_cast<uint16_t>(currentPage + 1U);
 }
 
 UiGesture normalizeHardwareAction(UiGesture action) noexcept {
@@ -285,14 +257,30 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
             if (!isApplyLikeOp(action.op) && action.op != UiAction::Op::AdjustPrev) {
                 return out;
             }
-            nav_.trackPage = wrapPrevPage(nav_.trackPage, rtState.tracks.size());
+            if (rtState.tracks.empty()) {
+                return out;
+            }
+            nav_.selectedTrack = selectPrevTrack(nav_.selectedTrack, rtState.tracks.size());
+            nav_.trackPage = pageForTrack(nav_.selectedTrack, rtState.tracks.size());
+            UiIntent it{};
+            it.type = UiIntentType::SetActiveTrack;
+            it.track = nav_.selectedTrack;
+            out.intents.push_back(std::move(it));
             return out;
         }
         case UiAction::Id::GlobalPageNext: {
             if (!isApplyLikeOp(action.op) && action.op != UiAction::Op::AdjustNext) {
                 return out;
             }
-            nav_.trackPage = wrapNextPage(nav_.trackPage, rtState.tracks.size());
+            if (rtState.tracks.empty()) {
+                return out;
+            }
+            nav_.selectedTrack = selectNextTrack(nav_.selectedTrack, rtState.tracks.size());
+            nav_.trackPage = pageForTrack(nav_.selectedTrack, rtState.tracks.size());
+            UiIntent it{};
+            it.type = UiIntentType::SetActiveTrack;
+            it.track = nav_.selectedTrack;
+            out.intents.push_back(std::move(it));
             return out;
         }
         case UiAction::Id::None:
@@ -305,12 +293,14 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
         case UiAction::Id::SceneTrackGain:
         case UiAction::Id::SceneQuantize:
         case UiAction::Id::SceneTempoBpm:
+        case UiAction::Id::SceneDetectProjectBpm:
         case UiAction::Id::SceneAddFx:
         case UiAction::Id::SceneAddReverb:
         case UiAction::Id::SceneOpenManager:
         case UiAction::Id::SceneOpenFxList:
         case UiAction::Id::SceneFxTypeSelect:
         case UiAction::Id::SceneFxSlotSelect:
+        case UiAction::Id::SceneFxEnabled:
         case UiAction::Id::SceneFxRemove:
         case UiAction::Id::SceneFxOpenEditor:
         case UiAction::Id::SceneFxParamSelect:
@@ -362,12 +352,26 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         return WidgetOutput{true, {it}};
     }
     if (action == UiGesture::TrackPagePrev) {
-        nav_.trackPage = wrapPrevPage(nav_.trackPage, rtState.tracks.size());
-        return WidgetOutput{true, {}};
+        if (rtState.tracks.empty()) {
+            return WidgetOutput{true, {}};
+        }
+        nav_.selectedTrack = selectPrevTrack(nav_.selectedTrack, rtState.tracks.size());
+        nav_.trackPage = pageForTrack(nav_.selectedTrack, rtState.tracks.size());
+        UiIntent it{};
+        it.type = UiIntentType::SetActiveTrack;
+        it.track = nav_.selectedTrack;
+        return WidgetOutput{true, {it}};
     }
     if (action == UiGesture::TrackPageNext) {
-        nav_.trackPage = wrapNextPage(nav_.trackPage, rtState.tracks.size());
-        return WidgetOutput{true, {}};
+        if (rtState.tracks.empty()) {
+            return WidgetOutput{true, {}};
+        }
+        nav_.selectedTrack = selectNextTrack(nav_.selectedTrack, rtState.tracks.size());
+        nav_.trackPage = pageForTrack(nav_.selectedTrack, rtState.tracks.size());
+        UiIntent it{};
+        it.type = UiIntentType::SetActiveTrack;
+        it.track = nav_.selectedTrack;
+        return WidgetOutput{true, {it}};
     }
     if (action == UiGesture::OpenManager) {
         if (widgets_[sceneIndex_(UiScene::Manager)]) {
@@ -379,6 +383,11 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         return {};
     }
     if (action == UiGesture::BackScene) {
+        if (nav_.scene == UiScene::FxList &&
+            nav_.fxAddPopupOpen &&
+            widgets_[sceneIndex_(UiScene::FxList)]) {
+            return widgets_[sceneIndex_(UiScene::FxList)]->onGesture(UiGesture::BackScene, rtState, nav_);
+        }
         if (nav_.scene == UiScene::FxEditor && widgets_[sceneIndex_(UiScene::FxList)]) {
             nav_.scene = UiScene::FxList;
             nav_.sceneActionIndex = 0;
@@ -413,6 +422,13 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         return WidgetOutput{true, {it}};
     }
     if (action == UiGesture::BpmUp || action == UiGesture::BpmDown) {
+        // В FxEditor те же кнопки меняют значение выбранного FX-параметра.
+        if (nav_.scene == UiScene::FxEditor) {
+            auto& fxWidget = widgets_[sceneIndex_(UiScene::FxEditor)];
+            if (fxWidget) {
+                return fxWidget->onGesture(action, rtState, nav_);
+            }
+        }
         UiIntent it{};
         it.type = UiIntentType::SetTransportBpm;
         const float dir = (action == UiGesture::BpmUp) ? 1.0f : -1.0f;
@@ -460,6 +476,65 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
     auto& widget = widgets_[sceneIndex_(nav_.scene)];
     if (!widget) {
         return {};
+    }
+
+    // Быстрый хоткей детекта BPM на основном экране.
+    // F10 -> ActionAlt -> "Detect BPM" для активного трека.
+    if (nav_.scene == UiScene::Tracks && action == UiGesture::ActionAlt) {
+        UiAction a{};
+        a.def.id = UiAction::Id::SceneDetectProjectBpm;
+        a.op = UiAction::Op::Apply;
+        return widget->onAction(a, rtState, nav_);
+    }
+
+    // Быстрый режим FX List (device-like flow без menu diving):
+    // F5/F6 -> вверх/вниз по слотам, F1 -> apply (edit/add),
+    // F7 -> bypass on/off, F8 -> remove.
+    if (nav_.scene == UiScene::FxList) {
+        if (action == UiGesture::ActionFocusPrev) {
+            return widget->onGesture(UiGesture::ListUp, rtState, nav_);
+        }
+        if (action == UiGesture::ActionFocusNext) {
+            return widget->onGesture(UiGesture::ListDown, rtState, nav_);
+        }
+        if (action == UiGesture::ActionApply) {
+            return widget->onGesture(UiGesture::ListEnter, rtState, nav_);
+        }
+        if (action == UiGesture::ActionAdjustPrev) {
+            UiAction a{};
+            a.def.id = UiAction::Id::SceneFxEnabled;
+            a.op = UiAction::Op::Apply;
+            return widget->onAction(a, rtState, nav_);
+        }
+        if (action == UiGesture::ActionAdjustNext) {
+            UiAction a{};
+            a.def.id = UiAction::Id::SceneFxRemove;
+            a.op = UiAction::Op::Apply;
+            return widget->onAction(a, rtState, nav_);
+        }
+    }
+
+    // Быстрый режим FX Editor:
+    // F5/F6 -> выбор параметра, F7/F8 -> изменение значения, F1 -> bypass on/off.
+    if (nav_.scene == UiScene::FxEditor) {
+        if (action == UiGesture::ActionFocusPrev) {
+            return widget->onGesture(UiGesture::ListUp, rtState, nav_);
+        }
+        if (action == UiGesture::ActionFocusNext) {
+            return widget->onGesture(UiGesture::ListDown, rtState, nav_);
+        }
+        if (action == UiGesture::ActionAdjustPrev) {
+            return widget->onGesture(UiGesture::BpmDown, rtState, nav_);
+        }
+        if (action == UiGesture::ActionAdjustNext) {
+            return widget->onGesture(UiGesture::BpmUp, rtState, nav_);
+        }
+        if (action == UiGesture::ActionApply) {
+            UiAction a{};
+            a.def.id = UiAction::Id::SceneFxEnabled;
+            a.op = UiAction::Op::Apply;
+            return widget->onAction(a, rtState, nav_);
+        }
     }
 
     // Active Action Pointer path:

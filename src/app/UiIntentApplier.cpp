@@ -9,6 +9,8 @@
 
 #include "contracts/FxRegistry.h"
 #include "module/SchroederReverbModule.h"
+#include "module/StutterModule.h"
+#include "service/audio/BpmDetectorService.h"
 
 namespace avantgarde {
 namespace {
@@ -18,6 +20,9 @@ namespace {
 std::unique_ptr<IAudioModule> createBuiltinFxByCanonicalId(std::string_view canonicalId) {
     if (canonicalId == FxRegistry::kReverbSchroederId) {
         return std::make_unique<SchroederReverbModule>();
+    }
+    if (canonicalId == FxRegistry::kStutterId) {
+        return std::make_unique<StutterModule>();
     }
     // Остальные профили можно добавить сюда по мере реализации модулей.
     return nullptr;
@@ -125,6 +130,25 @@ bool UiIntentApplier::buildUndoIntent(const UiIntent& forward,
             undoOut = forward;
             undoOut.value = transport.playing ? 1.0f : 0.0f;
             return true;
+        case UiIntentType::SetFxEnabled: {
+            if (tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(forward.track, tracks);
+            if (tracks[t].fxCount == 0U) {
+                return false;
+            }
+            const uint8_t slot = (forward.fxSlot >= tracks[t].fxCount)
+                                     ? static_cast<uint8_t>(tracks[t].fxCount - 1U)
+                                     : forward.fxSlot;
+            const bool enabled =
+                (slot < tracks[t].fxEnabled.size()) ? (tracks[t].fxEnabled[slot] != 0U) : true;
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.fxSlot = slot;
+            undoOut.value = enabled ? 1.0f : 0.0f;
+            return true;
+        }
         default:
             return false;
     }
@@ -142,6 +166,7 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
                 return false;
             }
             ctx.tracks[t].clipName = clipName;
+            ctx.tracks[t].clipPath = intent.path;
             ctx.tracks[t].muted = false;
             ctx.tracks[t].loop = true;
             refreshTrackViewState_(t, ctx.transport, ctx.tracks);
@@ -229,6 +254,46 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             ctx.uiStore.setTransport(ctx.transport);
             return true;
         }
+        case UiIntentType::DetectProjectBpmFromTrack: {
+            if (ctx.tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(intent.track, ctx.tracks);
+            if (ctx.tracks[t].clipPath.empty()) {
+                return false;
+            }
+
+            BpmDetectorService detector{};
+            const BpmDetectionResult det = detector.detectFromFile(
+                ctx.tracks[t].clipPath,
+                ctx.tracks[t].stretchRatio);
+            if (!det.ok) {
+                return false;
+            }
+
+            bool changed = false;
+            if (ctx.transport.playing) {
+                ctx.transport.playing = false;
+                ctx.engine.setTransportPlaying(false);
+                for (std::size_t i = 0; i < ctx.tracks.size(); ++i) {
+                    refreshTrackViewState_(static_cast<uint8_t>(i), ctx.transport, ctx.tracks);
+                    ctx.uiStore.setTrack(i, ctx.tracks[i]);
+                }
+                changed = true;
+            }
+
+            const float next = std::clamp(det.effectiveBpm, 20.0f, 300.0f);
+            if (std::fabs(ctx.transport.bpm - next) >= 1e-6f) {
+                ctx.transport.bpm = next;
+                ctx.engine.setTempo(ctx.transport.bpm);
+                changed = true;
+            }
+
+            if (changed) {
+                ctx.uiStore.setTransport(ctx.transport);
+            }
+            return changed;
+        }
         case UiIntentType::SetTransportPlaying: {
             const bool playing = (intent.value >= 0.5f);
             if (ctx.transport.playing == playing) {
@@ -267,9 +332,16 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
                 ctx.tracks[t].fxChainIds.erase(
                     ctx.tracks[t].fxChainIds.begin() + static_cast<std::ptrdiff_t>(slot));
             }
+            if (slot < ctx.tracks[t].fxEnabled.size()) {
+                ctx.tracks[t].fxEnabled.erase(
+                    ctx.tracks[t].fxEnabled.begin() + static_cast<std::ptrdiff_t>(slot));
+            }
             const std::size_t nextCount = oldCount > 0U ? oldCount - 1U : 0U;
             if (ctx.tracks[t].fxChainIds.size() > nextCount) {
                 ctx.tracks[t].fxChainIds.resize(nextCount);
+            }
+            if (ctx.tracks[t].fxEnabled.size() > nextCount) {
+                ctx.tracks[t].fxEnabled.resize(nextCount, 1U);
             }
             ctx.tracks[t].fxCount = static_cast<uint8_t>(std::min<std::size_t>(nextCount, 255U));
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
@@ -307,9 +379,42 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             if (ctx.tracks[t].fxChainIds.size() < ctx.tracks[t].fxCount) {
                 ctx.tracks[t].fxChainIds.resize(ctx.tracks[t].fxCount, std::string(FxRegistry::kUnknownFxId));
             }
+            if (ctx.tracks[t].fxEnabled.size() < ctx.tracks[t].fxCount) {
+                ctx.tracks[t].fxEnabled.resize(ctx.tracks[t].fxCount, 1U);
+            }
             ctx.tracks[t].fxChainIds.push_back(std::string(descriptor->id));
+            ctx.tracks[t].fxEnabled.push_back(1U);
             const std::size_t visibleCount = std::min<std::size_t>(ctx.tracks[t].fxChainIds.size(), 255U);
             ctx.tracks[t].fxCount = static_cast<uint8_t>(visibleCount);
+            if (ctx.tracks[t].fxEnabled.size() > visibleCount) {
+                ctx.tracks[t].fxEnabled.resize(visibleCount, 1U);
+            }
+            ctx.uiStore.setTrack(t, ctx.tracks[t]);
+            return true;
+        }
+        case UiIntentType::SetFxEnabled: {
+            if (ctx.tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(intent.track, ctx.tracks);
+            if (ctx.tracks[t].fxCount == 0U) {
+                return false;
+            }
+            const uint8_t slot = (intent.fxSlot >= ctx.tracks[t].fxCount)
+                                     ? static_cast<uint8_t>(ctx.tracks[t].fxCount - 1U)
+                                     : intent.fxSlot;
+            const bool enabled = (intent.value >= 0.5f);
+            if (ctx.tracks[t].fxEnabled.size() < ctx.tracks[t].fxCount) {
+                ctx.tracks[t].fxEnabled.resize(ctx.tracks[t].fxCount, 1U);
+            }
+            const bool oldEnabled = (ctx.tracks[t].fxEnabled[slot] != 0U);
+            if (oldEnabled == enabled) {
+                return false;
+            }
+            if (!ctx.engine.setFxEnabled(t, slot, enabled)) {
+                return false;
+            }
+            ctx.tracks[t].fxEnabled[slot] = enabled ? 1U : 0U;
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;
         }

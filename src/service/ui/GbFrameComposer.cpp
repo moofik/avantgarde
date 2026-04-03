@@ -142,7 +142,7 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
     out << "║" << padRight(line, inner) << "║\n";
 
     const std::size_t totalTracks = state.tracks.size();
-    const std::size_t pageSize = 2;
+    const std::size_t pageSize = 1;
     const std::size_t totalPages = std::max<std::size_t>(1, (totalTracks + pageSize - 1U) / pageSize);
     const std::size_t activeTrack = (totalTracks == 0)
                                         ? 0U
@@ -168,12 +168,13 @@ std::string GbFrameComposer::buildMonochromeFrame(const UiState& state,
 
     for (std::size_t i = pageStart; i < pageEnd; ++i) {
         const auto& tr = state.tracks[i];
-        const bool active = (tr.id == activeTrack);
+        const uint8_t uiTrackIndex = static_cast<uint8_t>(i);
+        const bool active = (uiTrackIndex == activeTrack);
         const char* marker = active ? "▶" : " ";
 
         std::snprintf(line, sizeof(line), " %s T%u %-5s clip:%s",
                       marker,
-                      static_cast<unsigned>(tr.id + 1),
+                      static_cast<unsigned>(uiTrackIndex + 1),
                       trackStateToStr(tr.state),
                       clipShort(tr.clipName, clipWidth).c_str());
         out << "║" << padRight(line, inner) << "║\n";

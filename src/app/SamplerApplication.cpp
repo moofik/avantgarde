@@ -57,6 +57,7 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
             continue;
         }
         tracksCtl_[t].clipName = clipName;
+        tracksCtl_[t].clipPath = load.path;
         tracksCtl_[t].muted = false;
         tracksCtl_[t].armed = false;
         tracksCtl_[t].loop = true;

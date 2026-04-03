@@ -165,6 +165,46 @@ bool parseSizeTuple(std::string_view raw, uint16_t& wOut, uint16_t& hOut) {
     return true;
 }
 
+bool parseStringList(std::string_view raw, std::vector<std::string>& out) {
+    const std::string v = trim(raw);
+    if (v.size() < 2U || v.front() != '[' || v.back() != ']') {
+        return false;
+    }
+    const std::string_view inside(v.data() + 1U, v.size() - 2U);
+    out.clear();
+
+    std::size_t i = 0;
+    while (i < inside.size()) {
+        while (i < inside.size() &&
+               (std::isspace(static_cast<unsigned char>(inside[i])) != 0 || inside[i] == ',')) {
+            ++i;
+        }
+        if (i >= inside.size()) {
+            break;
+        }
+        if (inside[i] != '"') {
+            return false;
+        }
+        ++i; // skip opening quote
+        std::size_t start = i;
+        while (i < inside.size() && inside[i] != '"') {
+            ++i;
+        }
+        if (i >= inside.size()) {
+            return false;
+        }
+        out.emplace_back(std::string(inside.substr(start, i - start)));
+        ++i; // skip closing quote
+        while (i < inside.size() && std::isspace(static_cast<unsigned char>(inside[i])) != 0) {
+            ++i;
+        }
+        if (i < inside.size() && inside[i] == ',') {
+            ++i;
+        }
+    }
+    return true;
+}
+
 std::vector<std::string> splitPath(std::string_view path) {
     std::vector<std::string> out;
     std::size_t begin = 0;
@@ -240,6 +280,15 @@ bool applyNodeProperty(UiLayoutNode& node,
             errorOut = "line " + std::to_string(lineNo) + ": bind expects quoted string";
             return false;
         }
+        return true;
+    }
+    if (key == "options") {
+        std::vector<std::string> options{};
+        if (!parseStringList(value, options)) {
+            errorOut = "line " + std::to_string(lineNo) + ": options expects [\"a\", \"b\", ...]";
+            return false;
+        }
+        node.options = std::move(options);
         return true;
     }
     if (key == "padding") {

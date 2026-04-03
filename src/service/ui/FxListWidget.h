@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <array>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "contracts/IUiWidget.h"
@@ -30,18 +32,31 @@ public:
     WidgetOutput onAction(UiAction& action, const UiState& rtState, UiNavState& navState) override;
 
 private:
+    struct FxTypeOption {
+        std::string_view id{};
+        std::string_view label{};
+    };
+
     struct LayoutModel {
         bool enabled{false};
         std::string title{"FX LIST"};
-        std::string keysHint{" keys [j/k slot] [;/' focus] [/? adj] [o apply] [esc] "};
+        std::string keysHint{" keys [F5/F6 slot] [F1 apply] [F7 bypass] [F8 remove] [esc] "};
     };
 
     // Защита от выхода индекса за пределы списка треков.
     static uint8_t clampTrack_(uint8_t track, std::size_t totalTracks) noexcept;
     // Защита от выхода индекса за пределы FX-слотов.
     static uint16_t clampFx_(uint16_t fx, std::size_t fxCount) noexcept;
+    // Курсор FX-слотов с поддержкой "виртуального пустого слота" (индекс == fxCount).
+    static uint16_t clampFxCursor_(uint16_t fxCursor, std::size_t fxCount) noexcept;
     // Имя FX в списке по данным трека и реестра профилей.
     static std::string fxName_(const UiTrackStateView& track, uint16_t slot);
+    // Состояние bypass слота FX (true = enabled, false = bypass).
+    static bool fxEnabled_(const UiTrackStateView& track, uint16_t slot) noexcept;
+    // Каталог доступных типов FX для действия "Add FX".
+    static const std::array<FxTypeOption, 3>& fxTypeOptions_() noexcept;
+    // Безопасное ограничение индекса типа FX.
+    static uint16_t clampFxType_(uint16_t typeIndex) noexcept;
     // Строка статуса active action pointer внизу кадра.
     std::string buildActionStatusLine_(const UiState& rtState, const UiNavState& navState) const;
 

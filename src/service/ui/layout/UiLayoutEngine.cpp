@@ -71,6 +71,8 @@ Size2 defaultLeafMetrics(const UiLayoutNode& node) {
             return Size2{0, 1};
         case UiLayoutNodeType::Knob:
             return Size2{18, 1};
+        case UiLayoutNodeType::Switch:
+            return Size2{22, 1};
         case UiLayoutNodeType::AnimSlot: {
             uint16_t w = 20;
             uint16_t h = 6;
@@ -251,6 +253,7 @@ void arrangeNode(const UiLayoutNode& node,
                              child.type == UiLayoutNodeType::FxListView ||
                              child.type == UiLayoutNodeType::FxEditorView ||
                              child.type == UiLayoutNodeType::List ||
+                             child.type == UiLayoutNodeType::Switch ||
                              child.type == UiLayoutNodeType::Separator ||
                              child.type == UiLayoutNodeType::Spacer)) {
                 cross = contentW;
@@ -262,6 +265,7 @@ void arrangeNode(const UiLayoutNode& node,
                               child.type == UiLayoutNodeType::FxListView ||
                               child.type == UiLayoutNodeType::FxEditorView ||
                               child.type == UiLayoutNodeType::List ||
+                              child.type == UiLayoutNodeType::Switch ||
                               child.type == UiLayoutNodeType::Separator ||
                               child.type == UiLayoutNodeType::Spacer)) {
                 cross = contentH;

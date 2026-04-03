@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -84,6 +85,7 @@ std::string resolveCanonicalBind(UiScene scene,
         return node.id;
     }
     if (nodeType == UiLayoutNodeType::Knob ||
+        nodeType == UiLayoutNodeType::Switch ||
         nodeType == UiLayoutNodeType::AnimSlot ||
         nodeType == UiLayoutNodeType::StatusBar) {
         const UiBindResolution resolved = UiBindResolver::resolve(scene, nodeType, node.bind);
@@ -278,6 +280,51 @@ std::unique_ptr<IUiComponent> buildNodeComponent(UiScene scene,
             return std::move(b).build();
         }
 
+        case UiLayoutNodeType::Switch: {
+            const std::string key = resolveCanonicalBind(scene, UiLayoutNodeType::Switch, node);
+            const float value01 = std::clamp(params.findNumber(key).value_or(0.0f), 0.0f, 1.0f);
+
+            const std::vector<std::string> selectedKeys{
+                key + ".selected",
+                node.id + ".selected",
+            };
+            const bool selected = findFlagByKeys(params, selectedKeys).value_or(false);
+
+            const std::vector<std::string> labelKeys{
+                key + ".label",
+                node.id + ".label",
+            };
+            const std::string label = findTextByKeys(params, labelKeys)
+                                          .value_or(!node.label.empty() ? node.label : key);
+
+            std::vector<std::string> options = node.options;
+            if (options.empty()) {
+                options = {"OFF", "ON"};
+            }
+
+            uint16_t selectedIndex = 0U;
+            const std::vector<std::string> selectedIndexKeys{
+                key + ".selectedIndex",
+                node.id + ".selectedIndex",
+            };
+            if (auto fromParams = findIntegerByKeys(params, selectedIndexKeys); fromParams.has_value()) {
+                selectedIndex = static_cast<uint16_t>(std::max<int32_t>(0, *fromParams));
+            } else if (options.size() > 1U) {
+                const float scaled = value01 * static_cast<float>(options.size() - 1U);
+                selectedIndex = static_cast<uint16_t>(std::lround(scaled));
+            }
+            if (!options.empty()) {
+                selectedIndex = std::min<uint16_t>(selectedIndex, static_cast<uint16_t>(options.size() - 1U));
+            }
+
+            UiSwitchBuilder b(node.id);
+            b.label(label)
+                .options(std::move(options))
+                .selectedIndex(selectedIndex)
+                .selected(selected);
+            return std::move(b).build();
+        }
+
         case UiLayoutNodeType::AnimSlot: {
             const std::string key = resolveCanonicalBind(scene, UiLayoutNodeType::AnimSlot, node);
             const float intensity01 = std::clamp(params.findNumber(key).value_or(0.0f), 0.0f, 1.0f);
@@ -289,7 +336,8 @@ std::unique_ptr<IUiComponent> buildNodeComponent(UiScene scene,
                 key + ".animKey",
                 node.id + ".animKey",
             };
-            const std::string label = findTextByKeys(params, labelKeys).value_or(key);
+            const std::string label = findTextByKeys(params, labelKeys)
+                                          .value_or(!node.label.empty() ? node.label : key);
             const std::string animKey = findTextByKeys(params, animKeyKeys).value_or(key);
             UiAnimSlotBuilder b(node.id);
             b.label(label).animKey(animKey).intensity01(intensity01);

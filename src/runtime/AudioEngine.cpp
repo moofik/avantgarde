@@ -97,10 +97,13 @@ namespace avantgarde {
             masterSink_ = sink;
         }
         void processBlock(const AudioProcessContext& ctx) override {
+            // Локальная копия контекста: в нее движок вкладывает transport snapshot
+            // текущего блока, после чего эта же структура уходит во все RT-узлы.
+            AudioProcessContext rtCtx = ctx;
             // 0) очистка master out перед миксом
             // (по контракту ctx.out должен быть валидным, но можно добавить guard если хочешь)
             for (uint32_t ch = 0; ch < numOut_; ++ch) {
-                std::memset(ctx.out[ch], 0, ctx.nframes * sizeof(float));
+                std::memset(rtCtx.out[ch], 0, rtCtx.nframes * sizeof(float));
             }
 
             // 1) Drain RT-команд (то, что пришло с control thread до начала блока)
@@ -121,9 +124,28 @@ namespace avantgarde {
                 transport_->swapBuffers();
             }
 
+            // 3.5) Публикуем transport snapshot для всех FX/треков в этом блоке.
+            rtCtx.transportValid = false;
+            rtCtx.transportPlaying = false;
+            rtCtx.transportTsNum = 4;
+            rtCtx.transportTsDen = 4;
+            rtCtx.transportBpm = 120.0f;
+            rtCtx.transportQuant = 0;
+            rtCtx.transportSampleTime = 0;
+            if (transport_) {
+                const TransportRtSnapshot& snap = transport_->rt();
+                rtCtx.transportValid = true;
+                rtCtx.transportPlaying = snap.playing;
+                rtCtx.transportTsNum = snap.tsNum;
+                rtCtx.transportTsDen = snap.tsDen;
+                rtCtx.transportBpm = snap.bpm;
+                rtCtx.transportQuant = static_cast<uint8_t>(snap.quant);
+                rtCtx.transportSampleTime = snap.sampleTime;
+            }
+
             // 4) RT extensions — пролог блока (секвенсор/квантизация генерят события)
             for (uint32_t i = 0; i < rtExtCount_; ++i) {
-                rtExt_[i]->onBlockBegin(ctx);
+                rtExt_[i]->onBlockBegin(rtCtx);
             }
 
             // 4.5) Второй drain: применяем команды, которые extensions могли запушить в rtQueue_
@@ -134,12 +156,12 @@ namespace avantgarde {
 
             // 5) Треки: генерят/миксят в ctx.out
             for (auto& t : tracks_) {
-                t->process(ctx);
+                t->process(rtCtx);
             }
 
             // 6) RT extensions — эпилог блока
             for (uint32_t i = 0; i < rtExtCount_; ++i) {
-                rtExt_[i]->onBlockEnd(ctx);
+                rtExt_[i]->onBlockEnd(rtCtx);
             }
 
             // 6.5) Продвигаем transport sampleTime только в режиме PLAY.
@@ -148,13 +170,13 @@ namespace avantgarde {
             if (transport_) {
                 const TransportRtSnapshot& snap = transport_->rt();
                 if (snap.playing) {
-                    transport_->advanceSampleTime(static_cast<uint64_t>(ctx.nframes));
+                    transport_->advanceSampleTime(static_cast<uint64_t>(rtCtx.nframes));
                 }
             }
 
             // 7) Запись master out (если подключен sink)
             if (masterSink_) {
-                (void)masterSink_->writeBlock(ctx.out, static_cast<int>(ctx.nframes));
+                (void)masterSink_->writeBlock(rtCtx.out, static_cast<int>(rtCtx.nframes));
             }
         }
 

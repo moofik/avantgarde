@@ -23,6 +23,8 @@ enum class UiIntentType : uint8_t {
     OpenFxEditor,
     // Установить конкретный параметр эффекта.
     SetFxParam,
+    // Включить/выключить (bypass) FX-слот без удаления из цепочки.
+    SetFxEnabled,
     // Запрос на предпрослушку выбранного файла (preview voice).
     PreviewRequest,
     // Остановка предпрослушки.
@@ -40,6 +42,8 @@ enum class UiIntentType : uint8_t {
     SetTransportQuant,
     // Явная установка BPM транспорта.
     SetTransportBpm,
+    // Детект BPM из сэмпла активного трека с учетом его speed и установка project BPM.
+    DetectProjectBpmFromTrack,
     // Явная установка play/stop транспорта (value: 1.0=play, 0.0=stop).
     SetTransportPlaying,
     // Intent-обертки над текущими transport/track действиями движка.

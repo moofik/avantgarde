@@ -7,7 +7,7 @@
 namespace avantgarde {
 namespace {
 
-constexpr std::size_t kTracksPerPage = 2;
+constexpr std::size_t kTracksPerPage = 1;
 
 const char* quantToStr(QuantizeMode q) noexcept {
     switch (q) {
@@ -106,7 +106,7 @@ void pushLine(SceneFrame& frame, int y, const std::string& text) {
 } // namespace
 
 SceneFrame TracksSceneFrameBuilder::build(const UiState& state,
-                                          const UiNavState& navState,
+                                          const UiNavState& /*navState*/,
                                           uint16_t width,
                                           std::string_view headerTitle,
                                           std::string_view actionStatusLine,
@@ -125,9 +125,6 @@ SceneFrame TracksSceneFrameBuilder::build(const UiState& state,
                                         : std::min<std::size_t>(state.transport.activeTrack, totalTracks - 1U);
     std::size_t pageIndex = (totalTracks == 0U) ? 0U : (activeTrack / kTracksPerPage);
     pageIndex = std::min<std::size_t>(pageIndex, totalPages - 1U);
-    if (totalTracks > 0U) {
-        pageIndex = std::min<std::size_t>(navState.trackPage, totalPages - 1U);
-    }
     const std::size_t pageStart = pageIndex * kTracksPerPage;
     const std::size_t pageEnd = std::min<std::size_t>(pageStart + kTracksPerPage, totalTracks);
 
@@ -180,12 +177,13 @@ SceneFrame TracksSceneFrameBuilder::build(const UiState& state,
     } else {
         for (std::size_t i = pageStart; i < pageEnd; ++i) {
             const UiTrackStateView& tr = state.tracks[i];
-            const bool active = (tr.id == activeTrack);
+            const uint8_t uiTrackIndex = static_cast<uint8_t>(i);
+            const bool active = (uiTrackIndex == activeTrack);
             const char* marker = active ? "▶" : " ";
 
             std::snprintf(line, sizeof(line), " %s T%u %-5s clip:%s",
                           marker,
-                          static_cast<unsigned>(tr.id + 1U),
+                          static_cast<unsigned>(uiTrackIndex + 1U),
                           trackStateToStr(tr.state),
                           clipShort(tr.clipName, clipWidth).c_str());
             pushLine(frame, y++, padRight(line, inner));
@@ -233,4 +231,3 @@ SceneFrame TracksSceneFrameBuilder::build(const UiState& state,
 }
 
 } // namespace avantgarde
-

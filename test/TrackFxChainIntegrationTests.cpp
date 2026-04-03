@@ -207,3 +207,39 @@ TEST_CASE("Engine: two tracks keep independent FX chains and ParamBridge routes 
     REQUIRE(out0[0] == Catch::Approx(0.25f).margin(0.08f));
     REQUIRE(out0[1] == Catch::Approx(0.25f).margin(0.08f));
 }
+
+TEST_CASE("ClipTrack FX slot can be bypassed without removing module") {
+    MockQueue q;
+    ParamBridgeDualBuffer pb(16, &ResolveTarget);
+    auto engine = MakeAudioEngine(&q, &pb);
+
+    auto tr = std::make_unique<ClipTrackImpl>();
+    auto* trPtr = tr.get();
+
+    const fs::path tmp = fs::temp_directory_path() / "ag_fx_bypass.wav";
+    std::vector<int16_t> pcm(32, 32767);
+    write_wav_pcm16(tmp, 48000, 1, pcm);
+    REQUIRE(trPtr->loadSlotFromFile(0, tmp.string().c_str()));
+    REQUIRE(trPtr->setSlotLooping(0, true));
+
+    trPtr->addModule(std::make_unique<GainFxModule>());
+    gTracks[0] = trPtr;
+    gTracks[1] = nullptr;
+    engine->registerTrack(std::move(tr));
+
+    // Start playback and set gain FX to 0.0 -> signal should be near silence.
+    q.push(makeCmd(CmdId::Play, 0, 0, 0, 1.0f));
+    q.push(makeCmd(CmdId::ParamSet, 0, 0, 0, 0.0f));
+
+    std::vector<float> out0(16, 0.0f), out1(16, 0.0f);
+    auto ctx = makeCtx(out0, out1);
+    engine->processBlock(ctx);
+    REQUIRE(std::fabs(out0[0]) < 0.02f);
+
+    // Disable FX slot via common FX param -> module stays in slot, audio bypasses FX.
+    q.push(makeCmd(CmdId::ParamSet, 0, 0, toParamIndex(FxCommonParamId::Enabled), 0.0f));
+    std::fill(out0.begin(), out0.end(), 0.0f);
+    std::fill(out1.begin(), out1.end(), 0.0f);
+    engine->processBlock(ctx);
+    REQUIRE(out0[0] == Catch::Approx(1.0f).margin(0.08f));
+}

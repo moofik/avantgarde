@@ -516,6 +516,8 @@ void MacGbWindowRenderer::renderCustomFrame(const std::string& monoFrame, bool s
                               [line hasPrefix:@"╠"] || [line hasPrefix:@"╟"];
         const bool isHeader = [line containsString:@"AVANTGARDE"];
         const bool isTransport = [line containsString:@" TRN:"] || [line containsString:@" ACTIVE:"];
+        const bool isActionStatus = [line containsString:@" action:"];
+        const bool isKeysHint = [line containsString:@" keys ["];
         const bool isActiveTrack = [line containsString:@"▶ T"];
 
         if (isBorder) {
@@ -537,7 +539,7 @@ void MacGbWindowRenderer::renderCustomFrame(const std::string& monoFrame, bool s
                     NSForegroundColorAttributeName: [NSColor clearColor]
                 } range:titleGlobal];
             }
-        } else if (isTransport || isActiveTrack) {
+        } else if (isTransport || isActiveTrack || isActionStatus || isKeysHint) {
             [attr addAttributes:@{
                 NSForegroundColorAttributeName: impl_->text,
                 NSBackgroundColorAttributeName: impl_->panel

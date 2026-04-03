@@ -13,7 +13,10 @@ constexpr std::array<int, 2> kApBaseL = {556, 441};
 constexpr std::array<int, 2> kApBaseR = {579, 464}; // L + 23
 
 constexpr float kAllpassFeedback = 0.5f;
-constexpr float kInputGain = 0.015f;
+// Входной драйв ревера.
+// Повышен относительно классического freeverb-уровня,
+// чтобы wet ощущался равномернее в диапазоне 0..1.
+constexpr float kInputGain = 0.04f;
 
 } // namespace
 
@@ -157,22 +160,37 @@ float SchroederReverbModule::processAllpass_(Allpass& a, float in, float feedbac
 }
 
 void SchroederReverbModule::recalcFromParams_(const Params& p) noexcept {
-    const float wet = clamp01_(p.wet);
+    const float wetCtrl = clamp01_(p.wet);
     const float room = clamp01_(p.room);
     const float damp = clamp01_(p.damp);
     const float width = clamp01_(p.width);
 
-    // Room: ограничиваем feedback, чтобы не уйти в бесконечную регенерацию.
-    feedback_ = 0.30f + room * 0.66f; // [0.30 .. 0.96]
+    // Room -> RT60 (сек). Параметр room растет линейно по времени хвоста,
+    // а feedback вычисляется из RT60 по экспоненциальной формуле затухания.
+    constexpr float kRt60MinSec = 0.35f;
+    constexpr float kRt60MaxSec = 8.0f;
+    constexpr float kRefDelaySec = 0.03f; // референс для усредненного comb-delay
+    const float rt60Sec = kRt60MinSec + room * (kRt60MaxSec - kRt60MinSec);
+    const float fb = std::pow(10.0f, (-3.0f * kRefDelaySec) / std::max(0.05f, rt60Sec));
+    feedback_ = std::clamp(fb, 0.30f, 0.985f);
+
     // Damp: 0 -> ярко/долго по ВЧ, 1 -> сильнее затухают ВЧ.
-    dampA_ = 0.05f + damp * 0.90f;
+    dampA_ = 0.08f + damp * 0.88f;
     dampB_ = 1.0f - dampA_;
 
-    const float w1 = wet * (0.5f + 0.5f * width);
-    const float w2 = wet * (0.5f * (1.0f - width));
+    // Wet-модель:
+    // - dry линейно уменьшается с ростом wet;
+    // - wet-path получает квадратичную makeup-компенсацию, чтобы high-wet
+    //   не "проваливался" по громкости и был заметен уже в среднем диапазоне.
+    const float wet = wetCtrl;
+    const float dryGain = 1.0f - wet;
+    const float wetGain = wet * (0.4f + 7.6f * wet);
+
+    const float w1 = wetGain * (0.5f + 0.5f * width);
+    const float w2 = wetGain * (0.5f * (1.0f - width));
     wet1_ = w1;
     wet2_ = w2;
-    dry_ = 1.0f - wet;
+    dry_ = dryGain;
 }
 
 void SchroederReverbModule::configureDelayLines_() {
@@ -203,4 +221,3 @@ float SchroederReverbModule::clamp01_(float v) noexcept {
 }
 
 } // namespace avantgarde
-

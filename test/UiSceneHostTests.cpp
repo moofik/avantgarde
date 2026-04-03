@@ -1,5 +1,7 @@
 #include <catch2/catch_all.hpp>
 
+#include "service/ui/FxEditorWidget.h"
+#include "service/ui/FxListWidget.h"
 #include "service/ui/UiSceneHost.h"
 
 using namespace avantgarde;
@@ -80,6 +82,14 @@ public:
             UiIntent it{};
             it.type = UiIntentType::SetTransportBpm;
             it.value = 121.0f;
+            return WidgetOutput{true, {it}};
+        }
+        if (action.def.id == UiAction::Id::SceneDetectProjectBpm &&
+            action.op == UiAction::Op::Apply) {
+            navState.cursor = static_cast<uint16_t>(navState.cursor + 1000);
+            UiIntent it{};
+            it.type = UiIntentType::DetectProjectBpmFromTrack;
+            it.track = navState.selectedTrack;
             return WidgetOutput{true, {it}};
         }
         if (action.op == UiAction::Op::Redo) {
@@ -165,11 +175,18 @@ TEST_CASE("UiSceneHost: handles global track navigation and delegates local inpu
     host.nav().trackPage = 0;
     const WidgetOutput pagePrevOut = host.handleGesture(UiGesture::TrackPagePrev, state);
     REQUIRE(pagePrevOut.handled);
-    REQUIRE(host.nav().trackPage == 0);
+    REQUIRE(host.nav().trackPage == 1);
+    REQUIRE(pagePrevOut.intents.size() == 1);
+    REQUIRE(pagePrevOut.intents[0].type == UiIntentType::SetActiveTrack);
+    REQUIRE(pagePrevOut.intents[0].track == 1);
 
     const WidgetOutput pageNextOut = host.handleGesture(UiGesture::TrackPageNext, state);
     REQUIRE(pageNextOut.handled);
+    REQUIRE(host.nav().selectedTrack == 0);
     REQUIRE(host.nav().trackPage == 0);
+    REQUIRE(pageNextOut.intents.size() == 1);
+    REQUIRE(pageNextOut.intents[0].type == UiIntentType::SetActiveTrack);
+    REQUIRE(pageNextOut.intents[0].track == 0);
 
     const WidgetOutput localOut = host.handleGesture(UiGesture::PreviewPlay, state);
     REQUIRE(localOut.handled);
@@ -186,11 +203,19 @@ TEST_CASE("UiSceneHost: track page navigation wraps for multi-page track list") 
     host.nav().trackPage = 0;
     const WidgetOutput pagePrevOut = host.handleGesture(UiGesture::TrackPagePrev, state);
     REQUIRE(pagePrevOut.handled);
-    REQUIRE(host.nav().trackPage == 1);
+    REQUIRE(host.nav().selectedTrack == 3);
+    REQUIRE(host.nav().trackPage == 3);
+    REQUIRE(pagePrevOut.intents.size() == 1);
+    REQUIRE(pagePrevOut.intents[0].type == UiIntentType::SetActiveTrack);
+    REQUIRE(pagePrevOut.intents[0].track == 3);
 
     const WidgetOutput pageNextOut = host.handleGesture(UiGesture::TrackPageNext, state);
     REQUIRE(pageNextOut.handled);
+    REQUIRE(host.nav().selectedTrack == 0);
     REQUIRE(host.nav().trackPage == 0);
+    REQUIRE(pageNextOut.intents.size() == 1);
+    REQUIRE(pageNextOut.intents[0].type == UiIntentType::SetActiveTrack);
+    REQUIRE(pageNextOut.intents[0].track == 0);
 }
 
 TEST_CASE("UiSceneHost: pointer actions are routed to widget action handler") {
@@ -253,6 +278,110 @@ TEST_CASE("UiSceneHost: global pointer scope uses host global catalog") {
     host.nav().globalActionIndex = 2;
     const WidgetOutput pageOut = host.handleGesture(UiGesture::ActionApply, state);
     REQUIRE(pageOut.handled);
-    REQUIRE(pageOut.intents.empty());
-    REQUIRE(host.nav().trackPage == 1);
+    REQUIRE(host.nav().selectedTrack == 3);
+    REQUIRE(host.nav().trackPage == 3);
+    REQUIRE(pageOut.intents.size() == 1);
+    REQUIRE(pageOut.intents[0].type == UiIntentType::SetActiveTrack);
+    REQUIRE(pageOut.intents[0].track == 3);
+}
+
+TEST_CASE("UiSceneHost: F10 triggers detect BPM quick action on tracks scene") {
+    UiSceneHost host;
+    REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));
+
+    UiState state{};
+    state.tracks.resize(2);
+    host.nav().scene = UiScene::Tracks;
+    host.nav().selectedTrack = 1;
+    host.nav().cursor = 5;
+
+    const WidgetOutput out = host.handleGesture(UiGesture::F10, state);
+    REQUIRE(out.handled);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::DetectProjectBpmFromTrack);
+    REQUIRE(out.intents[0].track == 1);
+    REQUIRE(host.nav().cursor == 1005);
+}
+
+TEST_CASE("UiSceneHost: FxList fast F-keys route to slot nav and quick actions") {
+    UiSceneHost host;
+    REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));
+    REQUIRE(host.registerWidget(UiScene::FxList, std::make_unique<FxListWidget>(60)));
+
+    UiState state{};
+    state.tracks.resize(1);
+    state.tracks[0].id = 0;
+    state.tracks[0].fxCount = 1;
+    state.tracks[0].fxChainIds = {"fx.reverb.schroeder"};
+    state.tracks[0].fxEnabled = {1};
+
+    host.setScene(UiScene::FxList);
+    host.nav().selectedTrack = 0;
+    host.nav().selectedFx = 1; // виртуальный пустой слот
+    host.nav().fxAddPopupOpen = false;
+
+    const WidgetOutput openPopup = host.handleGesture(UiGesture::F1, state);
+    REQUIRE(openPopup.handled);
+    REQUIRE(host.nav().fxAddPopupOpen);
+    REQUIRE(openPopup.intents.empty());
+
+    const uint16_t prevType = host.nav().selectedFxType;
+    const WidgetOutput typeNext = host.handleGesture(UiGesture::F6, state);
+    REQUIRE(typeNext.handled);
+    REQUIRE(host.nav().selectedFxType != prevType);
+
+    const WidgetOutput closePopup = host.handleGesture(UiGesture::BackScene, state);
+    REQUIRE(closePopup.handled);
+    REQUIRE_FALSE(host.nav().fxAddPopupOpen);
+    REQUIRE(host.scene() == UiScene::FxList);
+
+    const WidgetOutput slotUp = host.handleGesture(UiGesture::F5, state);
+    REQUIRE(slotUp.handled);
+    REQUIRE(host.nav().selectedFx == 0);
+
+    const WidgetOutput bypass = host.handleGesture(UiGesture::F7, state);
+    REQUIRE(bypass.handled);
+    REQUIRE(bypass.intents.size() == 1);
+    REQUIRE(bypass.intents[0].type == UiIntentType::SetFxEnabled);
+
+    const WidgetOutput remove = host.handleGesture(UiGesture::F8, state);
+    REQUIRE(remove.handled);
+    REQUIRE(remove.intents.size() == 1);
+    REQUIRE(remove.intents[0].type == UiIntentType::RemoveFxFromTrack);
+}
+
+TEST_CASE("UiSceneHost: FxEditor fast F-keys route to select/value/bypass") {
+    UiSceneHost host;
+    REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));
+    REQUIRE(host.registerWidget(UiScene::FxEditor, std::make_unique<FxEditorWidget>(60, 0.1f)));
+
+    UiState state{};
+    state.tracks.resize(1);
+    state.tracks[0].id = 0;
+    state.tracks[0].fxCount = 1;
+    state.tracks[0].fxChainIds = {"fx.reverb.schroeder"};
+    state.tracks[0].fxEnabled = {1};
+
+    host.setScene(UiScene::FxEditor);
+    host.nav().selectedTrack = 0;
+    host.nav().selectedFx = 0;
+    host.nav().cursor = 0;
+
+    const WidgetOutput prevParam = host.handleGesture(UiGesture::F5, state);
+    REQUIRE(prevParam.handled);
+    REQUIRE(host.nav().cursor == 3);
+
+    const WidgetOutput nextParam = host.handleGesture(UiGesture::F6, state);
+    REQUIRE(nextParam.handled);
+    REQUIRE(host.nav().cursor == 0);
+
+    const WidgetOutput decValue = host.handleGesture(UiGesture::F7, state);
+    REQUIRE(decValue.handled);
+    REQUIRE(decValue.intents.size() == 1);
+    REQUIRE(decValue.intents[0].type == UiIntentType::SetFxParam);
+
+    const WidgetOutput bypass = host.handleGesture(UiGesture::F1, state);
+    REQUIRE(bypass.handled);
+    REQUIRE(bypass.intents.size() == 1);
+    REQUIRE(bypass.intents[0].type == UiIntentType::SetFxEnabled);
 }

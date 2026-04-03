@@ -40,6 +40,18 @@ float sumAbs(const std::vector<float>& v) {
     return static_cast<float>(s);
 }
 
+float rms(const std::vector<float>& v) {
+    if (v.empty()) {
+        return 0.0f;
+    }
+    double s2 = 0.0;
+    for (float x : v) {
+        const double xd = static_cast<double>(x);
+        s2 += xd * xd;
+    }
+    return static_cast<float>(std::sqrt(s2 / static_cast<double>(v.size())));
+}
+
 } // namespace
 
 TEST_CASE("SchroederReverb: wet=0 is dry passthrough") {
@@ -111,3 +123,66 @@ TEST_CASE("SchroederReverb: output remains finite on long run") {
     }
 }
 
+TEST_CASE("SchroederReverb: wet has audible growth in mid range") {
+    auto tailEnergyForWet = [](float wet) {
+        SchroederReverbModule rev;
+        rev.init(48000.0, 512);
+        rev.setParam(SchroederReverbModule::P_WET, wet);
+        rev.setParam(SchroederReverbModule::P_ROOM, 0.75f);
+        rev.setParam(SchroederReverbModule::P_DAMP, 0.25f);
+        rev.setParam(SchroederReverbModule::P_WIDTH, 0.9f);
+        rev.beginBlock();
+        REQUIRE(std::abs(rev.getParam(SchroederReverbModule::P_WET) - wet) < 1e-6f);
+
+        StereoBlock first(512);
+        first.inL[0] = 1.0f;
+        first.inR[0] = 1.0f;
+        rev.process(first.ctx);
+
+        StereoBlock tail(4096);
+        rev.beginBlock();
+        rev.process(tail.ctx);
+        return sumAbs(tail.outL) + sumAbs(tail.outR);
+    };
+
+    const float e03 = tailEnergyForWet(0.3f);
+    const float e07 = tailEnergyForWet(0.7f);
+    REQUIRE(e03 > 1e-4f);
+    REQUIRE(e07 > e03 * 1.6f);
+}
+
+TEST_CASE("SchroederReverb: high wet keeps reasonable loudness") {
+    auto steadyRmsForWet = [](float wet) {
+        SchroederReverbModule rev;
+        rev.init(48000.0, 256);
+        rev.setParam(SchroederReverbModule::P_WET, wet);
+        rev.setParam(SchroederReverbModule::P_ROOM, 0.8f);
+        rev.setParam(SchroederReverbModule::P_DAMP, 0.3f);
+        rev.setParam(SchroederReverbModule::P_WIDTH, 1.0f);
+
+        StereoBlock b(256);
+        float rmsAcc = 0.0f;
+        int rmsBlocks = 0;
+        for (int iter = 0; iter < 40; ++iter) {
+            for (std::size_t i = 0; i < b.inL.size(); ++i) {
+                const float x = std::sin((static_cast<float>(iter * 256 + static_cast<int>(i)) * 0.013f)) * 0.25f;
+                b.inL[i] = x;
+                b.inR[i] = x;
+                b.outL[i] = 0.0f;
+                b.outR[i] = 0.0f;
+            }
+            rev.beginBlock();
+            rev.process(b.ctx);
+            if (iter >= 25) {
+                rmsAcc += 0.5f * (rms(b.outL) + rms(b.outR));
+                ++rmsBlocks;
+            }
+        }
+        return (rmsBlocks > 0) ? (rmsAcc / static_cast<float>(rmsBlocks)) : 0.0f;
+    };
+
+    const float dryRms = steadyRmsForWet(0.0f);
+    const float wetRms = steadyRmsForWet(1.0f);
+    REQUIRE(dryRms > 1e-4f);
+    REQUIRE(wetRms > dryRms * 0.65f);
+}

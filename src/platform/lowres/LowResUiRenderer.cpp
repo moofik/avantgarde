@@ -53,7 +53,7 @@ void LowResUiRenderer::render(const UiState& state) {
     display_.clear();
 
     const std::size_t totalTracks = state.tracks.size();
-    const std::size_t pageSize = 2;
+    const std::size_t pageSize = 1;
     const std::size_t totalPages = std::max<std::size_t>(1, (totalTracks + pageSize - 1U) / pageSize);
     const std::size_t activeTrack = (totalTracks == 0)
                                         ? 0U
@@ -85,11 +85,12 @@ void LowResUiRenderer::render(const UiState& state) {
     const uint16_t barWidth = display_.width() > 24 ? static_cast<uint16_t>(display_.width() - 24U) : 8U;
     for (std::size_t i = pageStart; i < pageEnd; ++i) {
         const auto& tr = state.tracks[i];
+        const uint8_t uiTrackIndex = static_cast<uint8_t>(i);
         const uint16_t y = static_cast<uint16_t>(4 + (i - pageStart) * 5);
 
         std::snprintf(line, sizeof(line), "T%u%s %s %s",
-                      static_cast<unsigned>(tr.id + 1),
-                      tr.id == activeTrack ? "*" : " ",
+                      static_cast<unsigned>(uiTrackIndex + 1U),
+                      uiTrackIndex == activeTrack ? "*" : " ",
                       trackStateToShort(tr.state),
                       clipShort(tr.clipName).c_str());
         display_.drawText(0, y, line);

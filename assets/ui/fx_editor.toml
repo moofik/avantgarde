@@ -87,6 +87,6 @@ width = "100%"
 [[layout.children]]
 type = "text"
 id = "keys_hint"
-text = " keys [j/k focus] [/? adjust] [o apply] [esc back] "
+text = " keys [F5/F6 param] [F7/F8 value] [F1 bypass] [esc] "
 bind = "status.keys"
 width = "100%"

@@ -32,6 +32,10 @@ struct UiNavState {
 
     // Выбранный FX-слот в FxList/FxEditor.
     uint16_t selectedFx{0};
+    // Выбранный тип FX для действия "Add FX" в FxList.
+    uint16_t selectedFxType{0};
+    // Модальное окно выбора FX в сцене FxList (true = popup открыт).
+    bool fxAddPopupOpen{false};
     // Текущая директория для File Manager.
     std::string managerCwd{"."};
     // Текст фильтра в File Manager (имя/маска/расширение).

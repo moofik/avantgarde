@@ -43,6 +43,7 @@ public:
     static constexpr std::string_view kUnknownFxId = "fx.unknown";
     static constexpr std::string_view kReverbSchroederId = "fx.reverb.schroeder";
     static constexpr std::string_view kHpfOnePoleId = "fx.filter.hpf.onepole";
+    static constexpr std::string_view kStutterId = "fx.stutter.sync";
 
     // Резолв ID/алиаса в descriptor. Возвращает nullptr, если профиль неизвестен.
     static const FxDescriptor* find(std::string_view id) noexcept {
@@ -51,6 +52,9 @@ public:
         }
         if (id == kHpfOnePoleId || id == "hpf.onepole" || id == "hpf") {
             return &hpf_;
+        }
+        if (id == kStutterId || id == "stutter.sync" || id == "stutter") {
+            return &stutter_;
         }
         return nullptr;
     }
@@ -75,6 +79,13 @@ private:
         {toParamIndex(HpfParamId::Cutoff), "cutoff", "Cutoff", 0.0f, 1.0f, 0.50f},
     }};
 
+    static inline constexpr std::array<FxParamDescriptor, 4> stutterParams_{{
+        {toParamIndex(StutterParamId::Wet), "wet", "Wet", 0.0f, 1.0f, 0.70f},
+        {toParamIndex(StutterParamId::Rate), "rate", "Rate", 0.0f, 1.0f, 0.65f},
+        {toParamIndex(StutterParamId::Gate), "gate", "Gate", 0.0f, 1.0f, 0.60f},
+        {toParamIndex(StutterParamId::Retrigger), "retrig", "Retrig", 0.0f, 1.0f, 0.00f},
+    }};
+
     static inline constexpr FxDescriptor reverb_{
         kReverbSchroederId,
         "Schroeder Reverb",
@@ -87,6 +98,13 @@ private:
         "OnePole HPF",
         hpfParams_.data(),
         hpfParams_.size(),
+    };
+
+    static inline constexpr FxDescriptor stutter_{
+        kStutterId,
+        "Sync Stutter",
+        stutterParams_.data(),
+        stutterParams_.size(),
     };
 };
 

@@ -42,10 +42,12 @@ void AnsiUiRenderer::render(const UiState& state) {
                 static_cast<unsigned long long>(state.telemetry.xruns),
                 state.telemetry.rtQueueOverflow ? "yes" : "no");
 
-    for (const auto& tr : state.tracks) {
+    for (std::size_t i = 0; i < state.tracks.size(); ++i) {
+        const auto& tr = state.tracks[i];
+        const uint8_t uiTrackIndex = static_cast<uint8_t>(i);
         std::printf("Track %u%s: %-9s | clip=%s | bars=%u | speed=%.3f | gain=%.2f | loop=%s | mute=%s | arm=%s | fx=%u\n",
-                    static_cast<unsigned>(tr.id),
-                    tr.id == state.transport.activeTrack ? "*" : " ",
+                    static_cast<unsigned>(uiTrackIndex + 1U),
+                    uiTrackIndex == state.transport.activeTrack ? "*" : " ",
                     trackStateToStr(tr.state),
                     tr.clipName.empty() ? "-" : tr.clipName.c_str(),
                     tr.bars,

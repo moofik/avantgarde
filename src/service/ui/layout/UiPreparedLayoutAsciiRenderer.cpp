@@ -62,6 +62,57 @@ std::string markerPrefix(UiListComponent::Marker marker, bool selected) {
     }
 }
 
+std::size_t utf8ColumnsApprox(std::string_view s) noexcept {
+    std::size_t cols = 0;
+    for (unsigned char c : s) {
+        if ((c & 0xC0u) != 0x80u) {
+            ++cols;
+        }
+    }
+    return cols;
+}
+
+std::string buildSwitchText(const UiSwitchComponent& sw, uint16_t width) {
+    const std::string marker = sw.selected ? ">" : " ";
+    std::string value = "-";
+    if (!sw.options.empty()) {
+        const std::size_t idx = std::min<std::size_t>(sw.selectedIndex, sw.options.size() - 1U);
+        value = sw.options[idx];
+    }
+
+    std::string optionsJoined{};
+    for (std::size_t i = 0; i < sw.options.size(); ++i) {
+        if (i > 0U) {
+            optionsJoined += "|";
+        }
+        if (i == sw.selectedIndex) {
+            optionsJoined += "[";
+            optionsJoined += sw.options[i];
+            optionsJoined += "]";
+        } else {
+            optionsJoined += sw.options[i];
+        }
+    }
+    if (optionsJoined.empty()) {
+        optionsJoined = value;
+    }
+
+    // 1) Полный формат с перечнем всех вариантов.
+    const std::string full = marker + " " + sw.label + " {" + optionsJoined + "}";
+    if (width == 0U || utf8ColumnsApprox(full) <= width) {
+        return full;
+    }
+
+    // 2) Компактный формат: только label + текущее значение.
+    const std::string compact = marker + " " + sw.label + " {" + value + "}";
+    if (utf8ColumnsApprox(compact) <= width) {
+        return compact;
+    }
+
+    // 3) Минимум: только label, чтобы подпись точно не терялась.
+    return marker + " " + sw.label;
+}
+
 void collectComponentsById(const IUiComponent* component,
                            std::unordered_map<std::string, const IUiComponent*>& out) {
     if (!component) {
@@ -98,6 +149,7 @@ void collectComponentsById(const IUiComponent* component,
         case UiComponentType::StatusBar:
         case UiComponentType::Text:
         case UiComponentType::Knob:
+        case UiComponentType::Switch:
         case UiComponentType::AnimSlot:
         case UiComponentType::List:
         case UiComponentType::Separator:
@@ -240,6 +292,14 @@ std::vector<std::string> UiPreparedLayoutAsciiRenderer::render(const UiPreparedL
                     .value01 = std::clamp(knob->value01, 0.0f, 1.0f),
                     .selected = knob->selected,
                 });
+            } break;
+
+            case UiLayoutNodeType::Switch: {
+                const auto* sw = dynamic_cast<const UiSwitchComponent*>(component);
+                if (!sw) {
+                    break;
+                }
+                pushText(frame, rect, 0U, buildSwitchText(*sw, rect.width));
             } break;
 
             case UiLayoutNodeType::AnimSlot: {

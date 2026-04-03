@@ -5,6 +5,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #include "service/ui/FxEditorWidget.h"
@@ -84,9 +85,21 @@ std::unique_ptr<IUiWidget> UiWidgetFactory::create(UiScene scene) const {
                 options_.frameWidth,
                 loadTemplateOrThrow(options_, "fx_list.toml"));
         case UiScene::FxEditor: {
-            // Для FX-редактора layout обязателен: fail-fast при любой проблеме.
-            auto layout = loadTemplateOrThrow(options_, "fx_editor.toml");
-            return std::make_unique<FxEditorWidget>(options_.frameWidth, options_.fxParamStep, std::move(layout));
+            // Строгая модель: base + отдельный профиль для каждого FX (без fallback).
+            auto baseLayout = loadTemplateOrThrow(options_, options_.fxEditorBaseLayout);
+            std::unordered_map<std::string, UiLayoutTemplate> profileLayouts{};
+            profileLayouts.reserve(options_.fxEditorProfileLayouts.size());
+            for (const auto& [fxId, filePath] : options_.fxEditorProfileLayouts) {
+                if (fxId.empty() || filePath.empty()) {
+                    throw std::runtime_error("UiWidgetFactory: fx profile mapping has empty fxId or file path");
+                }
+                profileLayouts.emplace(fxId, loadTemplateOrThrow(options_, filePath));
+            }
+            return std::make_unique<FxEditorWidget>(
+                options_.frameWidth,
+                options_.fxParamStep,
+                std::move(baseLayout),
+                std::move(profileLayouts));
         }
         default:
             return nullptr;

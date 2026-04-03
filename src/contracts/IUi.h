@@ -40,7 +40,12 @@ struct UiTrackStateView {
     // Канонические ID FX по слотам (слот 0 -> fxChainIds[0] и т.д.).
     // UI использует это для именования списка FX и подбора профиля параметров в редакторе.
     std::vector<std::string> fxChainIds{};
+    // Состояние FX-слотов: 1 = enabled, 0 = bypass.
+    // Индекс совпадает с fxChainIds/слотом.
+    std::vector<uint8_t> fxEnabled{};
     std::string clipName;
+    // Абсолютный/рабочий путь к загруженному сэмплу (для сервисов анализа).
+    std::string clipPath;
 };
 
 struct UiTelemetryState {

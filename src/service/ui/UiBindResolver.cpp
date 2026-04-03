@@ -281,13 +281,15 @@ std::vector<UiBindOption> UiBindResolver::catalog(UiScene scene, UiLayoutNodeTyp
     if (nodeType == UiLayoutNodeType::StatusBar) {
         return statusBarCatalog();
     }
-    if (scene == UiScene::FxEditor && nodeType == UiLayoutNodeType::Knob) {
+    if (scene == UiScene::FxEditor &&
+        (nodeType == UiLayoutNodeType::Knob || nodeType == UiLayoutNodeType::Switch)) {
         return fxEditorKnobCatalog();
     }
     if (scene == UiScene::FxEditor && nodeType == UiLayoutNodeType::AnimSlot) {
         return fxEditorAnimCatalog();
     }
-    if (scene == UiScene::Tracks && nodeType == UiLayoutNodeType::Knob) {
+    if (scene == UiScene::Tracks &&
+        (nodeType == UiLayoutNodeType::Knob || nodeType == UiLayoutNodeType::Switch)) {
         return tracksKnobCatalog();
     }
     return {};
@@ -301,13 +303,15 @@ UiBindResolution UiBindResolver::resolve(UiScene scene,
     if (nodeType == UiLayoutNodeType::StatusBar) {
         return resolveStatusBar(key);
     }
-    if (scene == UiScene::FxEditor && nodeType == UiLayoutNodeType::Knob) {
+    if (scene == UiScene::FxEditor &&
+        (nodeType == UiLayoutNodeType::Knob || nodeType == UiLayoutNodeType::Switch)) {
         return resolveFxEditorKnob(key);
     }
     if (scene == UiScene::FxEditor && nodeType == UiLayoutNodeType::AnimSlot) {
         return resolveFxEditorAnim(key);
     }
-    if (scene == UiScene::Tracks && nodeType == UiLayoutNodeType::Knob) {
+    if (scene == UiScene::Tracks &&
+        (nodeType == UiLayoutNodeType::Knob || nodeType == UiLayoutNodeType::Switch)) {
         return resolveTracksKnob(key);
     }
 

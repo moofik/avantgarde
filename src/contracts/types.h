@@ -73,6 +73,14 @@ namespace avantgarde {
         const float** in; // [numIn][nframes]
         float** out; // [numOut][nframes]
         std::size_t nframes; // 128/256/512 и т.п.
+        // Transport snapshot for tempo-synced DSP (filled by engine per block).
+        bool transportValid{false};      // true, если транспорт подключен
+        bool transportPlaying{false};    // play/stop на начало блока
+        uint8_t transportTsNum{4};       // time signature numerator
+        uint8_t transportTsDen{4};       // time signature denominator
+        float transportBpm{120.0f};      // tempo на начало блока
+        uint8_t transportQuant{0};       // QuantizeMode as uint8: 0/1/2
+        uint64_t transportSampleTime{0}; // sample позиция на начало блока
     };
     static_assert(std::is_trivially_copyable<AudioProcessContext>::value, "ctx must be POD");
 

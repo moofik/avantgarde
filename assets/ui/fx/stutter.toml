@@ -1,0 +1,63 @@
+id = "fx_profile_stutter"
+
+[layout]
+type = "column"
+gap = 1
+
+[[layout.children]]
+type = "text"
+id = "fx_meta"
+bind = "status.fx.meta"
+
+[[layout.children]]
+type = "row"
+gap = 2
+
+[[layout.children.children]]
+type = "knob"
+id = "st_wet"
+label = "WET"
+bind = "scene.fx.param.value.0"
+
+[[layout.children.children]]
+type = "knob"
+id = "st_rate"
+label = "RATE"
+bind = "scene.fx.param.value.1"
+
+[[layout.children.children]]
+type = "knob"
+id = "st_gate"
+label = "GATE"
+bind = "scene.fx.param.value.2"
+
+[[layout.children.children]]
+type = "knob"
+id = "st_retrig"
+label = "RETRIG"
+bind = "scene.fx.param.value.3"
+
+# Быстрые дискретные шаги retrigger (для device-like live workflow).
+# Эти шаги маппятся в DSP так:
+# OFF = retrigger disabled (только gate),
+# 1   = 1 перезахват за бар,
+# 2   = 2 перезахвата за бар (каждые 1/2 bar),
+# 4   = 4 перезахвата за бар (каждые 1/4 bar),
+# 8   = 8 перезахватов за бар (каждые 1/8 bar),
+# 16  = 16 перезахватов за бар (каждые 1/16 bar).
+#
+# Важно: это частота перезахвата нового куска.
+# Длина куска определяется ручкой RATE.
+[[layout.children.children]]
+type = "switch"
+id = "st_retrig_mode"
+label = "RTRG STEP"
+bind = "scene.fx.param.value.3"
+options = ["OFF", "1", "2", "4", "8", "16"]
+
+[[layout.children]]
+type = "anim_slot"
+id = "st_anim"
+bind = "fx.anim.current"
+width = "100%"
+height = 5

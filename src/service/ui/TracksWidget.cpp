@@ -13,7 +13,7 @@
 namespace avantgarde {
 namespace {
 
-constexpr std::size_t kTracksPerPage = 2;
+constexpr std::size_t kTracksPerPage = 1;
 
 uint8_t clampTrackIndex(uint8_t track, std::size_t totalTracks) noexcept {
     if (totalTracks == 0) {
@@ -173,9 +173,10 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     const uint8_t activeTrack = (totalTracks == 0U)
                                     ? 0U
                                     : clampTrackIndex(rtState.transport.activeTrack, totalTracks);
+    // В режиме "1 page = 1 active track" всегда показываем страницу активного трека.
     const std::size_t pageIndex = (totalTracks == 0U)
                                       ? 0U
-                                      : std::min<std::size_t>(navState.trackPage, totalPages - 1U);
+                                      : std::min<std::size_t>(activeTrack, totalPages - 1U);
     const std::size_t pageStart = pageIndex * kTracksPerPage;
     const std::size_t pageEnd = std::min<std::size_t>(pageStart + kTracksPerPage, totalTracks);
 
@@ -217,15 +218,16 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
         char line[256]{};
         for (std::size_t i = pageStart; i < pageEnd; ++i) {
             const UiTrackStateView& tr = rtState.tracks[i];
-            const bool isActive = (tr.id == activeTrack);
-            const bool isSelected = (tr.id == selectedTrack);
+            const uint8_t uiTrackIndex = static_cast<uint8_t>(i);
+            const bool isActive = (uiTrackIndex == activeTrack);
+            const bool isSelected = (uiTrackIndex == selectedTrack);
             if (isSelected && selectedRow < 0) {
                 selectedRow = static_cast<int32_t>(trackRows.size());
             }
 
             std::snprintf(line, sizeof(line), " %s T%u %-5s clip:%s",
                           isActive ? "▶" : " ",
-                          static_cast<unsigned>(tr.id + 1U),
+                          static_cast<unsigned>(uiTrackIndex + 1U),
                           trackStateToStr(tr.state),
                           clipShort(tr.clipName, clipWidth).c_str());
             trackRows.emplace_back(line);
@@ -261,7 +263,7 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     const std::string actionLine = buildActionStatusLine_(rtState, navState);
     const std::string keys = !layout_.keysHint.empty()
                                  ? layout_.keysHint
-                                 : " keys [j/k focus] [/? adj] [o apply] [F2 undo] [F9 redo] [q] ";
+                                 : " keys [j/k focus] [/? adj] [o apply] [F10 detect BPM] [F2 undo] [F9 redo] [q] ";
 
     params.text["status.scene.title"] = title;
     params.text["status.transport"] = transportLine;
@@ -276,7 +278,12 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
 
     params.rows["tracks_body"] = trackRows;
     params.integer["tracks_body.selected"] = selectedRow;
-    params.integer["frame.heightHint"] = static_cast<int32_t>(8U + std::max<std::size_t>(1U, trackRows.size()));
+    // В режиме 1-track/page у сцены есть фиксированный "низ":
+    // separator + action + keys + track knobs + anim-slot.
+    // При слишком маленьком hint нижние строки визуально подрезаются.
+    const std::size_t minInnerRows = 14U;
+    const std::size_t dynamicRows = 10U + std::max<std::size_t>(1U, trackRows.size());
+    params.integer["frame.heightHint"] = static_cast<int32_t>(std::max(minInnerRows, dynamicRows));
 
     const UiTrackStateView* selectedTrackView = nullptr;
     if (totalTracks > 0U) {
@@ -426,6 +433,18 @@ UiActionCatalog TracksWidget::queryAvailableActions(const UiState& rtState, cons
         pushAction(std::move(a));
     }
     {
+        const bool trackValid = (totalTracks > 0) &&
+                                !rtState.tracks[selectedTrack].clipPath.empty();
+        UiAction a{};
+        a.def.id = UiAction::Id::SceneDetectProjectBpm;
+        a.def.scope = UiAction::Scope::Scene;
+        a.def.execution = UiAction::Execution::ApplyRequired;
+        a.def.valueKind = UiAction::ValueKind::None;
+        a.def.label = "Detect BPM";
+        a.state.enabled = trackValid;
+        pushAction(std::move(a));
+    }
+    {
         const bool trackValid = (totalTracks > 0);
         UiAction a{};
         a.def.id = UiAction::Id::SceneOpenFxList;
@@ -567,6 +586,23 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             pushIntentToWidgetOutput(std::move(it));
         } break;
 
+        case UiAction::Id::SceneDetectProjectBpm: {
+            if (totalTracks == 0) {
+                break;
+            }
+            if (action.op != UiAction::Op::Apply &&
+                action.op != UiAction::Op::Press) {
+                break;
+            }
+            if (rtState.tracks[selectedTrack].clipPath.empty()) {
+                break;
+            }
+            UiIntent it{};
+            it.type = UiIntentType::DetectProjectBpmFromTrack;
+            it.track = selectedTrack;
+            pushIntentToWidgetOutput(std::move(it));
+        } break;
+
         case UiAction::Id::SceneOpenManager: {
             if (action.op != UiAction::Op::Apply &&
                 action.op != UiAction::Op::Press) {
@@ -587,6 +623,7 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             }
             navState.scene = UiScene::FxList;
             navState.selectedFx = 0;
+            navState.fxAddPopupOpen = false;
             navState.sceneActionIndex = 0;
             UiIntent it{};
             it.type = UiIntentType::OpenScene;
@@ -601,8 +638,10 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
         case UiAction::Id::GlobalPageNext:
         case UiAction::Id::GlobalMasterVolume:
         case UiAction::Id::SceneTrackGain:
+        case UiAction::Id::SceneAddFx:
         case UiAction::Id::SceneAddReverb:
         case UiAction::Id::SceneFxSlotSelect:
+        case UiAction::Id::SceneFxEnabled:
         case UiAction::Id::SceneFxOpenEditor:
         case UiAction::Id::SceneFxParamSelect:
         case UiAction::Id::SceneFxParamValue:
@@ -640,6 +679,9 @@ std::string TracksWidget::buildActionStatusLine_(const UiState& rtState, const U
             break;
         case UiAction::Id::SceneTempoBpm:
             std::snprintf(buf, sizeof(buf), " action:%s = %.1f ", a.def.label.c_str(), a.state.value);
+            break;
+        case UiAction::Id::SceneDetectProjectBpm:
+            std::snprintf(buf, sizeof(buf), " action:%s (apply) ", a.def.label.c_str());
             break;
         case UiAction::Id::SceneOpenFxList:
             std::snprintf(buf, sizeof(buf), " action:%s (apply) ", a.def.label.c_str());

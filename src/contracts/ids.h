@@ -63,6 +63,12 @@ namespace avantgarde {
         Swing01 = 5
     };
 
+    // Общие параметры FX-слота (не зависят от типа эффекта).
+    enum class FxCommonParamId : uint16_t {
+        // 1.0 = FX включен, 0.0 = bypass (слот остается в цепи).
+        Enabled = 60000
+    };
+
     // Параметры встроенного Schroeder reverb.
     // Эти индексы используются в UiIntent::paramIndex для SetFxParam.
     enum class ReverbParamId : uint16_t {
@@ -75,6 +81,14 @@ namespace avantgarde {
     // Параметры встроенного OnePole HPF.
     enum class HpfParamId : uint16_t {
         Cutoff = 0
+    };
+
+    // Параметры stutter модуля.
+    enum class StutterParamId : uint16_t {
+        Wet = 0,
+        Rate = 1,
+        Gate = 2,
+        Retrigger = 3
     };
 
     enum class QuantizeCmdValue : uint8_t {
@@ -91,11 +105,19 @@ namespace avantgarde {
         return static_cast<uint16_t>(id);
     }
 
+    constexpr uint16_t toParamIndex(FxCommonParamId id) noexcept {
+        return static_cast<uint16_t>(id);
+    }
+
     constexpr uint16_t toParamIndex(ReverbParamId id) noexcept {
         return static_cast<uint16_t>(id);
     }
 
     constexpr uint16_t toParamIndex(HpfParamId id) noexcept {
+        return static_cast<uint16_t>(id);
+    }
+
+    constexpr uint16_t toParamIndex(StutterParamId id) noexcept {
         return static_cast<uint16_t>(id);
     }
 

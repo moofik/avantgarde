@@ -4,7 +4,7 @@
 
 using namespace avantgarde;
 
-TEST_CASE("GothicGbUiRenderer: frame contains compact transport and track cards") {
+TEST_CASE("GothicGbUiRenderer: frame contains compact transport and active track card") {
     UiState state{};
     state.tracks.resize(2);
     state.transport.playing = true;
@@ -43,12 +43,10 @@ TEST_CASE("GothicGbUiRenderer: frame contains compact transport and track cards"
     REQUIRE(frame.find("AVANTGARDE") != std::string::npos);
     REQUIRE(frame.find("TRN:PLAY BPM:123.0 TS:7/8 Q:BEAT OVF:Y") != std::string::npos);
     REQUIRE(frame.find("ACTIVE:T2 XRUN:2") != std::string::npos);
-    REQUIRE(frame.find("T1 PLAY") != std::string::npos);
     REQUIRE(frame.find("▶ T2 STOP") != std::string::npos);
-    REQUIRE(frame.find("bars:8  fx:1  loop:Y") != std::string::npos);
     REQUIRE(frame.find("bars:4  fx:0  loop:N") != std::string::npos);
-    REQUIRE(frame.find("bars:8  fx:1  loop:Y  m:N  a:Y") != std::string::npos);
     REQUIRE(frame.find("bars:4  fx:0  loop:N  m:Y  a:N") != std::string::npos);
+    REQUIRE(frame.find("T1 PLAY") == std::string::npos);
     REQUIRE(frame.find("F2 undo") != std::string::npos);
     REQUIRE(frame.find("F9 redo") != std::string::npos);
 }

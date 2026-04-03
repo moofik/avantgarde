@@ -73,11 +73,13 @@ std::string GothicGbUiRenderer::colorizeFrame_(const UiState& state, const std::
                               line.find("╠") == 0 || line.find("╟") == 0;
         const bool isHeader = line.find(" AVANTGARDE ") != std::string::npos;
         const bool isTransport = line.find(" TRN:") != std::string::npos || line.find(" ACTIVE:") != std::string::npos;
+        const bool isActionStatus = line.find(" action:") != std::string::npos;
+        const bool isKeysHint = line.find(" keys [") != std::string::npos;
         const bool isActiveTrackLine = line.find("▶ T") != std::string::npos;
 
         if (isBorder) {
             out << withStyle(line, palette_.mid, palette_.bg) << '\n';
-        } else if (isHeader || isTransport || isActiveTrackLine) {
+        } else if (isHeader || isTransport || isActiveTrackLine || isActionStatus || isKeysHint) {
             out << withStyle(line, palette_.text, palette_.panel) << '\n';
         } else {
             out << withStyle(line, palette_.text, palette_.bg) << '\n';

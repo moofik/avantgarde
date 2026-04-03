@@ -33,6 +33,13 @@ type = "anim_slot"
 id = "fx_anim"
 size = [128, 128]
 bind = "fx.anim.current"
+
+[[layout.children.children]]
+type = "switch"
+id = "retrig_mode"
+label = "RTRG"
+bind = "scene.fx.param.value.3"
+options = ["OFF", "1", "2", "4"]
 )";
 
     UiLayoutTemplate tpl{};
@@ -46,12 +53,16 @@ bind = "fx.anim.current"
     REQUIRE(tpl.root.children[0].type == UiLayoutNodeType::StatusBar);
     REQUIRE(tpl.root.children[0].text == "FX EDITOR");
     REQUIRE(tpl.root.children[1].type == UiLayoutNodeType::Row);
-    REQUIRE(tpl.root.children[1].children.size() == 2);
+    REQUIRE(tpl.root.children[1].children.size() == 3);
     REQUIRE(tpl.root.children[1].children[0].type == UiLayoutNodeType::Knob);
     REQUIRE(tpl.root.children[1].children[0].bind == "scene.fx.param.value.0");
     REQUIRE(tpl.root.children[1].children[1].type == UiLayoutNodeType::AnimSlot);
     REQUIRE(tpl.root.children[1].children[1].width.unit == UiLayoutSize::Unit::Px);
     REQUIRE(tpl.root.children[1].children[1].width.value == Catch::Approx(128.0f));
+    REQUIRE(tpl.root.children[1].children[2].type == UiLayoutNodeType::Switch);
+    REQUIRE(tpl.root.children[1].children[2].options.size() == 4);
+    REQUIRE(tpl.root.children[1].children[2].options[0] == "OFF");
+    REQUIRE(tpl.root.children[1].children[2].options[3] == "4");
 }
 
 TEST_CASE("UiLayoutTomlLoader: fails on malformed headers") {
@@ -66,4 +77,3 @@ type = "knob"
     REQUIRE_FALSE(UiLayoutTomlLoader::loadFromString(badToml, tpl, err));
     REQUIRE_FALSE(err.empty());
 }
-

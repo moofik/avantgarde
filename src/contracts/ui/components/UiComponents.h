@@ -18,6 +18,7 @@ enum class UiComponentType : uint8_t {
     FxListView,
     FxEditorView,
     Knob,
+    Switch,
     AnimSlot,
     List,
     Separator,
@@ -74,6 +75,19 @@ public:
     Scale scale{Scale::Linear};
 
     UiComponentType type() const noexcept override { return UiComponentType::Knob; }
+    std::string_view id() const noexcept override { return idValue; }
+};
+
+// Компонент "переключатель" для дискретных режимов.
+class UiSwitchComponent final : public IUiComponent {
+public:
+    std::string idValue{};
+    std::string label{};
+    std::vector<std::string> options{};
+    uint16_t selectedIndex{0};
+    bool selected{false};
+
+    UiComponentType type() const noexcept override { return UiComponentType::Switch; }
     std::string_view id() const noexcept override { return idValue; }
 };
 
@@ -248,6 +262,39 @@ public:
 
 private:
     UiKnobComponent component_{};
+};
+
+// Builder: UiSwitchComponent.
+class UiSwitchBuilder final {
+public:
+    explicit UiSwitchBuilder(std::string id) { component_.idValue = std::move(id); }
+
+    UiSwitchBuilder& label(std::string value) {
+        component_.label = std::move(value);
+        return *this;
+    }
+
+    UiSwitchBuilder& options(std::vector<std::string> value) {
+        component_.options = std::move(value);
+        return *this;
+    }
+
+    UiSwitchBuilder& selectedIndex(uint16_t value) {
+        component_.selectedIndex = value;
+        return *this;
+    }
+
+    UiSwitchBuilder& selected(bool value) {
+        component_.selected = value;
+        return *this;
+    }
+
+    std::unique_ptr<IUiComponent> build() && {
+        return std::make_unique<UiSwitchComponent>(std::move(component_));
+    }
+
+private:
+    UiSwitchComponent component_{};
 };
 
 // Builder: UiAnimSlotComponent.
@@ -486,4 +533,3 @@ private:
 };
 
 } // namespace avantgarde
-

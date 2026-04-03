@@ -145,6 +145,42 @@ namespace {
         return n;
     }
 
+    struct CaptureTransportFx final : avantgarde::IAudioModule {
+        bool seenValid{false};
+        bool seenPlaying{false};
+        uint8_t seenTsNum{0};
+        uint8_t seenTsDen{0};
+        float seenBpm{0.0f};
+        uint8_t seenQuant{0};
+        uint64_t seenSampleTime{0};
+        avantgarde::ParamMeta meta{"noop", 0.0f, 1.0f, false, ""};
+
+        void init(double, std::size_t) override {}
+        void reset() override {}
+        std::size_t getParamCount() const override { return 0; }
+        float getParam(std::size_t) const override { return 0.0f; }
+        void setParam(std::size_t, float) override {}
+        const avantgarde::ParamMeta& getParamMeta(std::size_t) const override { return meta; }
+
+        void process(const avantgarde::AudioProcessContext& ctx) override {
+            seenValid = ctx.transportValid;
+            seenPlaying = ctx.transportPlaying;
+            seenTsNum = ctx.transportTsNum;
+            seenTsDen = ctx.transportTsDen;
+            seenBpm = ctx.transportBpm;
+            seenQuant = ctx.transportQuant;
+            seenSampleTime = ctx.transportSampleTime;
+            for (std::size_t i = 0; i < ctx.nframes; ++i) {
+                ctx.out[0][i] = ctx.in[0][i];
+                if (ctx.out[1] && ctx.in[1]) {
+                    ctx.out[1][i] = ctx.in[1][i];
+                } else if (ctx.out[1]) {
+                    ctx.out[1][i] = ctx.in[0][i];
+                }
+            }
+        }
+    };
+
 } // namespace
 
 // -------------------------
@@ -375,6 +411,66 @@ TEST_CASE("ClipTrack: ParamSet index=2 controls playback speed") {
     REQUIRE(sumFast > sumNormal * 0.3f);
 }
 
+TEST_CASE("ClipTrack: forwards transport fields into FX module context") {
+    avantgarde::ClipTrackImpl tr;
+
+    const int sr = 48000;
+    std::vector<int16_t> pcm = { 32767,32767,32767,32767 };
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_test_fx_transport.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLooping(0, false) == true);
+
+    auto fx = std::make_unique<CaptureTransportFx>();
+    auto* fxPtr = fx.get();
+    tr.addModule(std::move(fx));
+
+    auto t = make_ctx(4);
+    t.ctx.transportValid = true;
+    t.ctx.transportPlaying = true;
+    t.ctx.transportTsNum = 7;
+    t.ctx.transportTsDen = 8;
+    t.ctx.transportBpm = 133.0f;
+    t.ctx.transportQuant = 1; // Beat
+    t.ctx.transportSampleTime = 987654;
+
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+    clear_out(t);
+    tr.process(t.ctx);
+
+    REQUIRE(fxPtr->seenValid == true);
+    REQUIRE(fxPtr->seenPlaying == true);
+    REQUIRE(fxPtr->seenTsNum == 7);
+    REQUIRE(fxPtr->seenTsDen == 8);
+    REQUIRE(absf(fxPtr->seenBpm - 133.0f) < 1e-6f);
+    REQUIRE(fxPtr->seenQuant == 1);
+    REQUIRE(fxPtr->seenSampleTime == 987654);
+}
+
+TEST_CASE("ClipTrack: speed=1.0 keeps real-time duration for clip sampleRate != host sampleRate") {
+    // Host работает на 480 Гц, клип закодирован в 441 Гц.
+    // При корректной компенсации sample rate one-shot длительностью 1 сек
+    // должен занять около 480 output-фреймов, а не 441.
+    avantgarde::ClipTrackImpl tr(/*outputSampleRate*/480.0);
+
+    const int clipSr = 441;
+    std::vector<int16_t> pcm(441, 32767); // 1 second source clip at 441 Hz
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_test_samplerate_comp.wav";
+    write_wav_pcm16(tmp, clipSr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLooping(0, false) == true);
+
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/0, /*index*/2, /*value*/1.0f);
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+
+    auto t = make_ctx(480);
+    clear_out(t);
+    tr.process(t.ctx);
+
+    const int nz = count_non_zero(t.out0);
+    REQUIRE(nz >= 475);
+}
+
 TEST_CASE("ClipTrack: mute does not stop playback phase progression") {
     avantgarde::ClipTrackImpl tr;
 
@@ -416,7 +512,7 @@ TEST_CASE("ClipTrack: mute does not stop playback phase progression") {
 }
 
 TEST_CASE("ClipTrack: setSlotLengthInBars stretches playback length to target bars") {
-    avantgarde::ClipTrackImpl tr;
+    avantgarde::ClipTrackImpl tr(/*outputSampleRate*/8.0);
 
     // 8 frames at 8 Hz => 1 second source clip.
     const int sr = 8;
@@ -440,7 +536,7 @@ TEST_CASE("ClipTrack: setSlotLengthInBars stretches playback length to target ba
 }
 
 TEST_CASE("ClipTrack: auto-stretch responds to transport tempo changes") {
-    avantgarde::ClipTrackImpl tr;
+    avantgarde::ClipTrackImpl tr(/*outputSampleRate*/8.0);
 
     const int sr = 8;
     std::vector<int16_t> pcm = { 32767,32767,32767,32767,32767,32767,32767,32767 };
@@ -452,6 +548,7 @@ TEST_CASE("ClipTrack: auto-stretch responds to transport tempo changes") {
 
     // Start from 120 BPM.
     send_cmd(tr, avantgarde::CmdId::SetTempoBpm, 0, 0, 120.0f);
+    REQUIRE(absf(tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::PlaybackInc)) - 0.5f) < 1e-3f);
     auto t120 = make_ctx(16);
     send_cmd(tr, avantgarde::CmdId::Play, 0);
     clear_out(t120);
@@ -460,6 +557,7 @@ TEST_CASE("ClipTrack: auto-stretch responds to transport tempo changes") {
 
     // Increase tempo to 240 BPM => target bar duration halves.
     send_cmd(tr, avantgarde::CmdId::SetTempoBpm, 0, 0, 240.0f);
+    REQUIRE(absf(tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::PlaybackInc)) - 1.0f) < 1e-3f);
     auto t240 = make_ctx(16);
     send_cmd(tr, avantgarde::CmdId::Play, 0);
     clear_out(t240);

@@ -75,6 +75,8 @@ public:
     bool removeFxFromTrack(uint8_t track, uint8_t fxSlot) noexcept;
     // Установить параметр FX-слота (RT-safe через ParamSet команду).
     bool setFxParam(uint8_t track, uint8_t fxSlot, uint16_t paramIndex, float normalizedValue) noexcept;
+    // Включить/выключить FX-слот без удаления из цепочки.
+    bool setFxEnabled(uint8_t track, uint8_t fxSlot, bool enabled) noexcept;
     bool loadSampleToTrack(uint8_t track, const std::string& path, std::string& clipNameOut) noexcept;
     // Preview-голос (скрытый отдельный трек).
     void previewRequest(const std::string& path) noexcept;

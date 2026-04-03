@@ -22,6 +22,7 @@ enum class UiLayoutNodeType : uint8_t {
     List,
     Separator,
     Knob,
+    Switch,
     AnimSlot,
     Spacer
 };
@@ -49,6 +50,8 @@ struct UiLayoutNode {
     std::string text{};
     std::string label{};
     std::string bind{};
+    // Для нод типа switch: список дискретных значений (порядок важен).
+    std::vector<std::string> options{};
     UiLayoutSize width{};
     UiLayoutSize height{};
     uint16_t padding{0};
@@ -92,6 +95,7 @@ inline const char* toString(UiLayoutNodeType type) noexcept {
         case UiLayoutNodeType::List: return "list";
         case UiLayoutNodeType::Separator: return "separator";
         case UiLayoutNodeType::Knob: return "knob";
+        case UiLayoutNodeType::Switch: return "switch";
         case UiLayoutNodeType::AnimSlot: return "anim_slot";
         case UiLayoutNodeType::Spacer: return "spacer";
         case UiLayoutNodeType::Unknown:
@@ -113,6 +117,7 @@ inline UiLayoutNodeType parseUiLayoutNodeType(std::string_view raw) noexcept {
     if (raw == "list") return UiLayoutNodeType::List;
     if (raw == "separator") return UiLayoutNodeType::Separator;
     if (raw == "knob") return UiLayoutNodeType::Knob;
+    if (raw == "switch") return UiLayoutNodeType::Switch;
     if (raw == "anim_slot") return UiLayoutNodeType::AnimSlot;
     if (raw == "spacer") return UiLayoutNodeType::Spacer;
     return UiLayoutNodeType::Unknown;

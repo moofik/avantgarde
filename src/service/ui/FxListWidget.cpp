@@ -60,6 +60,12 @@ uint16_t FxListWidget::clampFx_(uint16_t fx, std::size_t fxCount) noexcept {
     return (fx >= fxCount) ? static_cast<uint16_t>(fxCount - 1U) : fx;
 }
 
+uint16_t FxListWidget::clampFxCursor_(uint16_t fxCursor, std::size_t fxCount) noexcept {
+    // Курсор может указывать на "виртуальный пустой слот" = fxCount.
+    const std::size_t maxIndex = fxCount;
+    return (fxCursor > maxIndex) ? static_cast<uint16_t>(maxIndex) : fxCursor;
+}
+
 std::string FxListWidget::fxName_(const UiTrackStateView& track, uint16_t slot) {
     if (slot < track.fxChainIds.size()) {
         const std::string& id = track.fxChainIds[slot];
@@ -71,6 +77,30 @@ std::string FxListWidget::fxName_(const UiTrackStateView& track, uint16_t slot) 
         }
     }
     return "Unknown FX";
+}
+
+bool FxListWidget::fxEnabled_(const UiTrackStateView& track, uint16_t slot) noexcept {
+    if (slot < track.fxEnabled.size()) {
+        return track.fxEnabled[slot] != 0U;
+    }
+    return true;
+}
+
+const std::array<FxListWidget::FxTypeOption, 3>& FxListWidget::fxTypeOptions_() noexcept {
+    static const std::array<FxTypeOption, 3> kTypes{{
+        {FxRegistry::kReverbSchroederId, "Reverb"},
+        {FxRegistry::kHpfOnePoleId, "HPF"},
+        {FxRegistry::kStutterId, "Stutter"},
+    }};
+    return kTypes;
+}
+
+uint16_t FxListWidget::clampFxType_(uint16_t typeIndex) noexcept {
+    const std::size_t total = fxTypeOptions_().size();
+    if (total == 0U) {
+        return 0U;
+    }
+    return (typeIndex >= total) ? static_cast<uint16_t>(total - 1U) : typeIndex;
 }
 
 bool FxListWidget::buildPreparedLayout(UiPreparedLayout& out,
@@ -85,63 +115,110 @@ bool FxListWidget::buildPreparedLayout(UiPreparedLayout& out,
     const uint8_t track = clampTrack_(navState.selectedTrack, rtState.tracks.size());
     const UiTrackStateView* tr = rtState.tracks.empty() ? nullptr : &rtState.tracks[track];
     const std::size_t fxCount = tr ? tr->fxCount : 0U;
-    const uint16_t selectedFx = clampFx_(navState.selectedFx, fxCount);
+    const uint16_t fxCursor = clampFxCursor_(navState.selectedFx, fxCount);
+    const bool popupOpen = navState.fxAddPopupOpen;
+    const uint16_t selectedFxType = clampFxType_(navState.selectedFxType);
 
     std::vector<std::string> rows{};
     rows.reserve(listRows_);
     int32_t selectedRow = -1;
-    const std::size_t listWidth = (inner > 10U) ? (inner - 10U) : inner;
-    const std::size_t start = (fxCount > listRows_ && selectedFx >= listRows_)
-                                  ? static_cast<std::size_t>(selectedFx + 1U - listRows_)
-                                  : 0U;
-    for (std::size_t row = 0; row < listRows_; ++row) {
-        const std::size_t idx = start + row;
-        if (idx >= fxCount || tr == nullptr) {
-            if (fxCount == 0U && row == 0U) {
-                rows.emplace_back("(empty) add effect via action: Add FX");
+    std::string quickLine{};
+    std::string actionLine{};
+    std::string keys{};
+    char title[160]{};
+
+    if (popupOpen) {
+        const auto& types = fxTypeOptions_();
+        for (std::size_t i = 0; i < listRows_; ++i) {
+            if (i < types.size()) {
+                std::string line = std::string(types[i].label);
+                rows.push_back(std::move(line));
+                if (i == static_cast<std::size_t>(selectedFxType)) {
+                    selectedRow = static_cast<int32_t>(i);
+                }
             } else {
                 rows.emplace_back(" ");
             }
-            continue;
+        }
+        if (selectedRow < 0 && !types.empty()) {
+            selectedRow = 0;
+        }
+        std::snprintf(title, sizeof(title), " ADD FX T%u ", static_cast<unsigned>(track + 1U));
+        quickLine = " popup: choose FX type ";
+        const FxTypeOption& type = fxTypeOptions_()[selectedFxType];
+        char action[192]{};
+        std::snprintf(action,
+                      sizeof(action),
+                      " action:add %s to S%u ",
+                      std::string(type.label).c_str(),
+                      static_cast<unsigned>(fxCount + 1U));
+        actionLine = action;
+        keys = " keys [F5/F6 choose] [F1 add] [esc cancel] ";
+    } else {
+        const std::size_t listWidth = (inner > 12U) ? (inner - 12U) : inner;
+        const std::size_t totalRows = fxCount + 1U; // +1 = виртуальный пустой слот для Add FX.
+        const std::size_t start = (totalRows > listRows_ && fxCursor >= listRows_)
+                                      ? static_cast<std::size_t>(fxCursor + 1U - listRows_)
+                                      : 0U;
+        for (std::size_t row = 0; row < listRows_; ++row) {
+            const std::size_t idx = start + row;
+            if (idx >= totalRows) {
+                rows.emplace_back(" ");
+                continue;
+            }
+
+            if (idx < fxCount && tr != nullptr) {
+                std::string line = "S";
+                line += std::to_string(static_cast<unsigned>(idx + 1U));
+                line += fxEnabled_(*tr, static_cast<uint16_t>(idx)) ? " [ON] " : " [OFF] ";
+                line += trimMiddle(fxName_(*tr, static_cast<uint16_t>(idx)), listWidth);
+                rows.push_back(std::move(line));
+            } else {
+                char empty[128]{};
+                std::snprintf(empty, sizeof(empty), "S%u [EMPTY] Add FX",
+                              static_cast<unsigned>(idx + 1U));
+                rows.emplace_back(empty);
+            }
+            if (idx == static_cast<std::size_t>(fxCursor)) {
+                selectedRow = static_cast<int32_t>(row);
+            }
+        }
+        if (selectedRow < 0) {
+            selectedRow = 0;
         }
 
-        std::string line = "S";
-        line += std::to_string(static_cast<unsigned>(idx + 1U));
-        line += " ";
-        line += trimMiddle(fxName_(*tr, static_cast<uint16_t>(idx)), listWidth);
-        rows.push_back(std::move(line));
-        if (idx == selectedFx) {
-            selectedRow = static_cast<int32_t>(row);
+        std::snprintf(title,
+                      sizeof(title),
+                      " %s T%u slots:%u ",
+                      layout_.title.c_str(),
+                      static_cast<unsigned>(track + 1U),
+                      static_cast<unsigned>(fxCount));
+        quickLine = " quick: F1 edit/add | F7 bypass | F8 remove ";
+        const bool onEmptySlot = (fxCursor >= fxCount);
+        if (onEmptySlot) {
+            actionLine = " action:F1 open Add FX popup ";
+        } else {
+            actionLine = " action:F1 edit | F7 bypass | F8 remove ";
         }
+        keys = !layout_.keysHint.empty()
+                   ? layout_.keysHint
+                   : " keys [F5/F6 slot] [F1 apply] [F7 bypass] [F8 remove] [esc] ";
     }
-    if (selectedRow < 0 && fxCount > 0U) {
-        selectedRow = 0;
-    }
-
-    char title[160]{};
-    std::snprintf(title,
-                  sizeof(title),
-                  " %s T%u slots:%u ",
-                  layout_.title.c_str(),
-                  static_cast<unsigned>(track + 1U),
-                  static_cast<unsigned>(fxCount));
-    const std::string keys = !layout_.keysHint.empty()
-                                 ? layout_.keysHint
-                                 : " keys [j/k slot] [;/' focus] [/? adj] [o apply] [esc] ";
 
     UiPreparedLayoutBuilder builder{};
     builder.sceneId("fx_list")
         .templateRef(&(*layoutTemplate_))
         .frameWidth(frameWidth)
-        .frameHeightHint(static_cast<uint16_t>(6U + listRows_))
+        .frameHeightHint(static_cast<uint16_t>(7U + listRows_))
         .addComponent(UiStatusBarBuilder("header_title").text(title))
         .addComponent(UiSeparatorBuilder("sep_top").style(UiSeparatorComponent::Style::Heavy))
+        .addComponent(UiTextBuilder("fx_type_status").text(std::move(quickLine)))
         .addComponent(UiListBuilder("fx_list")
                           .rows(std::move(rows))
                           .selectedRow(selectedRow)
                           .marker(UiListComponent::Marker::Arrow))
         .addComponent(UiSeparatorBuilder("sep_bottom").style(UiSeparatorComponent::Style::Heavy))
-        .addComponent(UiTextBuilder("action_status").text(buildActionStatusLine_(rtState, navState)))
+        .addComponent(UiTextBuilder("action_status").text(std::move(actionLine)))
         .addComponent(UiTextBuilder("keys_hint").text(keys));
 
     out = std::move(builder).build();
@@ -153,18 +230,16 @@ void FxListWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNav
 
     const std::size_t width = frameWidth_ < 28 ? 28 : frameWidth_;
     const std::size_t inner = width - 2U;
-    const std::size_t listWidth = inner > 6 ? inner - 6 : inner;
     const uint8_t track = clampTrack_(navState.selectedTrack, rtState.tracks.size());
     const UiTrackStateView* tr = rtState.tracks.empty() ? nullptr : &rtState.tracks[track];
     const std::size_t fxCount = tr ? tr->fxCount : 0U;
-    const uint16_t selectedFx = clampFx_(navState.selectedFx, fxCount);
-    const std::size_t start = (fxCount > listRows_ && selectedFx >= listRows_)
-                                  ? static_cast<std::size_t>(selectedFx + 1U - listRows_)
-                                  : 0U;
+    const uint16_t fxCursor = clampFxCursor_(navState.selectedFx, fxCount);
+    const uint16_t selectedFxType = clampFxType_(navState.selectedFxType);
+    const bool popupOpen = navState.fxAddPopupOpen;
 
     SceneFrame frame{};
     frame.width = static_cast<uint16_t>(width);
-    frame.height = static_cast<uint16_t>(static_cast<std::size_t>(listRows_) + 7U);
+    frame.height = static_cast<uint16_t>(static_cast<std::size_t>(listRows_) + 8U);
     frame.rects.push_back(SceneFrameRect{
         .x = 0,
         .y = 0,
@@ -174,41 +249,66 @@ void FxListWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNav
 
     int y = 1;
     char title[160]{};
-    std::snprintf(title,
-                  sizeof(title),
-                  " %s T%u slots:%u ",
-                  layout_.title.c_str(),
-                  static_cast<unsigned>(track + 1U),
-                  static_cast<unsigned>(fxCount));
+    if (popupOpen) {
+        std::snprintf(title, sizeof(title), " ADD FX T%u ", static_cast<unsigned>(track + 1U));
+    } else {
+        std::snprintf(title,
+                      sizeof(title),
+                      " %s T%u slots:%u ",
+                      layout_.title.c_str(),
+                      static_cast<unsigned>(track + 1U),
+                      static_cast<unsigned>(fxCount));
+    }
     frame.texts.push_back(SceneFrameText{.x = 1, .y = static_cast<int16_t>(y++), .text = padRight(title, inner)});
     frame.hlines.push_back(SceneFrameHLine{
         .x = 1,
         .y = static_cast<int16_t>(y++),
         .length = static_cast<uint16_t>(inner),
         .glyph = "═"});
+    const std::string fxTypeLine = popupOpen
+                                       ? " popup: choose FX type "
+                                       : " quick: F1 edit/add | F7 bypass | F8 remove ";
+    frame.texts.push_back(SceneFrameText{
+        .x = 1,
+        .y = static_cast<int16_t>(y++),
+        .text = padRight(fxTypeLine, inner)});
 
-    if (fxCount == 0) {
-        frame.texts.push_back(SceneFrameText{
-            .x = 1,
-            .y = static_cast<int16_t>(y++),
-            .text = padRight(" (empty) add effect via action: Add FX ", inner)});
-        for (std::size_t i = 1; i < listRows_; ++i) {
+    if (popupOpen) {
+        const auto& types = fxTypeOptions_();
+        for (std::size_t row = 0; row < listRows_; ++row) {
+            std::string line = " ";
+            if (row < types.size()) {
+                const bool selected = (row == static_cast<std::size_t>(selectedFxType));
+                line += selected ? "> " : "  ";
+                line += std::string(types[row].label);
+            }
             frame.texts.push_back(SceneFrameText{
                 .x = 1,
                 .y = static_cast<int16_t>(y++),
-                .text = padRight(" ", inner)});
+                .text = padRight(line, inner)});
         }
     } else {
+        const std::size_t listWidth = inner > 12 ? inner - 12 : inner;
+        const std::size_t totalRows = fxCount + 1U;
+        const std::size_t start = (totalRows > listRows_ && fxCursor >= listRows_)
+                                      ? static_cast<std::size_t>(fxCursor + 1U - listRows_)
+                                      : 0U;
         for (std::size_t row = 0; row < listRows_; ++row) {
             const std::size_t idx = start + row;
             std::string line = " ";
-            if (idx < fxCount) {
-                const bool selected = (idx == selectedFx);
+            if (idx < totalRows) {
+                const bool selected = (idx == static_cast<std::size_t>(fxCursor));
                 line += selected ? "> " : "  ";
-                line += "S";
-                line += std::to_string(static_cast<unsigned>(idx + 1U));
-                line += " ";
-                line += trimMiddle(fxName_(*tr, static_cast<uint16_t>(idx)), listWidth);
+                if (idx < fxCount && tr != nullptr) {
+                    line += "S";
+                    line += std::to_string(static_cast<unsigned>(idx + 1U));
+                    line += fxEnabled_(*tr, static_cast<uint16_t>(idx)) ? " [ON] " : " [OFF] ";
+                    line += trimMiddle(fxName_(*tr, static_cast<uint16_t>(idx)), listWidth);
+                } else {
+                    line += "S";
+                    line += std::to_string(static_cast<unsigned>(idx + 1U));
+                    line += " [EMPTY] Add FX";
+                }
             }
             frame.texts.push_back(SceneFrameText{
                 .x = 1,
@@ -222,13 +322,30 @@ void FxListWidget::render(UiTextBuffer& out, const UiState& rtState, const UiNav
         .y = static_cast<int16_t>(y++),
         .length = static_cast<uint16_t>(inner),
         .glyph = "═"});
+    std::string actionStatus{};
+    if (popupOpen) {
+        const FxTypeOption& type = fxTypeOptions_()[selectedFxType];
+        char buf[196]{};
+        std::snprintf(buf,
+                      sizeof(buf),
+                      " action:add %s to S%u ",
+                      std::string(type.label).c_str(),
+                      static_cast<unsigned>(fxCount + 1U));
+        actionStatus = buf;
+    } else if (fxCursor >= fxCount) {
+        actionStatus = " action:F1 open Add FX popup ";
+    } else {
+        actionStatus = " action:F1 edit | F7 bypass | F8 remove ";
+    }
     frame.texts.push_back(SceneFrameText{
         .x = 1,
         .y = static_cast<int16_t>(y++),
-        .text = padRight(buildActionStatusLine_(rtState, navState), inner)});
-    const std::string keysHint = (layout_.enabled && !layout_.keysHint.empty())
-                                     ? layout_.keysHint
-                                     : " keys [j/k slot] [;/' focus] [/? adj] [o apply] [esc] ";
+        .text = padRight(actionStatus, inner)});
+    const std::string keysHint = popupOpen
+                                     ? " keys [F5/F6 choose] [F1 add] [esc cancel] "
+                                     : ((layout_.enabled && !layout_.keysHint.empty())
+                                            ? layout_.keysHint
+                                            : " keys [F5/F6 slot] [F1 apply] [F7 bypass] [F8 remove] [esc] ");
     frame.texts.push_back(SceneFrameText{
         .x = 1,
         .y = static_cast<int16_t>(y++),
@@ -241,34 +358,81 @@ WidgetOutput FxListWidget::onGesture(UiGesture action, const UiState& rtState, U
     WidgetOutput out{};
     const uint8_t track = clampTrack_(navState.selectedTrack, rtState.tracks.size());
     const std::size_t fxCount = (rtState.tracks.empty()) ? 0U : rtState.tracks[track].fxCount;
+    const uint16_t cursorMax = static_cast<uint16_t>(fxCount); // +1 виртуальный пустой слот.
+    const uint16_t cursor = clampFxCursor_(navState.selectedFx, fxCount);
 
-    if (action == UiGesture::ListUp && fxCount > 0) {
-        if (navState.selectedFx == 0U) {
-            navState.selectedFx = static_cast<uint16_t>(fxCount - 1U);
-        } else {
-            navState.selectedFx = static_cast<uint16_t>(navState.selectedFx - 1U);
+    if (navState.fxAddPopupOpen) {
+        if (action == UiGesture::ListUp || action == UiGesture::ListDown) {
+            const std::size_t totalTypes = fxTypeOptions_().size();
+            if (totalTypes == 0U) {
+                out.handled = true;
+                return out;
+            }
+            const uint16_t current = clampFxType_(navState.selectedFxType);
+            if (action == UiGesture::ListUp) {
+                navState.selectedFxType = (current == 0U)
+                                              ? static_cast<uint16_t>(totalTypes - 1U)
+                                              : static_cast<uint16_t>(current - 1U);
+            } else {
+                navState.selectedFxType = static_cast<uint16_t>((current + 1U) % totalTypes);
+            }
+            out.handled = true;
+            return out;
         }
+        if (action == UiGesture::ListEnter) {
+            if (rtState.tracks.empty()) {
+                out.handled = true;
+                navState.fxAddPopupOpen = false;
+                return out;
+            }
+            const FxTypeOption& type = fxTypeOptions_()[clampFxType_(navState.selectedFxType)];
+            UiIntent it{};
+            it.type = UiIntentType::AddFxToTrack;
+            it.track = track;
+            it.path = std::string(type.id);
+            out.handled = true;
+            out.intents.push_back(std::move(it));
+            navState.fxAddPopupOpen = false;
+            navState.selectedFx = static_cast<uint16_t>(fxCount);
+            return out;
+        }
+        if (action == UiGesture::ListParent || action == UiGesture::BackScene) {
+            navState.fxAddPopupOpen = false;
+            out.handled = true;
+            return out;
+        }
+        return {};
+    }
+
+    if (action == UiGesture::ListUp) {
+        navState.selectedFx = (cursor == 0U) ? cursorMax : static_cast<uint16_t>(cursor - 1U);
         out.handled = true;
         return out;
     }
-    if (action == UiGesture::ListDown && fxCount > 0) {
-        navState.selectedFx = static_cast<uint16_t>((clampFx_(navState.selectedFx, fxCount) + 1U) % fxCount);
+    if (action == UiGesture::ListDown) {
+        navState.selectedFx = (cursor >= cursorMax) ? 0U : static_cast<uint16_t>(cursor + 1U);
         out.handled = true;
         return out;
     }
-    if (action == UiGesture::ListEnter && fxCount > 0) {
+    if (action == UiGesture::ListEnter) {
+        navState.selectedFx = cursor;
+        if (cursor >= fxCount) {
+            navState.fxAddPopupOpen = true;
+            out.handled = true;
+            return out;
+        }
+
         navState.scene = UiScene::FxEditor;
-        navState.selectedFx = clampFx_(navState.selectedFx, fxCount);
         navState.sceneActionIndex = 0;
         UiIntent it{};
         it.type = UiIntentType::OpenFxEditor;
         it.track = track;
-        it.fxSlot = static_cast<uint8_t>(navState.selectedFx);
+        it.fxSlot = static_cast<uint8_t>(cursor);
         out.handled = true;
         out.intents.push_back(std::move(it));
         return out;
     }
-    if (action == UiGesture::ListParent) {
+    if (action == UiGesture::ListParent || action == UiGesture::BackScene) {
         navState.scene = UiScene::Tracks;
         navState.sceneActionIndex = 0;
         UiIntent it{};
@@ -286,7 +450,9 @@ UiActionCatalog FxListWidget::queryAvailableActions(const UiState& rtState, cons
     const std::size_t totalTracks = rtState.tracks.size();
     const uint8_t track = clampTrack_(navState.selectedTrack, totalTracks);
     const std::size_t fxCount = (totalTracks == 0) ? 0U : rtState.tracks[track].fxCount;
-    const uint16_t selectedFx = clampFx_(navState.selectedFx, fxCount);
+    const uint16_t selectedFxType = clampFxType_(navState.selectedFxType);
+    const uint16_t selectedFx = clampFxCursor_(navState.selectedFx, fxCount);
+    const bool selectedExistingSlot = (selectedFx < fxCount);
 
     auto push = [&out](UiAction a) {
         out.actions.push_back(std::move(a));
@@ -300,15 +466,43 @@ UiActionCatalog FxListWidget::queryAvailableActions(const UiState& rtState, cons
         a.def.valueKind = UiAction::ValueKind::Integer;
         a.def.label = "FX Slot";
         a.def.minValue = 1.0f;
-        a.def.maxValue = static_cast<float>(std::max<std::size_t>(1U, fxCount));
+        a.def.maxValue = static_cast<float>(std::max<std::size_t>(1U, fxCount + 1U));
         a.def.step = 1.0f;
-        a.state.enabled = (fxCount > 0U);
+        a.state.enabled = true;
         a.state.value = static_cast<float>(selectedFx + 1U);
         push(std::move(a));
     }
     {
         UiAction a{};
-        a.def.id = UiAction::Id::SceneAddReverb;
+        a.def.id = UiAction::Id::SceneFxEnabled;
+        a.def.scope = UiAction::Scope::Scene;
+        a.def.execution = UiAction::Execution::ImmediateStep;
+        a.def.valueKind = UiAction::ValueKind::Bool;
+        a.def.label = "FX On/Off";
+        a.def.minValue = 0.0f;
+        a.def.maxValue = 1.0f;
+        a.def.step = 1.0f;
+        a.state.enabled = (totalTracks > 0U) && selectedExistingSlot && !navState.fxAddPopupOpen;
+        a.state.value = ((totalTracks > 0U) && selectedExistingSlot && fxEnabled_(rtState.tracks[track], selectedFx)) ? 1.0f : 0.0f;
+        push(std::move(a));
+    }
+    {
+        UiAction a{};
+        a.def.id = UiAction::Id::SceneFxTypeSelect;
+        a.def.scope = UiAction::Scope::Scene;
+        a.def.execution = UiAction::Execution::ImmediateStep;
+        a.def.valueKind = UiAction::ValueKind::Enum;
+        a.def.label = "FX Type";
+        a.def.minValue = 1.0f;
+        a.def.maxValue = static_cast<float>(fxTypeOptions_().size());
+        a.def.step = 1.0f;
+        a.state.enabled = (totalTracks > 0U);
+        a.state.value = static_cast<float>(selectedFxType + 1U);
+        push(std::move(a));
+    }
+    {
+        UiAction a{};
+        a.def.id = UiAction::Id::SceneAddFx;
         a.def.scope = UiAction::Scope::Scene;
         a.def.execution = UiAction::Execution::ApplyRequired;
         a.def.valueKind = UiAction::ValueKind::None;
@@ -323,7 +517,7 @@ UiActionCatalog FxListWidget::queryAvailableActions(const UiState& rtState, cons
         a.def.execution = UiAction::Execution::ApplyRequired;
         a.def.valueKind = UiAction::ValueKind::None;
         a.def.label = "Open FX Editor";
-        a.state.enabled = (fxCount > 0U);
+        a.state.enabled = (totalTracks > 0U) && selectedExistingSlot && !navState.fxAddPopupOpen;
         push(std::move(a));
     }
     {
@@ -333,7 +527,7 @@ UiActionCatalog FxListWidget::queryAvailableActions(const UiState& rtState, cons
         a.def.execution = UiAction::Execution::ApplyRequired;
         a.def.valueKind = UiAction::ValueKind::None;
         a.def.label = "Remove FX";
-        a.state.enabled = (fxCount > 0U);
+        a.state.enabled = (totalTracks > 0U) && selectedExistingSlot && !navState.fxAddPopupOpen;
         push(std::move(a));
     }
     {
@@ -371,17 +565,20 @@ WidgetOutput FxListWidget::onAction(UiAction& action, const UiState& rtState, Ui
 
     switch (action.def.id) {
         case UiAction::Id::SceneFxSlotSelect: {
-            if (fxCount == 0U) {
-                break;
-            }
-            const uint16_t current = clampFx_(navState.selectedFx, fxCount);
+            const uint16_t current = clampFxCursor_(navState.selectedFx, fxCount);
             if (action.op == UiAction::Op::AdjustPrev) {
-                navState.selectedFx = (current == 0U) ? static_cast<uint16_t>(fxCount - 1U) : static_cast<uint16_t>(current - 1U);
+                const uint16_t cursorMax = static_cast<uint16_t>(fxCount);
+                navState.selectedFx = (current == 0U) ? cursorMax : static_cast<uint16_t>(current - 1U);
             } else if (action.op == UiAction::Op::AdjustNext) {
-                navState.selectedFx = static_cast<uint16_t>((current + 1U) % fxCount);
+                const uint16_t cursorMax = static_cast<uint16_t>(fxCount);
+                navState.selectedFx = (current >= cursorMax) ? 0U : static_cast<uint16_t>(current + 1U);
             } else if (action.op == UiAction::Op::Apply ||
                        action.op == UiAction::Op::Press) {
                 navState.selectedFx = current;
+                if (current >= fxCount) {
+                    navState.fxAddPopupOpen = true;
+                    break;
+                }
                 navState.scene = UiScene::FxEditor;
                 navState.sceneActionIndex = 0;
                 UiIntent it{};
@@ -392,42 +589,96 @@ WidgetOutput FxListWidget::onAction(UiAction& action, const UiState& rtState, Ui
             }
         } break;
 
-        case UiAction::Id::SceneAddReverb: {
+        case UiAction::Id::SceneFxEnabled: {
+            if (fxCount == 0U || navState.selectedFx >= fxCount || navState.fxAddPopupOpen) {
+                break;
+            }
+            if (action.op != UiAction::Op::Apply &&
+                action.op != UiAction::Op::Press &&
+                action.op != UiAction::Op::AdjustPrev &&
+                action.op != UiAction::Op::AdjustNext) {
+                break;
+            }
+            const uint16_t current = clampFx_(navState.selectedFx, fxCount);
+            const bool enabledNow = fxEnabled_(rtState.tracks[track], current);
+            UiIntent it{};
+            it.type = UiIntentType::SetFxEnabled;
+            it.track = track;
+            it.fxSlot = static_cast<uint8_t>(current);
+            it.value = enabledNow ? 0.0f : 1.0f;
+            pushIntent(std::move(it));
+        } break;
+
+        case UiAction::Id::SceneFxTypeSelect: {
+            const std::size_t totalTypes = fxTypeOptions_().size();
+            if (totalTypes == 0U) {
+                break;
+            }
+            const uint16_t current = clampFxType_(navState.selectedFxType);
+            if (action.op == UiAction::Op::AdjustPrev) {
+                navState.selectedFxType = (current == 0U)
+                                              ? static_cast<uint16_t>(totalTypes - 1U)
+                                              : static_cast<uint16_t>(current - 1U);
+            } else if (action.op == UiAction::Op::AdjustNext) {
+                navState.selectedFxType = static_cast<uint16_t>((current + 1U) % totalTypes);
+            }
+        } break;
+
+        case UiAction::Id::SceneAddFx: {
             if (totalTracks == 0U) {
                 break;
             }
+            const std::size_t totalTypes = fxTypeOptions_().size();
+            if (totalTypes == 0U) {
+                break;
+            }
+            const uint16_t currentType = clampFxType_(navState.selectedFxType);
+            if (action.op == UiAction::Op::AdjustPrev) {
+                navState.selectedFxType = (currentType == 0U)
+                                              ? static_cast<uint16_t>(totalTypes - 1U)
+                                              : static_cast<uint16_t>(currentType - 1U);
+                break;
+            }
+            if (action.op == UiAction::Op::AdjustNext) {
+                navState.selectedFxType = static_cast<uint16_t>((currentType + 1U) % totalTypes);
+                break;
+            }
             if (action.op != UiAction::Op::Apply &&
                 action.op != UiAction::Op::Press) {
                 break;
             }
+            const FxTypeOption& type = fxTypeOptions_()[clampFxType_(navState.selectedFxType)];
             UiIntent it{};
             it.type = UiIntentType::AddFxToTrack;
             it.track = track;
-            it.path = "fx.reverb.schroeder";
+            it.path = std::string(type.id);
             pushIntent(std::move(it));
             navState.selectedFx = static_cast<uint16_t>(fxCount);
+            navState.fxAddPopupOpen = false;
         } break;
 
         case UiAction::Id::SceneFxOpenEditor: {
-            if (fxCount == 0U) {
-                break;
-            }
             if (action.op != UiAction::Op::Apply &&
                 action.op != UiAction::Op::Press) {
                 break;
             }
-            navState.selectedFx = clampFx_(navState.selectedFx, fxCount);
+            const uint16_t current = clampFxCursor_(navState.selectedFx, fxCount);
+            navState.selectedFx = current;
+            if (current >= fxCount) {
+                navState.fxAddPopupOpen = true;
+                break;
+            }
             navState.scene = UiScene::FxEditor;
             navState.sceneActionIndex = 0;
             UiIntent it{};
             it.type = UiIntentType::OpenFxEditor;
             it.track = track;
-            it.fxSlot = static_cast<uint8_t>(navState.selectedFx);
+            it.fxSlot = static_cast<uint8_t>(current);
             pushIntent(std::move(it));
         } break;
 
         case UiAction::Id::SceneFxRemove: {
-            if (fxCount == 0U) {
+            if (fxCount == 0U || navState.selectedFx >= fxCount || navState.fxAddPopupOpen) {
                 break;
             }
             if (action.op != UiAction::Op::Apply &&
@@ -456,6 +707,10 @@ WidgetOutput FxListWidget::onAction(UiAction& action, const UiState& rtState, Ui
                 action.op != UiAction::Op::Press) {
                 break;
             }
+            if (navState.fxAddPopupOpen) {
+                navState.fxAddPopupOpen = false;
+                break;
+            }
             navState.scene = UiScene::Tracks;
             navState.sceneActionIndex = 0;
             UiIntent it{};
@@ -477,6 +732,7 @@ std::string FxListWidget::buildActionStatusLine_(const UiState& rtState, const U
         return " action:- ";
     }
 
+    const uint16_t selectedFxType = clampFxType_(navState.selectedFxType);
     const std::size_t idx = std::min<std::size_t>(catalog.currentIndex, catalog.actions.size() - 1U);
     const UiAction& a = catalog.actions[idx];
     char buf[196]{};
@@ -489,7 +745,23 @@ std::string FxListWidget::buildActionStatusLine_(const UiState& rtState, const U
                           a.def.label.c_str(),
                           static_cast<unsigned>(std::lround(a.state.value)));
             break;
-        case UiAction::Id::SceneAddReverb:
+        case UiAction::Id::SceneFxEnabled:
+            std::snprintf(buf,
+                          sizeof(buf),
+                          " action:%s = %s ",
+                          a.def.label.c_str(),
+                          (a.state.value >= 0.5f) ? "ON" : "OFF");
+            break;
+        case UiAction::Id::SceneFxTypeSelect: {
+            const FxTypeOption& type = fxTypeOptions_()[selectedFxType];
+            std::snprintf(buf, sizeof(buf), " action:%s = %s ", a.def.label.c_str(), std::string(type.label).c_str());
+        } break;
+        case UiAction::Id::SceneAddFx: {
+            const FxTypeOption& type = fxTypeOptions_()[selectedFxType];
+            std::snprintf(buf, sizeof(buf), " action:%s = %s (apply) ",
+                          a.def.label.c_str(),
+                          std::string(type.label).c_str());
+        } break;
         case UiAction::Id::SceneFxOpenEditor:
         case UiAction::Id::SceneFxRemove:
         case UiAction::Id::SceneFxBack:

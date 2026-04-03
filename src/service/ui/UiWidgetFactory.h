@@ -3,8 +3,10 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "contracts/FxRegistry.h"
 #include "contracts/IUiWidget.h"
 
 namespace avantgarde {
@@ -25,6 +27,14 @@ struct UiWidgetFactoryOptions {
     // Каталог(и), где ищем шаблоны `*.toml`.
     // Первый найденный валидный шаблон используется.
     std::vector<std::string> layoutSearchRoots{"assets/ui", "../assets/ui", "../../assets/ui"};
+    // Базовый layout FX редактора (каркас + слот `fx_body`).
+    std::string fxEditorBaseLayout{"fx_editor_base.toml"};
+    // Явная таблица профилей: fxId -> путь к TOML профиля внутри layoutSearchRoots.
+    std::vector<std::pair<std::string, std::string>> fxEditorProfileLayouts{
+        {std::string(FxRegistry::kReverbSchroederId), "fx/reverb.toml"},
+        {std::string(FxRegistry::kHpfOnePoleId), "fx/hpf.toml"},
+        {std::string(FxRegistry::kStutterId), "fx/stutter.toml"},
+    };
 };
 
 // Простая фабрика виджетов сцены.

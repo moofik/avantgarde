@@ -66,7 +66,7 @@ private:
 
 } // namespace
 
-TEST_CASE("LowResUiRenderer: renders compact transport and two tracks") {
+TEST_CASE("LowResUiRenderer: renders compact transport and active track only") {
     FakeDisplay display(64, 16);
     LowResUiRenderer renderer(display);
 
@@ -113,7 +113,7 @@ TEST_CASE("LowResUiRenderer: renders compact transport and two tracks") {
     REQUIRE(frame.find("ACT:T1 XR:1") != std::string::npos);
     REQUIRE(frame.find("OVF:N") != std::string::npos);
     REQUIRE(frame.find("T1* P kick.wav") != std::string::npos);
-    REQUIRE(frame.find("T2  S snare.wav") != std::string::npos);
+    REQUIRE(frame.find("T2  S snare.wav") == std::string::npos);
     REQUIRE(frame.find("bars:8 fx:2 loop:Y") != std::string::npos);
     REQUIRE(frame.find("bars:8 fx:2 loop:Y m:N a:Y") != std::string::npos);
     REQUIRE(frame.find("gn :0.75") != std::string::npos);
