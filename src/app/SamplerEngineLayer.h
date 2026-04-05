@@ -78,6 +78,8 @@ public:
     // Включить/выключить FX-слот без удаления из цепочки.
     bool setFxEnabled(uint8_t track, uint8_t fxSlot, bool enabled) noexcept;
     bool loadSampleToTrack(uint8_t track, const std::string& path, std::string& clipNameOut) noexcept;
+    // Очистить загруженный сэмпл трека (slot0) без удаления FX-цепочки.
+    bool clearTrackSample(uint8_t track) noexcept;
     // Preview-голос (скрытый отдельный трек).
     void previewRequest(const std::string& path) noexcept;
     void previewStop() noexcept;

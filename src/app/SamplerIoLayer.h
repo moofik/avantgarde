@@ -12,11 +12,15 @@
 #include "contracts/IDisplay.h"
 #include "contracts/IUi.h"
 #include "contracts/IUiGestureInput.h"
+#include "contracts/UiPreparedLayout.h"
 #include "contracts/UiTheme.h"
 
 namespace avantgarde {
 
-class MacGbWindowRenderer;
+class MacPrimitiveWindowRenderer;
+namespace macos {
+class MacPrimitiveWindowInput;
+}
 
 // Режимы UI backend.
 enum class SamplerUiMode : uint8_t {
@@ -46,7 +50,7 @@ struct SamplerIoConfig {
 // - рисует кадр в выбранный backend
 class SamplerIoLayer {
 public:
-    SamplerIoLayer() = default;
+    SamplerIoLayer();
     ~SamplerIoLayer();
 
     // Инициализация renderer backend по конфигу.
@@ -64,7 +68,10 @@ public:
     // true, если рендер нужно выполнять в main thread (AppKit).
     bool renderOnMainThread() const noexcept;
     // Рендер готового состояния/кадра.
-    void render(const UiState& state, const std::string& sceneFrame, bool showHeaderOverlay);
+    void render(const UiState& state,
+                const UiPreparedLayout* preparedLayout,
+                const std::string& sceneFrame,
+                bool showHeaderOverlay);
 
 private:
     // Простейшая SPSC-подобная очередь для handoff input событий между потоками.
@@ -88,7 +95,9 @@ private:
     std::thread terminalInputThread_{};
 
     // Кэш указателя на window renderer для fast-path window input.
-    MacGbWindowRenderer* windowRenderer_{nullptr};
+    MacPrimitiveWindowRenderer* windowRenderer_{nullptr};
+    // Отдельный сборщик input для window режима (не в renderer).
+    std::unique_ptr<macos::MacPrimitiveWindowInput> windowInput_{};
 };
 
 } // namespace avantgarde

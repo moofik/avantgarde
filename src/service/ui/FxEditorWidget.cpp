@@ -259,7 +259,7 @@ bool FxEditorWidget::buildPreparedLayout(UiPreparedLayout& out,
         }
         view.addToSlot(layout.anim.nodeId,
                        UiAnimSlotBuilder(layout.anim.nodeId)
-                           .label(layout.anim.bindCanonical)
+                           .label("")
                            .animKey(layout.anim.bindCanonical)
                            .intensity01(intensity01));
     }

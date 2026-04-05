@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -72,6 +73,72 @@ bool parseQuotedString(std::string_view raw, std::string& out) {
     return true;
 }
 
+bool parseBool(std::string_view raw, bool& out) {
+    std::string v = trim(raw);
+    std::transform(v.begin(), v.end(), v.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (v == "true") {
+        out = true;
+        return true;
+    }
+    if (v == "false") {
+        out = false;
+        return true;
+    }
+    return false;
+}
+
+bool parseLayoutJustify(std::string_view raw, UiLayoutJustify& out) {
+    std::string value{};
+    if (!parseQuotedString(raw, value)) {
+        return false;
+    }
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (value == "start" || value == "left" || value == "top") {
+        out = UiLayoutJustify::Start;
+        return true;
+    }
+    if (value == "center" || value == "middle") {
+        out = UiLayoutJustify::Center;
+        return true;
+    }
+    if (value == "end" || value == "right" || value == "bottom") {
+        out = UiLayoutJustify::End;
+        return true;
+    }
+    if (value == "space_between" || value == "space-between") {
+        out = UiLayoutJustify::SpaceBetween;
+        return true;
+    }
+    return false;
+}
+
+bool parseLayoutAlign(std::string_view raw, UiLayoutAlign& out) {
+    std::string value{};
+    if (!parseQuotedString(raw, value)) {
+        return false;
+    }
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    if (value == "start" || value == "left" || value == "top") {
+        out = UiLayoutAlign::Start;
+        return true;
+    }
+    if (value == "center" || value == "middle") {
+        out = UiLayoutAlign::Center;
+        return true;
+    }
+    if (value == "end" || value == "right" || value == "bottom") {
+        out = UiLayoutAlign::End;
+        return true;
+    }
+    return false;
+}
+
 bool parseUint16(std::string_view raw, uint16_t& out) {
     const std::string v = trim(raw);
     if (v.empty()) {
@@ -97,6 +164,50 @@ bool parseFloat(std::string_view raw, float& out) {
         return false;
     }
     out = parsed;
+    return true;
+}
+
+bool parseDurationMs(std::string_view raw, uint32_t& out) {
+    std::string token{};
+    if (!parseQuotedString(raw, token)) {
+        token = trim(raw);
+    }
+    token = trim(token);
+    if (token.empty()) {
+        return false;
+    }
+    std::transform(token.begin(), token.end(), token.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+
+    float value = 0.0f;
+    float mul = 1.0f;
+    if (token.size() > 2U && token.substr(token.size() - 2U) == "ms") {
+        if (!parseFloat(std::string_view(token.data(), token.size() - 2U), value)) {
+            return false;
+        }
+        mul = 1.0f;
+    } else if (!token.empty() && token.back() == 's') {
+        if (!parseFloat(std::string_view(token.data(), token.size() - 1U), value)) {
+            return false;
+        }
+        mul = 1000.0f;
+    } else {
+        if (!parseFloat(token, value)) {
+            return false;
+        }
+        mul = 1.0f;
+    }
+
+    if (!std::isfinite(value) || value < 0.0f) {
+        return false;
+    }
+    const double ms = static_cast<double>(value) * static_cast<double>(mul);
+    if (!std::isfinite(ms) || ms < 0.0 ||
+        ms > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+        return false;
+    }
+    out = static_cast<uint32_t>(std::llround(ms));
     return true;
 }
 
@@ -275,6 +386,83 @@ bool applyNodeProperty(UiLayoutNode& node,
         }
         return true;
     }
+    if (key == "knob_size") {
+        float scale = 0.0f;
+        if (!parseFloat(value, scale)) {
+            errorOut = "line " + std::to_string(lineNo) + ": knob_size expects float";
+            return false;
+        }
+        // Защита от невалидных/экстремальных значений в шаблоне.
+        node.knobSize = std::clamp(scale, 0.2f, 4.0f);
+        return true;
+    }
+    if (key == "font") {
+        if (!parseQuotedString(value, node.font)) {
+            errorOut = "line " + std::to_string(lineNo) + ": font expects quoted string";
+            return false;
+        }
+        return true;
+    }
+    if (key == "font_size") {
+        float size = 0.0f;
+        if (!parseFloat(value, size)) {
+            errorOut = "line " + std::to_string(lineNo) + ": font_size expects float";
+            return false;
+        }
+        node.fontSize = size;
+        return true;
+    }
+    if (key == "effect") {
+        if (!parseQuotedString(value, node.effect)) {
+            errorOut = "line " + std::to_string(lineNo) + ": effect expects quoted string";
+            return false;
+        }
+        return true;
+    }
+    if (key == "effect_trigger") {
+        if (!parseQuotedString(value, node.effectTrigger)) {
+            errorOut = "line " + std::to_string(lineNo) + ": effect_trigger expects quoted string";
+            return false;
+        }
+        return true;
+    }
+    if (key == "effect_trigger_out") {
+        uint32_t outMs = 0;
+        if (!parseDurationMs(value, outMs)) {
+            errorOut = "line " + std::to_string(lineNo) +
+                       ": effect_trigger_out expects duration (e.g. \"1s\", \"750ms\", 1000)";
+            return false;
+        }
+        node.effectTriggerOutMs = outMs;
+        return true;
+    }
+    if (key == "effect_interval_ms") {
+        uint16_t ms = 0;
+        if (!parseUint16(value, ms)) {
+            errorOut = "line " + std::to_string(lineNo) + ": effect_interval_ms expects integer";
+            return false;
+        }
+        node.effectIntervalMs = ms;
+        return true;
+    }
+    if (key == "effect_amount") {
+        float amount = 0.0f;
+        if (!parseFloat(value, amount)) {
+            errorOut = "line " + std::to_string(lineNo) + ": effect_amount expects float";
+            return false;
+        }
+        node.effectAmount = amount;
+        return true;
+    }
+    if (key == "effect_speed") {
+        float speed = 0.0f;
+        if (!parseFloat(value, speed)) {
+            errorOut = "line " + std::to_string(lineNo) + ": effect_speed expects float";
+            return false;
+        }
+        node.effectSpeed = speed;
+        return true;
+    }
     if (key == "bind") {
         if (!parseQuotedString(value, node.bind)) {
             errorOut = "line " + std::to_string(lineNo) + ": bind expects quoted string";
@@ -316,6 +504,44 @@ bool applyNodeProperty(UiLayoutNode& node,
             return false;
         }
         node.width = sz;
+        return true;
+    }
+    if (key == "wrap") {
+        bool wrap = true;
+        if (!parseBool(value, wrap)) {
+            errorOut = "line " + std::to_string(lineNo) + ": wrap expects true/false";
+            return false;
+        }
+        node.wrap = wrap;
+        return true;
+    }
+    if (key == "justify") {
+        UiLayoutJustify justify = UiLayoutJustify::Start;
+        if (!parseLayoutJustify(value, justify)) {
+            errorOut = "line " + std::to_string(lineNo) +
+                       ": justify expects \"start\"|\"center\"|\"end\"|\"space_between\"";
+            return false;
+        }
+        node.justify = justify;
+        return true;
+    }
+    if (key == "align") {
+        UiLayoutAlign align = UiLayoutAlign::Start;
+        if (!parseLayoutAlign(value, align)) {
+            errorOut = "line " + std::to_string(lineNo) +
+                       ": align expects \"start\"|\"center\"|\"end\"";
+            return false;
+        }
+        node.align = align;
+        return true;
+    }
+    if (key == "text_wrap") {
+        bool wrap = false;
+        if (!parseBool(value, wrap)) {
+            errorOut = "line " + std::to_string(lineNo) + ": text_wrap expects true/false";
+            return false;
+        }
+        node.textWrap = wrap;
         return true;
     }
     if (key == "height") {

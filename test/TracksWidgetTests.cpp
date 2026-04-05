@@ -93,3 +93,29 @@ TEST_CASE("TracksWidget: Detect BPM action emits intent for selected track") {
     REQUIRE(out.intents[0].type == UiIntentType::DetectProjectBpmFromTrack);
     REQUIRE(out.intents[0].track == 0);
 }
+
+TEST_CASE("TracksWidget: apply on Track Select opens TrackContext") {
+    TracksWidget widget(TracksWidget::Options{});
+
+    UiState state{};
+    state.tracks.resize(2);
+    state.tracks[0].id = 0;
+    state.tracks[1].id = 1;
+
+    UiNavState nav{};
+    nav.scene = UiScene::Tracks;
+    nav.selectedTrack = 0;
+    nav.sceneActionIndex = 0;
+
+    UiActionCatalog catalog = widget.queryAvailableActions(state, nav);
+    REQUIRE_FALSE(catalog.actions.empty());
+    REQUIRE(catalog.actions[0].def.id == UiAction::Id::SceneTrackSelect);
+
+    UiAction action = catalog.actions[0];
+    action.op = UiAction::Op::Apply;
+    const WidgetOutput out = widget.onAction(action, state, nav);
+    REQUIRE(out.handled);
+    REQUIRE(nav.scene == UiScene::TrackContext);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::OpenScene);
+}

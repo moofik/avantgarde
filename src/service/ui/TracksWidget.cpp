@@ -261,28 +261,44 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
 
     const std::string title = !layout_.title.empty() ? layout_.title : headerTitle_;
     const std::string actionLine = buildActionStatusLine_(rtState, navState);
-    const std::string keys = !layout_.keysHint.empty()
-                                 ? layout_.keysHint
-                                 : " keys [j/k focus] [/? adj] [o apply] [F10 detect BPM] [F2 undo] [F9 redo] [q] ";
+    std::string keysLine1{};
+    std::string keysLine2{};
+    if (!layout_.keysHint.empty()) {
+        const std::size_t sep = layout_.keysHint.find('|');
+        if (sep != std::string::npos) {
+            keysLine1 = layout_.keysHint.substr(0, sep);
+            keysLine2 = layout_.keysHint.substr(sep + 1U);
+        } else {
+            keysLine1 = layout_.keysHint;
+        }
+    } else {
+        keysLine1 = " keys [j/k focus] [/? adjust] [o apply] [F10 detect BPM]";
+        keysLine2 = "      [F2 undo] [F9 redo] [F11/F12 pages] [q]";
+    }
+    const std::string keys = keysLine2.empty() ? keysLine1 : (keysLine1 + " " + keysLine2);
 
     params.text["status.scene.title"] = title;
     params.text["status.transport"] = transportLine;
     params.text["status.transport.active"] = activeLine;
     params.text["status.action"] = actionLine;
     params.text["status.keys"] = keys;
+    params.text["status.keys.1"] = keysLine1;
+    params.text["status.keys.2"] = keysLine2;
     params.text["header_title"] = title;
     params.text["transport_line"] = transportLine;
     params.text["active_line"] = activeLine;
     params.text["action_status"] = actionLine;
     params.text["keys_hint"] = keys;
+    params.text["keys_hint_line_1"] = keysLine1;
+    params.text["keys_hint_line_2"] = keysLine2;
 
     params.rows["tracks_body"] = trackRows;
     params.integer["tracks_body.selected"] = selectedRow;
     // В режиме 1-track/page у сцены есть фиксированный "низ":
     // separator + action + keys + track knobs + anim-slot.
     // При слишком маленьком hint нижние строки визуально подрезаются.
-    const std::size_t minInnerRows = 14U;
-    const std::size_t dynamicRows = 10U + std::max<std::size_t>(1U, trackRows.size());
+    const std::size_t minInnerRows = 18U;
+    const std::size_t dynamicRows = 14U + std::max<std::size_t>(1U, trackRows.size());
     params.integer["frame.heightHint"] = static_cast<int32_t>(std::max(minInnerRows, dynamicRows));
 
     const UiTrackStateView* selectedTrackView = nullptr;
@@ -300,9 +316,9 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     params.number["transport.bpm"] = bpm01;
     params.number["fx.anim.current"] = selectedGain01;
     params.number["current"] = selectedGain01;
-    params.text["fx.anim.current.label"] = "track.anim";
+    params.text["fx.anim.current.label"] = "";
     params.text["fx.anim.current.animKey"] = "fx.anim.current";
-    params.text["current.label"] = "track.anim";
+    params.text["current.label"] = "";
     params.text["current.animKey"] = "fx.anim.current";
 
     UiAction::Id selectedActionId = UiAction::Id::None;
@@ -455,17 +471,6 @@ UiActionCatalog TracksWidget::queryAvailableActions(const UiState& rtState, cons
         a.state.enabled = trackValid;
         pushAction(std::move(a));
     }
-    {
-        UiAction a{};
-        a.def.id = UiAction::Id::SceneOpenManager;
-        a.def.scope = UiAction::Scope::Scene;
-        a.def.execution = UiAction::Execution::ApplyRequired;
-        a.def.valueKind = UiAction::ValueKind::None;
-        a.def.label = "Open Manager";
-        a.state.enabled = true;
-        pushAction(std::move(a));
-    }
-
     if (!out.actions.empty()) {
         out.currentIndex = std::min<uint16_t>(navState.sceneActionIndex, static_cast<uint16_t>(out.actions.size() - 1U));
         for (std::size_t i = 0; i < out.actions.size(); ++i) {
@@ -494,8 +499,18 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             if (totalTracks == 0) break;
             if (action.op == UiAction::Op::AdjustPrev) {
                 navState.selectedTrack = wrapPrevTrack(selectedTrack, totalTracks);
-            } else if (action.op == UiAction::Op::AdjustNext || action.op == UiAction::Op::Apply) {
+            } else if (action.op == UiAction::Op::AdjustNext) {
                 navState.selectedTrack = wrapNextTrack(selectedTrack, totalTracks);
+            } else if (action.op == UiAction::Op::Apply ||
+                       action.op == UiAction::Op::Press) {
+                navState.scene = UiScene::TrackContext;
+                navState.cursor = 0;
+                navState.scroll = 0;
+                navState.sceneActionIndex = 0;
+                UiIntent open{};
+                open.type = UiIntentType::OpenScene;
+                pushIntentToWidgetOutput(std::move(open));
+                break;
             } else {
                 break;
             }
@@ -603,18 +618,6 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             pushIntentToWidgetOutput(std::move(it));
         } break;
 
-        case UiAction::Id::SceneOpenManager: {
-            if (action.op != UiAction::Op::Apply &&
-                action.op != UiAction::Op::Press) {
-                break;
-            }
-            navState.scene = UiScene::Manager;
-            navState.sceneActionIndex = 0;
-            UiIntent it{};
-            it.type = UiIntentType::OpenScene;
-            pushIntentToWidgetOutput(std::move(it));
-        } break;
-
         case UiAction::Id::SceneOpenFxList: {
             if (totalTracks == 0) break;
             if (action.op != UiAction::Op::Apply &&
@@ -640,9 +643,13 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
         case UiAction::Id::SceneTrackGain:
         case UiAction::Id::SceneAddFx:
         case UiAction::Id::SceneAddReverb:
+        case UiAction::Id::SceneOpenManager:
         case UiAction::Id::SceneFxSlotSelect:
         case UiAction::Id::SceneFxEnabled:
         case UiAction::Id::SceneFxOpenEditor:
+        case UiAction::Id::SceneTrackMenuLoadSample:
+        case UiAction::Id::SceneTrackMenuClear:
+        case UiAction::Id::SceneTrackMenuFxList:
         case UiAction::Id::SceneFxParamSelect:
         case UiAction::Id::SceneFxParamValue:
         case UiAction::Id::SceneFxBack:
@@ -684,9 +691,6 @@ std::string TracksWidget::buildActionStatusLine_(const UiState& rtState, const U
             std::snprintf(buf, sizeof(buf), " action:%s (apply) ", a.def.label.c_str());
             break;
         case UiAction::Id::SceneOpenFxList:
-            std::snprintf(buf, sizeof(buf), " action:%s (apply) ", a.def.label.c_str());
-            break;
-        case UiAction::Id::SceneOpenManager:
             std::snprintf(buf, sizeof(buf), " action:%s (apply) ", a.def.label.c_str());
             break;
         default:

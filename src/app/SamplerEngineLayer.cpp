@@ -521,6 +521,17 @@ bool SamplerEngineLayer::loadSampleToTrack(uint8_t track,
     return true;
 }
 
+bool SamplerEngineLayer::clearTrackSample(uint8_t track) noexcept {
+    if (!impl_ || impl_->clipCtl.empty()) {
+        return false;
+    }
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+        return false;
+    }
+    return impl_->clipCtl[t]->clearSlot(0);
+}
+
 void SamplerEngineLayer::previewRequest(const std::string& path) noexcept {
     if (!impl_) {
         return;

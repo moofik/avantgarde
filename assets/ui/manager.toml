@@ -4,12 +4,20 @@ id = "manager"
 type = "column"
 padding = 0
 gap = 0
+width = 60
+height = 24
 
 [[layout.children]]
 type = "statusbar"
 id = "header_title"
 text = "MANAGER"
 bind = "status.scene.title"
+font = "gothic"
+font_size = 18
+effect = "glitch"
+effect_interval_ms = 2800
+effect_amount = 0.14
+effect_speed = 0.85
 width = "100%"
 
 [[layout.children]]

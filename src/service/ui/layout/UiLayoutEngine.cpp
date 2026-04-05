@@ -40,6 +40,32 @@ uint16_t clampU16(int value) noexcept {
     return static_cast<uint16_t>(value);
 }
 
+int crossAlignOffset(UiLayoutAlign align, int freeSpace) noexcept {
+    if (freeSpace <= 0) {
+        return 0;
+    }
+    switch (align) {
+        case UiLayoutAlign::Center:
+            return freeSpace / 2;
+        case UiLayoutAlign::End:
+            return freeSpace;
+        case UiLayoutAlign::Start:
+        default:
+            return 0;
+    }
+}
+
+uint16_t textRowsFromFontSize(float fontSize) noexcept {
+    if (!(fontSize > 0.0f)) {
+        return 1U;
+    }
+    // Базовая "строка" под body ~14pt.
+    // Это убирает лишние пустые ряды для крупных заголовков (например 25pt),
+    // но сохраняет запас высоты, чтобы текст не клиппился.
+    const int rows = static_cast<int>(std::ceil(static_cast<double>(fontSize) / 14.0));
+    return std::clamp<uint16_t>(static_cast<uint16_t>(std::max(rows, 1)), 1U, 8U);
+}
+
 uint16_t resolveSize(const UiLayoutSize& size,
                     uint16_t available,
                     uint16_t autoValue) noexcept {
@@ -59,7 +85,7 @@ Size2 defaultLeafMetrics(const UiLayoutNode& node) {
     switch (node.type) {
         case UiLayoutNodeType::StatusBar:
         case UiLayoutNodeType::Text:
-            return Size2{1, 1};
+            return Size2{1, textRowsFromFontSize(node.fontSize)};
         case UiLayoutNodeType::TrackView:
         case UiLayoutNodeType::ManagerView:
         case UiLayoutNodeType::FxListView:
@@ -69,10 +95,28 @@ Size2 defaultLeafMetrics(const UiLayoutNode& node) {
             return Size2{0, 1};
         case UiLayoutNodeType::Separator:
             return Size2{0, 1};
-        case UiLayoutNodeType::Knob:
-            return Size2{18, 1};
-        case UiLayoutNodeType::Switch:
-            return Size2{22, 1};
+        case UiLayoutNodeType::Knob: {
+            const float knobScale = std::clamp(node.knobSize, 0.2f, 4.0f);
+            if (!(node.fontSize > 0.0f)) {
+                const uint16_t h = std::max<uint16_t>(
+                    1U,
+                    static_cast<uint16_t>(std::ceil(1.0f * knobScale)));
+                return Size2{18, h};
+            }
+            const uint16_t textRows = textRowsFromFontSize(node.fontSize);
+            const uint16_t baseRows = std::max<uint16_t>(2U, textRows);
+            const uint16_t scaledRows = std::max<uint16_t>(
+                1U,
+                static_cast<uint16_t>(std::ceil(static_cast<float>(baseRows) * knobScale)));
+            return Size2{18, scaledRows};
+        }
+        case UiLayoutNodeType::Switch: {
+            if (!(node.fontSize > 0.0f)) {
+                return Size2{22, 1};
+            }
+            const uint16_t textRows = textRowsFromFontSize(node.fontSize);
+            return Size2{22, std::max<uint16_t>(2U, textRows)};
+        }
         case UiLayoutNodeType::AnimSlot: {
             uint16_t w = 20;
             uint16_t h = 6;
@@ -124,42 +168,58 @@ Size2 measureNode(const UiLayoutNode& node,
             intrinsic.w = childCrossMax;
             intrinsic.h = static_cast<uint16_t>(childMainSum + gaps);
         } else {
-            // Row с переносом: если очередной child не влезает по ширине, начинаем
-            // новую строку и накапливаем высоту всех строк.
-            uint16_t lineW = 0;
-            uint16_t lineH = 0;
-            uint16_t maxLineW = 0;
-            uint16_t totalH = 0;
-            bool hasLine = false;
-
-            for (const UiLayoutNode& child : node.children) {
-                const Size2 childSize = measureNode(child, contentAvailW, contentAvailH, customMeasure, cache);
-                const uint16_t childW = childSize.w;
-                const uint16_t childH = childSize.h;
-                const uint16_t addGap = hasLine ? node.gap : 0U;
-                const uint16_t candidateW = static_cast<uint16_t>(lineW + addGap + childW);
-
-                if (hasLine &&
-                    contentAvailW > 0U &&
-                    candidateW > contentAvailW) {
-                    maxLineW = std::max<uint16_t>(maxLineW, lineW);
-                    totalH = static_cast<uint16_t>(totalH + lineH + node.gap);
-                    lineW = childW;
-                    lineH = childH;
-                    hasLine = true;
-                } else {
-                    lineW = candidateW;
-                    lineH = std::max<uint16_t>(lineH, childH);
-                    hasLine = true;
+            const bool rowWrap = node.wrap;
+            if (!rowWrap) {
+                uint16_t childMainSum = 0;
+                uint16_t childCrossMax = 0;
+                for (const UiLayoutNode& child : node.children) {
+                    const Size2 childSize = measureNode(child, contentAvailW, contentAvailH, customMeasure, cache);
+                    childMainSum = static_cast<uint16_t>(childMainSum + childSize.w);
+                    childCrossMax = std::max<uint16_t>(childCrossMax, childSize.h);
                 }
-            }
+                const uint16_t gaps = (node.children.size() > 1U)
+                                          ? static_cast<uint16_t>((node.children.size() - 1U) * node.gap)
+                                          : 0U;
+                intrinsic.w = static_cast<uint16_t>(childMainSum + gaps);
+                intrinsic.h = childCrossMax;
+            } else {
+                // Row с переносом: если очередной child не влезает по ширине, начинаем
+                // новую строку и накапливаем высоту всех строк.
+                uint16_t lineW = 0;
+                uint16_t lineH = 0;
+                uint16_t maxLineW = 0;
+                uint16_t totalH = 0;
+                bool hasLine = false;
 
-            if (hasLine) {
-                maxLineW = std::max<uint16_t>(maxLineW, lineW);
-                totalH = static_cast<uint16_t>(totalH + lineH);
+                for (const UiLayoutNode& child : node.children) {
+                    const Size2 childSize = measureNode(child, contentAvailW, contentAvailH, customMeasure, cache);
+                    const uint16_t childW = childSize.w;
+                    const uint16_t childH = childSize.h;
+                    const uint16_t addGap = hasLine ? node.gap : 0U;
+                    const uint16_t candidateW = static_cast<uint16_t>(lineW + addGap + childW);
+
+                    if (hasLine &&
+                        contentAvailW > 0U &&
+                        candidateW > contentAvailW) {
+                        maxLineW = std::max<uint16_t>(maxLineW, lineW);
+                        totalH = static_cast<uint16_t>(totalH + lineH + node.gap);
+                        lineW = childW;
+                        lineH = childH;
+                        hasLine = true;
+                    } else {
+                        lineW = candidateW;
+                        lineH = std::max<uint16_t>(lineH, childH);
+                        hasLine = true;
+                    }
+                }
+
+                if (hasLine) {
+                    maxLineW = std::max<uint16_t>(maxLineW, lineW);
+                    totalH = static_cast<uint16_t>(totalH + lineH);
+                }
+                intrinsic.w = maxLineW;
+                intrinsic.h = totalH;
             }
-            intrinsic.w = maxLineW;
-            intrinsic.h = totalH;
         }
     } else {
         if (customMeasure) {
@@ -204,7 +264,7 @@ void arrangeNode(const UiLayoutNode& node,
     }
 
     const bool vertical = isColumn(node);
-    const bool rowWrap = !vertical;
+    const bool rowWrap = !vertical && node.wrap;
     const uint16_t gap = node.gap;
     const std::size_t n = node.children.size();
     const int gapTotal = (n > 1U) ? static_cast<int>((n - 1U) * gap) : 0;
@@ -231,15 +291,18 @@ void arrangeNode(const UiLayoutNode& node,
         const UiLayoutSize& crossRule = vertical ? child.width : child.height;
 
         const bool mainAuto = (mainRule.unit == UiLayoutSize::Unit::Auto);
+        // Горизонтальный row не должен растягивать обычные auto-колонки:
+        // иначе появляются огромные "дыры" между элементами.
         const bool mainAutoFlex = mainAuto &&
             (child.type == UiLayoutNodeType::Spacer ||
-             child.type == UiLayoutNodeType::List ||
-             child.type == UiLayoutNodeType::TrackView ||
-             child.type == UiLayoutNodeType::ManagerView ||
-             child.type == UiLayoutNodeType::FxListView ||
-             child.type == UiLayoutNodeType::FxEditorView ||
-             child.type == UiLayoutNodeType::Column ||
-             child.type == UiLayoutNodeType::Row);
+             (vertical &&
+              (child.type == UiLayoutNodeType::List ||
+               child.type == UiLayoutNodeType::TrackView ||
+               child.type == UiLayoutNodeType::ManagerView ||
+               child.type == UiLayoutNodeType::FxListView ||
+               child.type == UiLayoutNodeType::FxEditorView ||
+               child.type == UiLayoutNodeType::Column ||
+               child.type == UiLayoutNodeType::Row)));
         uint16_t main = resolveSize(mainRule, static_cast<uint16_t>(mainAvailable), minMain);
         uint16_t cross = resolveSize(crossRule,
                                      vertical ? contentW : contentH,
@@ -327,10 +390,24 @@ void arrangeNode(const UiLayoutNode& node,
             }
         }
     } else {
-        // Row: поддерживаем перенос child-блоков по ширине contentW.
-        int cursorX = 0;
-        int cursorY = 0;
-        int lineHeight = 0;
+        struct RowLineItem {
+            std::size_t index{0};
+            int width{0};
+            int height{0};
+        };
+        struct RowLine {
+            std::vector<RowLineItem> items{};
+            int usedWidth{0};
+            int maxHeight{0};
+        };
+        std::vector<RowLine> lines{};
+        lines.emplace_back();
+
+        auto pushToNewLine = [&]() {
+            if (lines.empty() || !lines.back().items.empty()) {
+                lines.emplace_back();
+            }
+        };
 
         for (std::size_t i = 0; i < n; ++i) {
             const ChildGeometry& g = geoms[i];
@@ -340,27 +417,87 @@ void arrangeNode(const UiLayoutNode& node,
                 continue;
             }
 
-            if (cursorX > 0 &&
-                childW > 0 &&
-                (cursorX + childW) > static_cast<int>(contentW)) {
-                cursorX = 0;
-                cursorY += lineHeight + gap;
-                lineHeight = 0;
+            RowLine& line = lines.back();
+            const int addGap = line.items.empty() ? 0 : gap;
+            const int candidateW = line.usedWidth + addGap + childW;
+            if (rowWrap && !line.items.empty() && candidateW > static_cast<int>(contentW)) {
+                pushToNewLine();
             }
 
-            const SceneFrameRect childRect{
-                .x = static_cast<int16_t>(contentX + cursorX),
-                .y = static_cast<int16_t>(contentY + cursorY),
-                .width = static_cast<uint16_t>(childW),
-                .height = static_cast<uint16_t>(childH),
-            };
-            arrangeNode(node.children[i], childRect, static_cast<uint16_t>(depth + 1U), measured, out);
+            RowLine& target = lines.back();
+            const int targetGap = target.items.empty() ? 0 : gap;
+            target.usedWidth += targetGap + childW;
+            target.maxHeight = std::max(target.maxHeight, childH);
+            target.items.push_back(RowLineItem{.index = i, .width = childW, .height = childH});
+        }
 
-            cursorX += childW;
-            if (i + 1U < n) {
-                cursorX += gap;
+        if (!lines.empty() && lines.back().items.empty()) {
+            lines.pop_back();
+        }
+
+        int cursorY = 0;
+        for (std::size_t li = 0; li < lines.size(); ++li) {
+            const RowLine& line = lines[li];
+            if (line.items.empty()) {
+                continue;
             }
-            lineHeight = std::max(lineHeight, childH);
+            const int freeW = std::max(0, static_cast<int>(contentW) - line.usedWidth);
+            int startX = 0;
+            int interGap = gap;
+            int extraGapRemainder = 0;
+
+            switch (node.justify) {
+                case UiLayoutJustify::Center:
+                    startX = freeW / 2;
+                    break;
+                case UiLayoutJustify::End:
+                    startX = freeW;
+                    break;
+                case UiLayoutJustify::SpaceBetween:
+                    if (line.items.size() > 1U) {
+                        const int slots = static_cast<int>(line.items.size() - 1U);
+                        interGap = gap + (freeW / slots);
+                        extraGapRemainder = freeW % slots;
+                    } else {
+                        startX = freeW / 2;
+                    }
+                    break;
+                case UiLayoutJustify::Start:
+                default:
+                    break;
+            }
+
+            int cursorX = startX;
+            for (std::size_t ii = 0; ii < line.items.size(); ++ii) {
+                const RowLineItem& item = line.items[ii];
+                const int freeCross = std::max(0, line.maxHeight - item.height);
+                const int offsetY = crossAlignOffset(node.align, freeCross);
+                const SceneFrameRect childRect{
+                    .x = static_cast<int16_t>(contentX + cursorX),
+                    .y = static_cast<int16_t>(contentY + cursorY + offsetY),
+                    .width = static_cast<uint16_t>(item.width),
+                    .height = static_cast<uint16_t>(item.height),
+                };
+                arrangeNode(node.children[item.index],
+                            childRect,
+                            static_cast<uint16_t>(depth + 1U),
+                            measured,
+                            out);
+
+                cursorX += item.width;
+                if (ii + 1U < line.items.size()) {
+                    cursorX += interGap;
+                    if (extraGapRemainder > 0) {
+                        ++cursorX;
+                        --extraGapRemainder;
+                    }
+                }
+            }
+
+            cursorY += line.maxHeight;
+            if (li + 1U < lines.size()) {
+                cursorY += gap;
+            }
         }
     }
 }

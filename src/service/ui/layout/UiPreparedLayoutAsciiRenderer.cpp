@@ -185,9 +185,12 @@ std::vector<std::string> UiPreparedLayoutAsciiRenderer::render(const UiPreparedL
         return {};
     }
 
-    const uint16_t width = std::max<uint16_t>(prepared.frameWidth, 4U);
+    const uint16_t width = resolvePreparedFrameWidth(prepared, 4U);
     const uint16_t innerW = static_cast<uint16_t>(width - 2U);
-    const uint16_t innerH = estimateInnerHeight(prepared);
+    const uint16_t innerH = resolvePreparedInnerHeight(
+        prepared,
+        estimateInnerHeight(prepared),
+        1U);
 
     SceneFrame frame{};
     frame.width = width;

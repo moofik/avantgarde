@@ -9,12 +9,16 @@ namespace avantgarde {
 enum class UiScene : uint8_t {
     // Базовый экран плеера: транспорт + 2 трека.
     Tracks = 0,
+    // Контекстное меню активного трека (операции над клипом/треком).
+    TrackContext,
     // Экран файлового менеджера для выбора и загрузки сэмплов.
     Manager,
     // Экран списка эффектов активного трека.
     FxList,
     // Экран параметров конкретного эффекта.
-    FxEditor
+    FxEditor,
+    // Размер enum для массивов/таблиц scene-router.
+    Count
 };
 
 } // namespace avantgarde

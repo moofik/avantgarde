@@ -29,6 +29,8 @@ public:
     // В strict-режиме кидает исключение, если для сцены нет виджета
     // или виджет не смог построить prepared-layout.
     bool renderActive(UiTextBuffer& out, const UiState& rtState) const;
+    // Построить prepared-layout активной сцены (без конкретного рендера).
+    bool buildPreparedActive(UiPreparedLayout& out, const UiState& rtState) const;
 
     // Обрабатывает input:
     // 1) глобальные shortcuts (host-level)
@@ -36,6 +38,8 @@ public:
     WidgetOutput handleGesture(UiGesture action, const UiState& rtState);
 
 private:
+    static constexpr std::size_t kSceneCount_ = static_cast<std::size_t>(UiScene::Count);
+
     // Формирует каталог глобальных pointer-экшенов (scope=Global).
     UiActionCatalog queryGlobalActions_(const UiState& rtState) const;
     // Применяет глобальный экшен и возвращает intents/UI-nav изменения.
@@ -47,7 +51,7 @@ private:
     }
 
     // Registry: one widget per scene.
-    std::array<std::unique_ptr<IUiWidget>, 4> widgets_{};
+    std::array<std::unique_ptr<IUiWidget>, kSceneCount_> widgets_{};
     // Текущее UI-only состояние навигации.
     UiNavState nav_{};
 };

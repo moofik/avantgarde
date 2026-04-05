@@ -44,6 +44,37 @@ TEST_CASE("UiPreparedLayoutBuilder: builds typed component pack") {
     REQUIRE(sw->selectedIndex == 1);
 }
 
+TEST_CASE("UiPreparedLayoutAsciiRenderer: root layout size overrides prepared frame hint") {
+    const char* toml = R"(
+id = "fixed"
+[layout]
+type = "column"
+width = 40
+height = 10
+
+[[layout.children]]
+type = "statusbar"
+id = "header_title"
+text = "FIXED"
+)";
+
+    UiLayoutTemplate tpl{};
+    std::string err{};
+    REQUIRE(UiLayoutTomlLoader::loadFromString(toml, tpl, err));
+
+    UiPreparedLayout prepared = std::move(
+        UiPreparedLayoutBuilder{}
+            .sceneId("fixed")
+            .templateRef(&tpl)
+            .frameWidth(80)
+            .frameHeightHint(24)
+            .addComponent(UiStatusBarBuilder("header_title").text("FIXED"))
+    ).build();
+
+    const std::vector<std::string> lines = UiPreparedLayoutAsciiRenderer::render(prepared);
+    REQUIRE(lines.size() == 12U); // inner(10) + borders(2)
+}
+
 TEST_CASE("TracksWidget: provides prepared layout without renderer coupling") {
     const char* toml = R"(
 id = "tracks"

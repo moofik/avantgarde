@@ -11,6 +11,7 @@
 #include "service/ui/FxEditorWidget.h"
 #include "service/ui/FxListWidget.h"
 #include "service/ui/ManagerWidget.h"
+#include "service/ui/TrackContextMenuWidget.h"
 #include "service/ui/TracksWidget.h"
 #include "service/ui/UiLayoutTomlLoader.h"
 
@@ -75,6 +76,10 @@ std::unique_ptr<IUiWidget> UiWidgetFactory::create(UiScene scene) const {
                     .bpmStep = options_.tracksBpmStep,
                     .layoutTemplate = loadTemplateOrThrow(options_, "tracks.toml"),
                 });
+        case UiScene::TrackContext:
+            return std::make_unique<TrackContextMenuWidget>(
+                options_.frameWidth,
+                loadTemplateOrThrow(options_, "track_menu.toml"));
         case UiScene::Manager:
             // Файловый менеджер использует только ширину рамки.
             return std::make_unique<ManagerWidget>(
@@ -101,6 +106,7 @@ std::unique_ptr<IUiWidget> UiWidgetFactory::create(UiScene scene) const {
                 std::move(baseLayout),
                 std::move(profileLayouts));
         }
+        case UiScene::Count:
         default:
             return nullptr;
     }

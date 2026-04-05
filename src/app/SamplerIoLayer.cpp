@@ -4,7 +4,8 @@
 
 #include "control/TerminalUiInput.h"
 #include "platform/lowres/LowResUiRenderer.h"
-#include "platform/macos/MacGbWindowRenderer.h"
+#include "platform/macos/MacPrimitiveWindowInput.h"
+#include "platform/macos/MacPrimitiveWindowRenderer.h"
 #include "platform/terminal/AnsiUiRenderer.h"
 #include "platform/terminal/GothicGbUiRenderer.h"
 #include "platform/terminal/TerminalCharDisplay.h"
@@ -31,6 +32,8 @@ bool parseSamplerUiMode(std::string_view raw, SamplerUiMode& out) noexcept {
     return false;
 }
 
+SamplerIoLayer::SamplerIoLayer() = default;
+
 SamplerIoLayer::~SamplerIoLayer() {
     // Safety: гарантируем join фонового input thread.
     stopTerminalInput();
@@ -47,10 +50,13 @@ bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) 
     }
     if (config.mode == SamplerUiMode::GbWindow) {
         // В window backend запоминаем типизированный указатель для input pump.
-        renderer_ = std::make_unique<MacGbWindowRenderer>(effectiveGbTheme, config.gbTextWidth);
-        windowRenderer_ = dynamic_cast<MacGbWindowRenderer*>(renderer_.get());
+        renderer_ = std::make_unique<MacPrimitiveWindowRenderer>(effectiveGbTheme);
+        windowRenderer_ = dynamic_cast<MacPrimitiveWindowRenderer*>(renderer_.get());
+        windowInput_ = std::make_unique<macos::MacPrimitiveWindowInput>();
         return true;
     }
+    windowRenderer_ = nullptr;
+    windowInput_.reset();
     if (config.mode == SamplerUiMode::Gb) {
         renderer_ = std::make_unique<GothicGbUiRenderer>(effectiveGbTheme, config.gbTextWidth);
         return true;
@@ -88,13 +94,13 @@ void SamplerIoLayer::stopTerminalInput() noexcept {
 }
 
 bool SamplerIoLayer::readWindowEvents() {
-    if (!windowRenderer_) {
+    if (!windowRenderer_ || !windowInput_) {
         return false;
     }
     windowRenderer_->pumpEvents();
     UiGestureEvent ev{};
     // Собираем все события из окна в общую очередь.
-    while (windowRenderer_->readNextInputEvent(ev)) {
+    while (windowInput_->readNextInputEvent(ev)) {
         inputQueue_.push(ev);
     }
     return true;
@@ -108,20 +114,23 @@ bool SamplerIoLayer::renderOnMainThread() const noexcept {
     return windowRenderer_ != nullptr;
 }
 
-void SamplerIoLayer::render(const UiState& state, const std::string& sceneFrame, bool showHeaderOverlay) {
+void SamplerIoLayer::render(const UiState& state,
+                            const UiPreparedLayout* preparedLayout,
+                            const std::string& sceneFrame,
+                            bool showHeaderOverlay) {
     (void)showHeaderOverlay;
     if (!renderer_) {
         return;
     }
-    // Если scene frame сформирован в application слое, отдаем его напрямую
-    // в backends, которые умеют custom frame.
-    if (!sceneFrame.empty()) {
-        if (auto* windowRenderer = dynamic_cast<MacGbWindowRenderer*>(renderer_.get())) {
-            // Для декларативного scene-frame renderer не должен подмешивать
-            // legacy header-overlay поверх пользовательского заголовка.
-            windowRenderer->renderCustomFrame(sceneFrame, /*showHeaderOverlay=*/false);
+    // Новый примитивный renderer читает непосредственно UiPreparedLayout.
+    if (preparedLayout) {
+        if (auto* windowRenderer = dynamic_cast<MacPrimitiveWindowRenderer*>(renderer_.get())) {
+            windowRenderer->renderPreparedLayout(*preparedLayout);
             return;
         }
+    }
+    // Fallback для старых backend-ов: текстовый scene-frame либо обычный render(state).
+    if (!sceneFrame.empty()) {
         if (auto* gbRenderer = dynamic_cast<GothicGbUiRenderer*>(renderer_.get())) {
             gbRenderer->renderCustomFrame(sceneFrame);
             return;

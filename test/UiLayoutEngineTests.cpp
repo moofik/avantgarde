@@ -173,3 +173,78 @@ width = "49%"
     REQUIRE(k3->rect.y == k4->rect.y);
     REQUIRE(k3->rect.y > k1->rect.y);
 }
+
+TEST_CASE("UiLayoutEngine: row supports nowrap + justify + align") {
+    const char* toml = R"(
+id = "row_nowrap"
+[layout]
+type = "row"
+padding = 0
+gap = 1
+wrap = false
+justify = "center"
+align = "end"
+
+[[layout.children]]
+type = "knob"
+id = "left"
+width = 8
+height = 2
+
+[[layout.children]]
+type = "knob"
+id = "right"
+width = 8
+height = 1
+)";
+
+    UiLayoutTemplate tpl{};
+    std::string err{};
+    REQUIRE(UiLayoutTomlLoader::loadFromString(toml, tpl, err));
+
+    const UiLayoutEngine::Result r = UiLayoutEngine::arrange(tpl.root, 30, 6);
+    const UiLayoutBox* left = UiLayoutEngine::findById(r, "left");
+    const UiLayoutBox* right = UiLayoutEngine::findById(r, "right");
+    REQUIRE(left != nullptr);
+    REQUIRE(right != nullptr);
+
+    // (8 + gap + 8)=17 -> свободно 13 -> centered x starts near 6.
+    REQUIRE(left->rect.x >= 6);
+    REQUIRE(right->rect.x > left->rect.x);
+    // align=end: второй элемент (h=1) должен быть прижат к низу строки (h=2).
+    REQUIRE(right->rect.y > left->rect.y);
+}
+
+TEST_CASE("UiLayoutEngine: knob_size increases auto knob height") {
+    const char* toml = R"(
+id = "knob_scale"
+[layout]
+type = "row"
+padding = 0
+gap = 1
+wrap = false
+
+[[layout.children]]
+type = "knob"
+id = "k_small"
+font_size = 16
+knob_size = 1.0
+
+[[layout.children]]
+type = "knob"
+id = "k_big"
+font_size = 16
+knob_size = 2.0
+)";
+
+    UiLayoutTemplate tpl{};
+    std::string err{};
+    REQUIRE(UiLayoutTomlLoader::loadFromString(toml, tpl, err));
+
+    const UiLayoutEngine::Result r = UiLayoutEngine::arrange(tpl.root, 60, 20);
+    const UiLayoutBox* kSmall = UiLayoutEngine::findById(r, "k_small");
+    const UiLayoutBox* kBig = UiLayoutEngine::findById(r, "k_big");
+    REQUIRE(kSmall != nullptr);
+    REQUIRE(kBig != nullptr);
+    REQUIRE(kBig->rect.height > kSmall->rect.height);
+}

@@ -15,6 +15,8 @@ enum class UiIntentType : uint8_t {
     Back,
     // Загрузить файл-сэмпл в track/slot.
     LoadSampleToTrack,
+    // Очистить загруженный сэмпл в выбранном треке (slot0).
+    ClearTrackSample,
     // Добавить эффект в цепочку трека.
     AddFxToTrack,
     // Удалить эффект из цепочки трека.

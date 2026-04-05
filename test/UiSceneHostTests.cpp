@@ -2,6 +2,8 @@
 
 #include "service/ui/FxEditorWidget.h"
 #include "service/ui/FxListWidget.h"
+#include "service/ui/TrackContextMenuWidget.h"
+#include "service/ui/TracksWidget.h"
 #include "service/ui/UiSceneHost.h"
 
 using namespace avantgarde;
@@ -384,4 +386,24 @@ TEST_CASE("UiSceneHost: FxEditor fast F-keys route to select/value/bypass") {
     REQUIRE(bypass.handled);
     REQUIRE(bypass.intents.size() == 1);
     REQUIRE(bypass.intents[0].type == UiIntentType::SetFxEnabled);
+}
+
+TEST_CASE("UiSceneHost: apply on Track Select opens TrackContext scene") {
+    UiSceneHost host;
+    REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<TracksWidget>(TracksWidget::Options{})));
+    REQUIRE(host.registerWidget(UiScene::TrackContext, std::make_unique<TrackContextMenuWidget>(60)));
+
+    UiState state{};
+    state.tracks.resize(2);
+    state.tracks[0].id = 0;
+    state.tracks[1].id = 1;
+    host.setScene(UiScene::Tracks);
+    host.nav().selectedTrack = 0;
+    host.nav().sceneActionIndex = 0; // SceneTrackSelect по умолчанию.
+
+    const WidgetOutput out = host.handleGesture(UiGesture::F1, state);
+    REQUIRE(out.handled);
+    REQUIRE(host.scene() == UiScene::TrackContext);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::OpenScene);
 }

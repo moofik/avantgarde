@@ -149,6 +149,7 @@ bool UiIntentApplier::buildUndoIntent(const UiIntent& forward,
             undoOut.value = enabled ? 1.0f : 0.0f;
             return true;
         }
+        case UiIntentType::ClearTrackSample:
         default:
             return false;
     }
@@ -169,6 +170,25 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             ctx.tracks[t].clipPath = intent.path;
             ctx.tracks[t].muted = false;
             ctx.tracks[t].loop = true;
+            refreshTrackViewState_(t, ctx.transport, ctx.tracks);
+            ctx.uiStore.setTrack(t, ctx.tracks[t]);
+            return true;
+        }
+        case UiIntentType::ClearTrackSample: {
+            if (ctx.tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(intent.track, ctx.tracks);
+            const bool hasClip = !ctx.tracks[t].clipPath.empty() || !ctx.tracks[t].clipName.empty();
+            if (!hasClip) {
+                return false;
+            }
+            if (!ctx.engine.clearTrackSample(t)) {
+                return false;
+            }
+            ctx.tracks[t].clipName.clear();
+            ctx.tracks[t].clipPath.clear();
+            ctx.tracks[t].loop = false;
             refreshTrackViewState_(t, ctx.transport, ctx.tracks);
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;

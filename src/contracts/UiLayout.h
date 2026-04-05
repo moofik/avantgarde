@@ -42,6 +42,22 @@ struct UiLayoutSize {
     float value{0.0f};
 };
 
+// Выравнивание элементов по основной оси контейнера (row/column).
+enum class UiLayoutJustify : uint8_t {
+    Start = 0,
+    Center,
+    End,
+    SpaceBetween
+};
+
+// Выравнивание элементов по поперечной оси контейнера (row/column)
+// и для отдельных узлов, где важно позиционирование внутри выделенного rect.
+enum class UiLayoutAlign : uint8_t {
+    Start = 0,
+    Center,
+    End
+};
+
 // Узел дерева декларативной разметки.
 // Пока это чистый DTO-контракт: хранит структуру и метаданные без логики рендера.
 struct UiLayoutNode {
@@ -49,11 +65,48 @@ struct UiLayoutNode {
     std::string id{};
     std::string text{};
     std::string label{};
+    // Роль/источник шрифта для рендереров, которые поддерживают типографику.
+    // Поддерживаемые значения:
+    // - "default" / "body" / "gothic"
+    // - PostScript имя шрифта
+    // - путь к font-файлу (.ttf/.otf/.ttc/.otc), например "assets/fonts/my.ttf".
+    std::string font{};
+    // Размер шрифта ноды в pt. 0 = размер по умолчанию рендерера/роли.
+    float fontSize{0.0f};
+    // Визуальный эффект ноды (опционально), например "glitch".
+    std::string effect{};
+    // Триггер визуального эффекта:
+    // - ""/"always"/"time"  -> тайм-режим (случайные вспышки по интервалу)
+    // - "change"            -> включается при изменении значения (например knob)
+    std::string effectTrigger{};
+    // Таймаут "отпускания" для trigger=change (мс):
+    // эффект остается активным после последнего изменения значения.
+    // 0 = default рендерера/FX.
+    uint32_t effectTriggerOutMs{0};
+    // Период эффекта в миллисекундах (если 0, рендерер использует свой default).
+    uint16_t effectIntervalMs{0};
+    // Интенсивность эффекта [0..1] (если 0, рендерер использует мягкий default).
+    float effectAmount{0.0f};
+    // Скорость микродвижения внутри эффекта (1.0 = default, >1 быстрее, <1 медленнее).
+    float effectSpeed{1.0f};
     std::string bind{};
+    // Масштаб крутилки (только для нод type="knob"):
+    // 1.0 = дефолтный размер, <1 уменьшает, >1 увеличивает.
+    // Рендерер дополнительно ограничивает размер рамками layout-ячейки.
+    float knobSize{1.0f};
     // Для нод типа switch: список дискретных значений (порядок важен).
     std::vector<std::string> options{};
     UiLayoutSize width{};
     UiLayoutSize height{};
+    // Только для row: разрешить перенос дочерних элементов на новую строку.
+    bool wrap{true};
+    // Только для контейнеров row/column: выравнивание дочерних элементов по основной оси.
+    UiLayoutJustify justify{UiLayoutJustify::Start};
+    // Для row/column: выравнивание дочерних элементов по поперечной оси.
+    // Для leaf-нод может использоваться рендерером как подсказка позиционирования.
+    UiLayoutAlign align{UiLayoutAlign::Start};
+    // Для text/statusbar: разрешить перенос строк внутри выделенного прямоугольника.
+    bool textWrap{false};
     uint16_t padding{0};
     uint16_t gap{0};
     std::vector<UiLayoutNode> children{};

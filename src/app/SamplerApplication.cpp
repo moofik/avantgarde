@@ -9,6 +9,7 @@
 
 #include "contracts/IUiGestureInput.h"
 #include "contracts/ids.h"
+#include "service/ui/layout/UiPreparedLayoutAsciiRenderer.h"
 #include "service/ui/UiWidgetFactory.h"
 
 namespace avantgarde {
@@ -80,6 +81,7 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
                 .tracksHeaderTitle = "AVANTGARDE",
             });
         (void)sceneHost_.registerWidget(UiScene::Tracks, widgetFactory.create(UiScene::Tracks));
+        (void)sceneHost_.registerWidget(UiScene::TrackContext, widgetFactory.create(UiScene::TrackContext));
         (void)sceneHost_.registerWidget(UiScene::Manager, widgetFactory.create(UiScene::Manager));
         (void)sceneHost_.registerWidget(UiScene::FxList, widgetFactory.create(UiScene::FxList));
         (void)sceneHost_.registerWidget(UiScene::FxEditor, widgetFactory.create(UiScene::FxEditor));
@@ -217,12 +219,17 @@ void SamplerApplication::renderUiOnce_() {
 
     // Рендер сцены держим под sceneMutex_, чтобы не гоняться с control-потоком.
     UiTextBuffer sceneText{};
+    UiPreparedLayout prepared{};
     UiScene scene = UiScene::Tracks;
     bool hasSceneFrame = false;
     {
         std::lock_guard<std::mutex> lock(sceneMutex_);
         scene = sceneHost_.scene();
-        hasSceneFrame = sceneHost_.renderActive(sceneText, state);
+        hasSceneFrame = sceneHost_.buildPreparedActive(prepared, state);
+    }
+
+    if (hasSceneFrame) {
+        sceneText.lines = UiPreparedLayoutAsciiRenderer::render(prepared);
     }
 
     std::string frame;
@@ -234,7 +241,7 @@ void SamplerApplication::renderUiOnce_() {
         }
     }
     const bool showHeaderOverlay = (scene == UiScene::Tracks);
-    io_.render(state, frame, showHeaderOverlay);
+    io_.render(state, hasSceneFrame ? &prepared : nullptr, frame, showHeaderOverlay);
 }
 
 bool SamplerApplication::handleGesture_(UiGesture action) {

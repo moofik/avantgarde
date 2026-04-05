@@ -1,24 +1,2 @@
-1. Почему sampler engine config в принципе хранит пути до файлов ТРЭКОВ - это не его зона ответственности. это зона ответственности каждого клип трэка.
-2. // Признак, что T2 должен быть загружен при старте.
-   bool hasTrack1{false}; - дурацкий, и даже вредный признак, а если я захочу 4 трека? а если 8? а если 15? мне делать 15 разных призаков? нужен более универсальный механизм доступа к зарегестрированным клиптрэкам. Возможно в контракт Itrack стоит добавить healthcheck метод. а сами трэки хранить в карте-массиве - куда audio engine сможет иметь быстрый доступ по индексу треку. 
-```C++
-if(pool[1]->healthcheck()) {
-    //
-}
-```
-3. pumpWindowInput и pollInput - имхо нейминг не очень удачно подобран. pollInput - это просто забрать из очереди инпута. pumpWindowInput - забрать из окна и поместить в очередь инпута. readWindowEvent / latestIOEvent - наверное так было бы понятнее. я не уверен. но все лучше чем твои варианты.
-4. подобного рода хардкод - тоже дичь. совершенно нерасширяемый механизм расширяющийся только с помощью еще большего хардкода.
-   ивенты SelectTrack0 и SelectTrack1 - это полная хуйня. правильнее иметь ивенты SelectNextTrack, SelectPrevTrack которые будут делать инкремент и декремент соотв счестчика в transport state.
-```C
-    // Глобальные горячие клавиши выбора активного трека.
-    if (action == UiInputAction::SelectTrack0 || action == UiInputAction::SelectTrack1) {
-        trCtl_.activeTrack = (action == UiInputAction::SelectTrack0) ? 0 : 1;
-        {
-            std::lock_guard<std::mutex> lock(sceneMutex_);
-            sceneHost_.nav().selectedTrack = trCtl_.activeTrack;
-        }
-        uiStore_.setTransport(trCtl_);
-    }
-```
-   4.1 Соответствеующим образом selected track должен менять и в самой навигации
-5. Выделять отдельный классс под SamplerEngineBootstrap который по своей сути дублирует UiState - бред и дублирование кода. Нужно просто создавать UiState с определенными инициализаторами и его юзать как Bootstrap а лишний класс - выпилить.
+1. sceneText.lines = UiPreparedLayoutAsciiRenderer::render(prepared) - строка 231 SamplerApplication - нехорошо напрямую ходить в renderer. тем более ASCII это легаси и мы избавляемся от него в проекте
+2. 

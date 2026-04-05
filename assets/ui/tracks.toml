@@ -4,12 +4,21 @@ id = "tracks"
 type = "column"
 padding = 0
 gap = 0
+width = 60
+height = 24
 
 [[layout.children]]
 type = "statusbar"
 id = "header_title"
-text = "AVANTGARDE"
+text = "TRACKS"
 bind = "status.scene.title"
+font = "gothic"
+font_size = 30
+height = 2
+effect = "glitch"
+effect_interval_ms = 10000
+effect_amount = 0.20
+effect_speed = 0.5
 width = "100%"
 
 [[layout.children]]
@@ -44,28 +53,70 @@ width = "100%"
 
 [[layout.children.children]]
 type = "row"
+id = "track_split"
+width = "100%"
+gap = 1
+wrap = false
+justify = "start"
+align = "start"
+
+[[layout.children.children.children]]
+type = "column"
+id = "track_controls_col"
+width = "54%"
+gap = 0
+
+[[layout.children.children.children.children]]
+type = "row"
 id = "track_knobs_row"
 width = "100%"
 gap = 1
+wrap = false
+justify = "start"
+align = "start"
 
-[[layout.children.children.children]]
+[[layout.children.children.children.children.children]]
 type = "knob"
 id = "track_speed"
 label = "SPD"
 bind = "speed"
+font = "gothic"
+font_size = 22
+effect = "glitch"
+effect_trigger="change"
+effect_amount = 0.20
+effect_speed = 0.2
+width = 8
+knob_size = 1.7
 
-[[layout.children.children.children]]
+[[layout.children.children.children.children.children]]
 type = "knob"
 id = "track_gain"
 label = "GAIN"
 bind = "c"
+font = "gothic"
+font_size = 22
+effect = "glitch"
+effect_trigger="change"
+effect_amount = 0.20
+effect_speed = 0.2
+width = 8
+knob_size = 1.7
 
-[[layout.children.children]]
+[[layout.children.children.children]]
+type = "column"
+id = "track_visual_col"
+width = "46%"
+gap = 0
+align = "start"
+
+[[layout.children.children.children.children]]
 type = "anim_slot"
 id = "track_anim"
 bind = "current"
-height = 3
-width = "100%"
+height = 8
+width = 16
+align = "start"
 
 [[layout.children]]
 type = "separator"
@@ -81,7 +132,12 @@ width = "100%"
 
 [[layout.children]]
 type = "text"
-id = "keys_hint"
-text = " keys [j/k focus] [/? adjust] [o apply] [F10 detect BPM] [F2 undo] [F9 redo] [F11/F12 pages] [q] "
-bind = "status.keys"
+id = "keys_hint_line_1"
+bind = "status.keys.1"
+width = "100%"
+
+[[layout.children]]
+type = "text"
+id = "keys_hint_line_2"
+bind = "status.keys.2"
 width = "100%"

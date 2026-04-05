@@ -134,21 +134,29 @@ const UiNavState& UiSceneHost::nav() const noexcept {
 bool UiSceneHost::renderActive(UiTextBuffer& out, const UiState& rtState) const {
     // Всегда начинаем с чистого кадрового буфера для детерминированного рендера.
     out.clear();
+    UiPreparedLayout prepared{};
+    if (!buildPreparedActive(prepared, rtState)) {
+        return false;
+    }
+    out.lines = UiPreparedLayoutAsciiRenderer::render(prepared);
+    return true;
+}
+
+bool UiSceneHost::buildPreparedActive(UiPreparedLayout& out, const UiState& rtState) const {
+    out = UiPreparedLayout{};
     const auto& widget = widgets_[sceneIndex_(nav_.scene)];
     if (!widget) {
         const std::string msg = "UiSceneHost: no widget registered for active scene";
         std::fprintf(stderr, "[UI][RENDER][ERROR] %s\n", msg.c_str());
         throw std::runtime_error(msg);
     }
-    UiPreparedLayout prepared{};
-    if (!widget->buildPreparedLayout(prepared, rtState, nav_)) {
+    if (!widget->buildPreparedLayout(out, rtState, nav_)) {
         std::string msg = "UiSceneHost: widget '";
         msg += widget->id();
         msg += "' failed to build prepared layout";
         std::fprintf(stderr, "[UI][RENDER][ERROR] %s\n", msg.c_str());
         throw std::runtime_error(msg);
     }
-    out.lines = UiPreparedLayoutAsciiRenderer::render(prepared);
     return true;
 }
 
@@ -298,6 +306,9 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
         case UiAction::Id::SceneAddReverb:
         case UiAction::Id::SceneOpenManager:
         case UiAction::Id::SceneOpenFxList:
+        case UiAction::Id::SceneTrackMenuLoadSample:
+        case UiAction::Id::SceneTrackMenuClear:
+        case UiAction::Id::SceneTrackMenuFxList:
         case UiAction::Id::SceneFxTypeSelect:
         case UiAction::Id::SceneFxSlotSelect:
         case UiAction::Id::SceneFxEnabled:
