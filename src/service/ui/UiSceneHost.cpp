@@ -295,12 +295,15 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
         case UiAction::Id::GlobalUndo:
         case UiAction::Id::GlobalMasterVolume:
         case UiAction::Id::SceneTrackSelect:
+        case UiAction::Id::SceneTrackLooperMode:
         case UiAction::Id::SceneTrackMute:
         case UiAction::Id::SceneTrackArm:
         case UiAction::Id::SceneTrackSpeed:
         case UiAction::Id::SceneTrackGain:
         case UiAction::Id::SceneQuantize:
         case UiAction::Id::SceneTempoBpm:
+        case UiAction::Id::ScenePatternPrev:
+        case UiAction::Id::ScenePatternNext:
         case UiAction::Id::SceneDetectProjectBpm:
         case UiAction::Id::SceneAddFx:
         case UiAction::Id::SceneAddReverb:
@@ -345,7 +348,8 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         return WidgetOutput{true, {}};
     }
 
-    // Global shortcuts are handled by host to keep behavior consistent across scenes.
+    // Direct-select (track/pattern) обрабатывается в SamplerApplication,
+    // где есть доступ к payload UiGestureEvent::value.
     if (action == UiGesture::SelectPrevTrack) {
         nav_.selectedTrack = selectPrevTrack(nav_.selectedTrack, rtState.tracks.size());
         nav_.trackPage = pageForTrack(nav_.selectedTrack, rtState.tracks.size());
@@ -444,6 +448,12 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         it.type = UiIntentType::SetTransportBpm;
         const float dir = (action == UiGesture::BpmUp) ? 1.0f : -1.0f;
         it.value = std::clamp(rtState.transport.bpm + dir, 20.0f, 300.0f);
+        return WidgetOutput{true, {it}};
+    }
+    if (action == UiGesture::ToggleMetronome) {
+        UiIntent it{};
+        it.type = UiIntentType::SetMetronomeEnabled;
+        it.value = rtState.transport.metronomeEnabled ? 0.0f : 1.0f;
         return WidgetOutput{true, {it}};
     }
     if (action == UiGesture::MuteActiveTrack ||

@@ -34,4 +34,9 @@ void UiStateStore::setTelemetry(const UiTelemetryState& telemetry) {
     state_.telemetry = telemetry;
 }
 
+void UiStateStore::setPattern(const UiPatternState& pattern) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.pattern = pattern;
+}
+
 } // namespace avantgarde

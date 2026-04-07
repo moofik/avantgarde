@@ -80,3 +80,31 @@ TEST_CASE("ControlCommandDispatcher: param set goes to rtQueue with index") {
     REQUIRE(q.pushed[0].index == 2);
     REQUIRE(q.pushed[0].value == Catch::Approx(1.5f));
 }
+
+TEST_CASE("ControlCommandDispatcher: note commands go to rtQueue with normalized payload") {
+    MockQueue q;
+    ControlCommandDispatcher d(&q);
+
+    REQUIRE(d.sendNoteOn(2, /*key=*/60, /*velocity=*/1.5f));      // clamp -> 1.0
+    REQUIRE(d.sendNoteOff(2, /*key=*/60));
+    REQUIRE(d.sendNoteDetune(2, /*key=*/60, /*detune=*/-2.0f));   // clamp -> -1.0
+
+    REQUIRE(q.pushCalls == 3);
+
+    REQUIRE(q.pushed[0].id == static_cast<uint16_t>(CmdId::NoteOn));
+    REQUIRE(q.pushed[0].track == 2);
+    REQUIRE(q.pushed[0].slot == -1);
+    REQUIRE(q.pushed[0].index == 60);
+    REQUIRE(q.pushed[0].value == Catch::Approx(1.0f));
+
+    REQUIRE(q.pushed[1].id == static_cast<uint16_t>(CmdId::NoteOff));
+    REQUIRE(q.pushed[1].track == 2);
+    REQUIRE(q.pushed[1].slot == -1);
+    REQUIRE(q.pushed[1].index == 60);
+
+    REQUIRE(q.pushed[2].id == static_cast<uint16_t>(CmdId::NoteDetune));
+    REQUIRE(q.pushed[2].track == 2);
+    REQUIRE(q.pushed[2].slot == -1);
+    REQUIRE(q.pushed[2].index == 60);
+    REQUIRE(q.pushed[2].value == Catch::Approx(-1.0f));
+}

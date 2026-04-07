@@ -61,6 +61,26 @@ enum class UiLayoutAlign : uint8_t {
 // Узел дерева декларативной разметки.
 // Пока это чистый DTO-контракт: хранит структуру и метаданные без логики рендера.
 struct UiLayoutNode {
+    // Описание одного визуального эффекта для UI-ноды.
+    struct EffectSpec {
+        // Тип эффекта, например "glitch" или "glow".
+        std::string type{};
+        // Цвет эффекта в hex-формате, например "#A86DB5" (опционально).
+        std::string effectColor{};
+        // Режим триггера: ""/"always"/"time"/"change".
+        std::string effectTrigger{};
+        // Режим перехода эффекта: ""/"crumble"/"instant"/"none".
+        std::string effectTransition{};
+        // Таймаут "release" для trigger=change (мс).
+        uint32_t effectTriggerOutMs{0};
+        // Интервал time-trigger в миллисекундах.
+        uint16_t effectIntervalMs{0};
+        // Интенсивность [0..1].
+        float effectAmount{0.0f};
+        // Скорость анимации эффекта.
+        float effectSpeed{1.0f};
+    };
+
     UiLayoutNodeType type{UiLayoutNodeType::Unknown};
     std::string id{};
     std::string text{};
@@ -73,22 +93,9 @@ struct UiLayoutNode {
     std::string font{};
     // Размер шрифта ноды в pt. 0 = размер по умолчанию рендерера/роли.
     float fontSize{0.0f};
-    // Визуальный эффект ноды (опционально), например "glitch".
-    std::string effect{};
-    // Триггер визуального эффекта:
-    // - ""/"always"/"time"  -> тайм-режим (случайные вспышки по интервалу)
-    // - "change"            -> включается при изменении значения (например knob)
-    std::string effectTrigger{};
-    // Таймаут "отпускания" для trigger=change (мс):
-    // эффект остается активным после последнего изменения значения.
-    // 0 = default рендерера/FX.
-    uint32_t effectTriggerOutMs{0};
-    // Период эффекта в миллисекундах (если 0, рендерер использует свой default).
-    uint16_t effectIntervalMs{0};
-    // Интенсивность эффекта [0..1] (если 0, рендерер использует мягкий default).
-    float effectAmount{0.0f};
-    // Скорость микродвижения внутри эффекта (1.0 = default, >1 быстрее, <1 медленнее).
-    float effectSpeed{1.0f};
+    // Новый контракт: цепочка эффектов с параметрами на каждый эффект.
+    std::vector<EffectSpec> effects{};
+
     std::string bind{};
     // Масштаб крутилки (только для нод type="knob"):
     // 1.0 = дефолтный размер, <1 уменьшает, >1 увеличивает.

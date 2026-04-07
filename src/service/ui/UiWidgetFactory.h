@@ -21,19 +21,16 @@ struct UiWidgetFactoryOptions {
     float tracksBpmStep{1.0f};
     // Шаг изменения параметров в FX редакторе.
     float fxParamStep{0.05f};
-    // Включает загрузку декларативных TOML-лейаутов.
-    // В текущей strict-модели должен быть true, иначе фабрика кидает исключение.
-    bool enableTomlLayouts{true};
-    // Каталог(и), где ищем шаблоны `*.toml`.
+    // Каталог(и), где ищем шаблоны `*.json`.
     // Первый найденный валидный шаблон используется.
     std::vector<std::string> layoutSearchRoots{"assets/ui", "../assets/ui", "../../assets/ui"};
     // Базовый layout FX редактора (каркас + слот `fx_body`).
-    std::string fxEditorBaseLayout{"fx_editor_base.toml"};
-    // Явная таблица профилей: fxId -> путь к TOML профиля внутри layoutSearchRoots.
+    std::string fxEditorBaseLayout{"fx_editor_base.json"};
+    // Явная таблица профилей: fxId -> путь к layout-профилю внутри layoutSearchRoots.
     std::vector<std::pair<std::string, std::string>> fxEditorProfileLayouts{
-        {std::string(FxRegistry::kReverbSchroederId), "fx/reverb.toml"},
-        {std::string(FxRegistry::kHpfOnePoleId), "fx/hpf.toml"},
-        {std::string(FxRegistry::kStutterId), "fx/stutter.toml"},
+        {std::string(FxRegistry::kReverbSchroederId), "fx/reverb.json"},
+        {std::string(FxRegistry::kHpfOnePoleId), "fx/hpf.json"},
+        {std::string(FxRegistry::kStutterId), "fx/stutter.json"},
     };
 };
 

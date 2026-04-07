@@ -108,6 +108,16 @@ bool UiIntentApplier::buildUndoIntent(const UiIntent& forward,
             undoOut.value = tracks[t].armed ? 1.0f : 0.0f;
             return true;
         }
+        case UiIntentType::SetTrackLooperMode: {
+            if (tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(forward.track, tracks);
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.value = (tracks[t].playbackMode == UiTrackPlaybackMode::Looper) ? 1.0f : 0.0f;
+            return true;
+        }
         case UiIntentType::SetTrackSpeed: {
             if (tracks.empty()) {
                 return false;
@@ -125,6 +135,10 @@ bool UiIntentApplier::buildUndoIntent(const UiIntent& forward,
         case UiIntentType::SetTransportBpm:
             undoOut = forward;
             undoOut.value = transport.bpm;
+            return true;
+        case UiIntentType::SetMetronomeEnabled:
+            undoOut = forward;
+            undoOut.value = transport.metronomeEnabled ? 1.0f : 0.0f;
             return true;
         case UiIntentType::SetTransportPlaying:
             undoOut = forward;
@@ -169,7 +183,11 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             ctx.tracks[t].clipName = clipName;
             ctx.tracks[t].clipPath = intent.path;
             ctx.tracks[t].muted = false;
-            ctx.tracks[t].loop = true;
+            const bool looperEnabled = (ctx.tracks[t].playbackMode == UiTrackPlaybackMode::Looper);
+            // После загрузки клипа повторно применяем текущий mode-preset,
+            // чтобы loop/follow/policy были консистентны с выбранным режимом трека.
+            (void)ctx.engine.setTrackLooperMode(t, looperEnabled);
+            ctx.tracks[t].loop = looperEnabled;
             refreshTrackViewState_(t, ctx.transport, ctx.tracks);
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;
@@ -240,6 +258,24 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;
         }
+        case UiIntentType::SetTrackLooperMode: {
+            if (ctx.tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(intent.track, ctx.tracks);
+            const bool looperEnabled = (intent.value >= 0.5f);
+            const UiTrackPlaybackMode nextMode = looperEnabled ? UiTrackPlaybackMode::Looper : UiTrackPlaybackMode::Note;
+            if (ctx.tracks[t].playbackMode == nextMode) {
+                return false;
+            }
+            if (!ctx.engine.setTrackLooperMode(t, looperEnabled)) {
+                return false;
+            }
+            ctx.tracks[t].playbackMode = nextMode;
+            ctx.tracks[t].loop = looperEnabled;
+            ctx.uiStore.setTrack(t, ctx.tracks[t]);
+            return true;
+        }
         case UiIntentType::SetTrackSpeed: {
             if (ctx.tracks.empty()) {
                 return false;
@@ -271,6 +307,16 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             }
             ctx.transport.bpm = next;
             ctx.engine.setTempo(ctx.transport.bpm);
+            ctx.uiStore.setTransport(ctx.transport);
+            return true;
+        }
+        case UiIntentType::SetMetronomeEnabled: {
+            const bool enabled = (intent.value >= 0.5f);
+            if (ctx.transport.metronomeEnabled == enabled) {
+                return false;
+            }
+            ctx.transport.metronomeEnabled = enabled;
+            ctx.engine.setMetronomeEnabled(enabled);
             ctx.uiStore.setTransport(ctx.transport);
             return true;
         }
@@ -326,6 +372,31 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
                 ctx.uiStore.setTrack(i, ctx.tracks[i]);
             }
             ctx.uiStore.setTransport(ctx.transport);
+            return true;
+        }
+        case UiIntentType::SwitchPatternPrev: {
+            if (!ctx.engine.requestPatternSwitchRelative(-1)) {
+                return false;
+            }
+            ctx.uiStore.setPattern(ctx.engine.patternUiState());
+            return true;
+        }
+        case UiIntentType::SwitchPatternNext: {
+            if (!ctx.engine.requestPatternSwitchRelative(1)) {
+                return false;
+            }
+            ctx.uiStore.setPattern(ctx.engine.patternUiState());
+            return true;
+        }
+        case UiIntentType::SwitchPatternSet: {
+            const int raw = static_cast<int>(std::lround(intent.value));
+            if (raw < 1) {
+                return false;
+            }
+            if (!ctx.engine.requestPatternSwitchTo(static_cast<PatternId>(raw))) {
+                return false;
+            }
+            ctx.uiStore.setPattern(ctx.engine.patternUiState());
             return true;
         }
         case UiIntentType::RemoveFxFromTrack: {

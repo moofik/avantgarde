@@ -70,6 +70,7 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
     UiState initialState{};
     initialState.transport = trCtl_;
     initialState.tracks = tracksCtl_;
+    initialState.pattern = bootstrap.pattern;
     uiStore_.setState(initialState);
     history_.clear();
 
@@ -109,14 +110,19 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
 
     controlThread_ = std::thread([this]() {
         while (!stopUi_.load(std::memory_order_acquire)) {
+            if (engine_.processPendingPatternSwitches()) {
+                syncPatternStateToUi_();
+            }
+
             UiGestureEvent ev{};
             if (!io_.readNextInputEvent(ev)) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
-            if (!handleGesture_(ev.action)) {
+            if (!handleGesture_(ev)) {
                 break;
             }
+            syncPatternStateToUi_();
         }
         // Гарантированно гасим preview-голос при завершении control loop.
         engine_.previewStop();
@@ -244,10 +250,40 @@ void SamplerApplication::renderUiOnce_() {
     io_.render(state, hasSceneFrame ? &prepared : nullptr, frame, showHeaderOverlay);
 }
 
-bool SamplerApplication::handleGesture_(UiGesture action) {
+bool SamplerApplication::handleGesture_(const UiGestureEvent& ev) {
+    UiGesture action = ev.action;
     if (action == UiGesture::Quit) {
         stopUi_.store(true, std::memory_order_release);
         return false;
+    }
+
+    // Direct-select не требует apply:
+    // 1..4 -> SetActiveTrack, Shift+1..4 -> SwitchPatternSet.
+    if (action == UiGesture::SelectTrackDirect) {
+        if (tracksCtl_.empty()) {
+            return true;
+        }
+        const int raw = static_cast<int>(ev.value) - 1;
+        const int maxTrack = static_cast<int>(tracksCtl_.size()) - 1;
+        const uint8_t targetTrack = static_cast<uint8_t>(std::clamp(raw, 0, std::max(0, maxTrack)));
+        {
+            std::lock_guard<std::mutex> lock(sceneMutex_);
+            sceneHost_.nav().selectedTrack = targetTrack;
+            sceneHost_.nav().trackPage = targetTrack;
+        }
+        UiIntent it{};
+        it.type = UiIntentType::SetActiveTrack;
+        it.track = targetTrack;
+        dispatchWidgetIntent_(it);
+        return true;
+    }
+    if (action == UiGesture::SelectPatternDirect) {
+        UiIntent it{};
+        it.type = UiIntentType::SwitchPatternSet;
+        it.value = static_cast<float>(std::max<int16_t>(1, ev.value));
+        dispatchWidgetIntent_(it);
+        syncPatternStateToUi_();
+        return true;
     }
 
     // Глобальные hotkey undo/redo (доступны в любой сцене).
@@ -284,6 +320,15 @@ bool SamplerApplication::handleGesture_(UiGesture action) {
         (void)history_.commit();
     }
     return true;
+}
+
+void SamplerApplication::syncPatternStateToUi_() {
+    (void)engine_.syncUiCache(trCtl_, tracksCtl_);
+    UiState merged = uiStore_.snapshot();
+    merged.transport = trCtl_;
+    merged.tracks = tracksCtl_;
+    merged.pattern = engine_.patternUiState();
+    uiStore_.setState(merged);
 }
 
 } // namespace avantgarde

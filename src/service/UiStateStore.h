@@ -16,6 +16,7 @@ public:
     void setTransport(const UiTransportState& transport);
     void setTrack(std::size_t index, const UiTrackStateView& track);
     void setTelemetry(const UiTelemetryState& telemetry);
+    void setPattern(const UiPatternState& pattern);
 
 private:
     mutable std::mutex mutex_;

@@ -8,6 +8,8 @@
 #include "contracts/IUi.h"
 #include "contracts/IPlatform.h"
 #include "contracts/ITransport.h"
+#include "contracts/IPattern.h"
+#include "service/pattern/PatternSnapshotManager.h"
 
 namespace avantgarde {
 
@@ -64,11 +66,22 @@ public:
     void setTempo(float bpm) noexcept;
     void setQuantize(QuantizeMode q) noexcept;
     void setTimeSignature(uint8_t num, uint8_t den) noexcept;
+    void setSwing(float swing01) noexcept;
+    // Включить/выключить встроенный метроном (тик по сетке 1/16).
+    void setMetronomeEnabled(bool enabled) noexcept;
 
     // Track-local операции (mute/arm/speed/загрузка клипа).
     bool setTrackMuted(uint8_t track, bool muted) noexcept;
     bool setTrackArmed(uint8_t track, bool armed) noexcept;
+    // Пресет "LOOPER" для трека:
+    // true  -> Looper + IgnoreIfPlaying + ManualStop (+follow transport, loop on)
+    // false -> Note   + RetriggerOnNoteOn + ByNoteOff (+one-shot note gate, loop off)
+    bool setTrackLooperMode(uint8_t track, bool looperEnabled) noexcept;
     bool setTrackSpeed(uint8_t track, float speed) noexcept;
+    // Универсальная установка track-параметра по индексу ids.h.
+    bool setTrackParam(uint8_t track, uint16_t paramIndex, float value) noexcept;
+    // Задать длину slot0 в барах (>=1) для режима stretch-to-bars.
+    bool setTrackBars(uint8_t track, uint32_t bars) noexcept;
     // Добавить FX-модуль в конец цепочки выбранного трека (вне RT).
     bool addFxToTrack(uint8_t track, std::unique_ptr<IAudioModule> module) noexcept;
     // Удалить FX-модуль из цепочки выбранного трека по индексу (вне RT).
@@ -78,13 +91,28 @@ public:
     // Включить/выключить FX-слот без удаления из цепочки.
     bool setFxEnabled(uint8_t track, uint8_t fxSlot, bool enabled) noexcept;
     bool loadSampleToTrack(uint8_t track, const std::string& path, std::string& clipNameOut) noexcept;
+    // Предзагрузка WAV в clip-pool по стабильному clipRefId (без назначения треку).
+    bool preloadClipToPool(uint32_t clipRefId, const std::string& path, std::string& errorOut) noexcept;
+    // Назначить уже preloaded clipRef в слот трека без IO/декодирования.
+    bool setTrackClipRef(uint8_t track, uint32_t clipRefId) noexcept;
     // Очистить загруженный сэмпл трека (slot0) без удаления FX-цепочки.
     bool clearTrackSample(uint8_t track) noexcept;
     // Preview-голос (скрытый отдельный трек).
     void previewRequest(const std::string& path) noexcept;
     void previewStop() noexcept;
 
+    // Pattern subsystem API.
+    bool requestPatternSwitchRelative(int delta) noexcept;
+    bool requestPatternSwitchTo(PatternId target) noexcept;
+    bool processPendingPatternSwitches() noexcept;
+    UiPatternState patternUiState() const noexcept;
+    // Синхронизировать control/UI-кэш из live состояния движка.
+    bool syncUiCache(UiTransportState& transportInOut,
+                     std::vector<UiTrackStateView>& tracksInOut) const noexcept;
+
 private:
+    // Зафиксировать runtime-state активного паттерна в snapshot manager.
+    bool captureActivePatternSnapshot_() noexcept;
     // PImpl: прячем concrete runtime/platform детали из заголовка.
     struct Impl;
     Impl* impl_{nullptr};

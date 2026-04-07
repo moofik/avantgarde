@@ -77,6 +77,10 @@ const char* onOff(bool v) noexcept {
     return v ? "ON" : "OFF";
 }
 
+const char* playbackModeToStr(UiTrackPlaybackMode mode) noexcept {
+    return (mode == UiTrackPlaybackMode::Looper) ? "LOOP" : "NOTE";
+}
+
 std::string clipShort(const std::string& clipName, std::size_t maxLen) {
     if (clipName.empty()) {
         return "-";
@@ -188,12 +192,13 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     std::string transportLine{};
     {
         char line[256]{};
-        std::snprintf(line, sizeof(line), " TRN:%s BPM:%5.1f TS:%u/%u Q:%s OVF:%c ",
+        std::snprintf(line, sizeof(line), " TRN:%s BPM:%5.1f TS:%u/%u Q:%s MET:%c OVF:%c ",
                       rtState.transport.playing ? "PLAY" : "STOP",
                       rtState.transport.bpm,
                       static_cast<unsigned>(rtState.transport.tsNum),
                       static_cast<unsigned>(rtState.transport.tsDen),
                       quantToStr(rtState.transport.quant),
+                      rtState.transport.metronomeEnabled ? 'Y' : 'N',
                       rtState.telemetry.rtQueueOverflow ? 'Y' : 'N');
         transportLine = line;
     }
@@ -201,11 +206,20 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     std::string activeLine{};
     {
         char line[256]{};
-        std::snprintf(line, sizeof(line), " ACTIVE:T%u XRUN:%llu PG:%u/%u ",
+        const bool patternPending = rtState.pattern.pendingId != kInvalidPatternId;
+        const char* armedMark = rtState.pattern.armed ? "*" : "";
+        std::string pendingPart{};
+        if (patternPending) {
+            pendingPart = "->" + std::to_string(static_cast<unsigned>(rtState.pattern.pendingId));
+        }
+        std::snprintf(line, sizeof(line), " ACTIVE:T%u XRUN:%llu PG:%u/%u PAT:%u%s%s ",
                       static_cast<unsigned>(activeTrack + 1U),
                       static_cast<unsigned long long>(rtState.telemetry.xruns),
                       static_cast<unsigned>(pageIndex + 1U),
-                      static_cast<unsigned>(totalPages));
+                      static_cast<unsigned>(totalPages),
+                      static_cast<unsigned>(rtState.pattern.activeId == kInvalidPatternId ? 0U : rtState.pattern.activeId),
+                      pendingPart.c_str(),
+                      armedMark);
         activeLine = line;
     }
 
@@ -240,6 +254,10 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
                           tr.armed ? 'Y' : 'N');
             trackRows.emplace_back(line);
 
+            std::snprintf(line, sizeof(line), "   mode:%s",
+                          playbackModeToStr(tr.playbackMode));
+            trackRows.emplace_back(line);
+
             std::snprintf(line, sizeof(line), "   spd:%1.2f [%s]",
                           tr.stretchRatio,
                           makeBar(speedTo01(tr.stretchRatio), meterWidth).c_str());
@@ -272,8 +290,8 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
             keysLine1 = layout_.keysHint;
         }
     } else {
-        keysLine1 = " keys [j/k focus] [/? adjust] [o apply] [F10 detect BPM]";
-        keysLine2 = "      [F2 undo] [F9 redo] [F11/F12 pages] [q]";
+        keysLine1 = " keys [j/k focus] [/? adjust] [o apply] [m metronome] [F10 detect BPM]";
+        keysLine2 = "      [F2 undo] [F9 redo] [F4 manager] [F11/F12 pages] [q]";
     }
     const std::string keys = keysLine2.empty() ? keysLine1 : (keysLine1 + " " + keysLine2);
 
@@ -307,12 +325,18 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     }
     const float selectedSpeed01 = selectedTrackView ? speedTo01(selectedTrackView->stretchRatio) : 0.0f;
     const float selectedGain01 = selectedTrackView ? std::clamp(selectedTrackView->gain01, 0.0f, 1.0f) : 0.0f;
+    const bool selectedLooperEnabled =
+        selectedTrackView && selectedTrackView->playbackMode == UiTrackPlaybackMode::Looper;
     constexpr float kMinBpm = 40.0f;
     constexpr float kMaxBpm = 220.0f;
     const float bpm01 = std::clamp((rtState.transport.bpm - kMinBpm) / (kMaxBpm - kMinBpm), 0.0f, 1.0f);
 
     params.number["track.selected.speed"] = selectedSpeed01;
     params.number["track.selected.gain"] = selectedGain01;
+    params.number["track.selected.looper_mode"] = selectedLooperEnabled ? 1.0f : 0.0f;
+    params.text["track.selected.mode"] = selectedLooperEnabled ? "MODE: LOOPER" : "MODE: NOTE";
+    params.integer["track.selected.looper_mode.selectedIndex"] = selectedLooperEnabled ? 1 : 0;
+    params.text["track.selected.looper_mode.label"] = "LOOPER";
     params.number["transport.bpm"] = bpm01;
     params.number["fx.anim.current"] = selectedGain01;
     params.number["current"] = selectedGain01;
@@ -331,6 +355,7 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     }
     params.flag["track.selected.speed.selected"] = (selectedActionId == UiAction::Id::SceneTrackSpeed);
     params.flag["track.selected.gain.selected"] = (selectedActionId == UiAction::Id::SceneTrackGain);
+    params.flag["track.selected.looper_mode.selected"] = (selectedActionId == UiAction::Id::SceneTrackLooperMode);
     params.flag["transport.bpm.selected"] = (selectedActionId == UiAction::Id::SceneTempoBpm);
 
     return params;
@@ -376,6 +401,20 @@ UiActionCatalog TracksWidget::queryAvailableActions(const UiState& rtState, cons
         a.def.step = 1.0f;
         a.state.enabled = (totalTracks > 0);
         a.state.value = static_cast<float>(selectedTrack + 1U);
+        pushAction(std::move(a));
+    }
+    {
+        const bool trackValid = (totalTracks > 0);
+        const bool looperEnabled =
+            trackValid && rtState.tracks[selectedTrack].playbackMode == UiTrackPlaybackMode::Looper;
+        UiAction a{};
+        a.def.id = UiAction::Id::SceneTrackLooperMode;
+        a.def.scope = UiAction::Scope::Scene;
+        a.def.execution = UiAction::Execution::ImmediateStep;
+        a.def.valueKind = UiAction::ValueKind::Bool;
+        a.def.label = "Looper";
+        a.state.enabled = trackValid;
+        a.state.value = looperEnabled ? 1.0f : 0.0f;
         pushAction(std::move(a));
     }
     {
@@ -449,6 +488,26 @@ UiActionCatalog TracksWidget::queryAvailableActions(const UiState& rtState, cons
         pushAction(std::move(a));
     }
     {
+        UiAction a{};
+        a.def.id = UiAction::Id::ScenePatternPrev;
+        a.def.scope = UiAction::Scope::Scene;
+        a.def.execution = UiAction::Execution::ImmediateStep;
+        a.def.valueKind = UiAction::ValueKind::None;
+        a.def.label = "Pattern Prev";
+        a.state.enabled = (rtState.pattern.bankSize > 1U);
+        pushAction(std::move(a));
+    }
+    {
+        UiAction a{};
+        a.def.id = UiAction::Id::ScenePatternNext;
+        a.def.scope = UiAction::Scope::Scene;
+        a.def.execution = UiAction::Execution::ImmediateStep;
+        a.def.valueKind = UiAction::ValueKind::None;
+        a.def.label = "Pattern Next";
+        a.state.enabled = (rtState.pattern.bankSize > 1U);
+        pushAction(std::move(a));
+    }
+    {
         const bool trackValid = (totalTracks > 0) &&
                                 !rtState.tracks[selectedTrack].clipPath.empty();
         UiAction a{};
@@ -518,6 +577,22 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             UiIntent it{};
             it.type = UiIntentType::SetActiveTrack;
             it.track = navState.selectedTrack;
+            pushIntentToWidgetOutput(std::move(it));
+        } break;
+
+        case UiAction::Id::SceneTrackLooperMode: {
+            if (totalTracks == 0) break;
+            if (action.op != UiAction::Op::Apply &&
+                action.op != UiAction::Op::AdjustPrev &&
+                action.op != UiAction::Op::AdjustNext &&
+                action.op != UiAction::Op::Press) {
+                break;
+            }
+            UiIntent it{};
+            it.type = UiIntentType::SetTrackLooperMode;
+            it.track = selectedTrack;
+            const bool looperEnabled = rtState.tracks[selectedTrack].playbackMode == UiTrackPlaybackMode::Looper;
+            it.value = looperEnabled ? 0.0f : 1.0f;
             pushIntentToWidgetOutput(std::move(it));
         } break;
 
@@ -601,6 +676,28 @@ WidgetOutput TracksWidget::onAction(UiAction& action, const UiState& rtState, Ui
             pushIntentToWidgetOutput(std::move(it));
         } break;
 
+        case UiAction::Id::ScenePatternPrev: {
+            if (action.op != UiAction::Op::Apply &&
+                action.op != UiAction::Op::Press &&
+                action.op != UiAction::Op::AdjustPrev) {
+                break;
+            }
+            UiIntent it{};
+            it.type = UiIntentType::SwitchPatternPrev;
+            pushIntentToWidgetOutput(std::move(it));
+        } break;
+
+        case UiAction::Id::ScenePatternNext: {
+            if (action.op != UiAction::Op::Apply &&
+                action.op != UiAction::Op::Press &&
+                action.op != UiAction::Op::AdjustNext) {
+                break;
+            }
+            UiIntent it{};
+            it.type = UiIntentType::SwitchPatternNext;
+            pushIntentToWidgetOutput(std::move(it));
+        } break;
+
         case UiAction::Id::SceneDetectProjectBpm: {
             if (totalTracks == 0) {
                 break;
@@ -674,6 +771,9 @@ std::string TracksWidget::buildActionStatusLine_(const UiState& rtState, const U
         case UiAction::Id::SceneTrackSelect:
             std::snprintf(buf, sizeof(buf), " action:%s = T%u ", a.def.label.c_str(), static_cast<unsigned>(std::lround(a.state.value)));
             break;
+        case UiAction::Id::SceneTrackLooperMode:
+            std::snprintf(buf, sizeof(buf), " action:%s = %s ", a.def.label.c_str(), onOff(a.state.value >= 0.5f));
+            break;
         case UiAction::Id::SceneTrackMute:
         case UiAction::Id::SceneTrackArm:
             std::snprintf(buf, sizeof(buf), " action:%s = %s ", a.def.label.c_str(), onOff(a.state.value >= 0.5f));
@@ -686,6 +786,10 @@ std::string TracksWidget::buildActionStatusLine_(const UiState& rtState, const U
             break;
         case UiAction::Id::SceneTempoBpm:
             std::snprintf(buf, sizeof(buf), " action:%s = %.1f ", a.def.label.c_str(), a.state.value);
+            break;
+        case UiAction::Id::ScenePatternPrev:
+        case UiAction::Id::ScenePatternNext:
+            std::snprintf(buf, sizeof(buf), " action:%s (apply) ", a.def.label.c_str());
             break;
         case UiAction::Id::SceneDetectProjectBpm:
             std::snprintf(buf, sizeof(buf), " action:%s (apply) ", a.def.label.c_str());

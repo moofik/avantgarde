@@ -53,6 +53,24 @@ namespace avantgarde {
         virtual bool loadSlotFromFile(uint32_t slot, const char* path) = 0;
 
         /**
+         * Загружает в слот уже декодированный аудиобуфер (preloaded path).
+         *
+         * Назначение:
+         *  - быстрое переключение клипов по clipRefId без IO и без декодирования файла;
+         *  - используется pattern/project слоями, когда буферы заранее
+         *    подготовлены в памяти (clip-pool).
+         *
+         * Ограничения:
+         *  - вызывать только вне RT;
+         *  - buffer должен содержать валидные planar данные (см. SharedClipBuffer::valid()).
+         *
+         * @param slot индекс слота [0 .. numSlots()-1]
+         * @param buffer разделяемый аудиобуфер
+         * @return true если буфер принят и опубликован в RT
+         */
+        virtual bool loadSlotFromBuffer(uint32_t slot, const SharedClipBuffer& buffer) = 0;
+
+        /**
          * Очищает слот.
          *
          * Поведение:

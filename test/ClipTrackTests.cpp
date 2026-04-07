@@ -601,7 +601,7 @@ TEST_CASE("ClipTrack: clearSlot resets audio (no playback after clear)") {
 TEST_CASE("ClipTrack: IParameterized surface exposes and applies track params") {
     avantgarde::ClipTrackImpl tr;
 
-    REQUIRE(tr.getParamCount() == 6);
+    REQUIRE(tr.getParamCount() == 9);
     REQUIRE(tr.getParamMeta(avantgarde::toParamIndex(avantgarde::TrackParamId::MuteEnabled)).name == "track.mute");
 
     tr.setParam(avantgarde::toParamIndex(avantgarde::TrackParamId::Gain01), 0.25f);
@@ -629,4 +629,49 @@ TEST_CASE("ClipTrack: IParameterized surface exposes and applies track params") 
     float sumAfterMute = 0.0f;
     for (float v : t.out0) sumAfterMute += absf(v);
     REQUIRE(sumAfterMute < 1e-4f);
+}
+
+TEST_CASE("ClipTrack: note mode policies stop playback on NoteOff and retrigger on NoteOn") {
+    avantgarde::ClipTrackImpl tr;
+
+    const int sr = 48000;
+    std::vector<int16_t> pcm = { 32767,32767,32767,32767,32767,32767,32767,32767 };
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_note_mode.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+
+    // NOTE/SAMPLER preset:
+    // - one-shot gate (follow transport off)
+    // - mode: Note
+    // - launch: RetriggerOnNoteOn
+    // - stop: ByNoteOff
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::FollowTransportEnabled), 0.0f);
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::PlaybackMode),
+             avantgarde::toParamValue(avantgarde::TrackPlaybackModeValue::Note));
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::LaunchPolicy),
+             avantgarde::toParamValue(avantgarde::TrackLaunchPolicyValue::RetriggerOnNoteOn));
+    send_cmd(tr, avantgarde::CmdId::ParamSet, /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::StopPolicy),
+             avantgarde::toParamValue(avantgarde::TrackStopPolicyValue::ByNoteOff));
+
+    auto t = make_ctx(4);
+
+    // NoteOn -> should start playback.
+    send_cmd(tr, avantgarde::CmdId::NoteOn, /*slot*/-1, /*index=*/60, /*value=*/1.0f);
+    clear_out(t);
+    tr.process(t.ctx);
+    float sumOn = 0.0f;
+    for (float v : t.out0) sumOn += absf(v);
+    REQUIRE(sumOn > 0.1f);
+
+    // NoteOff same note -> should stop playback in ByNoteOff policy.
+    send_cmd(tr, avantgarde::CmdId::NoteOff, /*slot*/-1, /*index=*/60, /*value=*/0.0f);
+    clear_out(t);
+    tr.process(t.ctx);
+    float sumOff = 0.0f;
+    for (float v : t.out0) sumOff += absf(v);
+    REQUIRE(sumOff < 1e-4f);
 }

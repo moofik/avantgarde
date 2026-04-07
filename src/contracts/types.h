@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <memory>
 #include <type_traits>
 
 namespace avantgarde {
@@ -40,6 +41,33 @@ namespace avantgarde {
     struct ParamKV {
         uint16_t index;
         float    value;
+    };
+
+// Разделяемый planar-аудиобуфер клипа.
+// Используется для preloaded clip-pool и быстрого переключения по clipRefId
+// без повторного IO/декодирования файла.
+    struct SharedClipBuffer {
+        int sampleRate{0}; // Hz
+        int channels{0};   // 1 или 2
+        int frames{0};     // количество сэмпл-фреймов на канал
+        std::shared_ptr<const float[]> ch0{}; // planar channel 0, size=frames
+        std::shared_ptr<const float[]> ch1{}; // planar channel 1, size=frames (может быть nullptr для mono)
+
+        [[nodiscard]] bool valid() const noexcept {
+            if (sampleRate <= 0 || frames <= 0) {
+                return false;
+            }
+            if (channels != 1 && channels != 2) {
+                return false;
+            }
+            if (!ch0) {
+                return false;
+            }
+            if (channels == 2 && !ch1) {
+                return false;
+            }
+            return true;
+        }
     };
     
 // Описание модуля (вне RT) — для UI/пресетов

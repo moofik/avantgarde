@@ -64,4 +64,8 @@ TEST_CASE("UiBindResolver: Tracks knob aliases map to canonical keys") {
     const UiBindResolution bpm = UiBindResolver::resolve(UiScene::Tracks, UiLayoutNodeType::Knob, "bpm");
     REQUIRE(bpm.ok);
     REQUIRE(bpm.canonical == "transport.bpm");
+
+    const UiBindResolution looper = UiBindResolver::resolve(UiScene::Tracks, UiLayoutNodeType::Switch, "looper");
+    REQUIRE(looper.ok);
+    REQUIRE(looper.canonical == "track.selected.looper_mode");
 }

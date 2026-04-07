@@ -9,12 +9,15 @@
 #include <cmath>
 #include <cctype>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "contracts/ui/components/UiComponents.h"
 #include "platform/render/PreparedLayoutUtils.h"
 #include "platform/render/RenderGeometry.h"
+#include "platform/render/TextSliceGeometry.h"
 #include "service/ui/layout/UiLayoutEngine.h"
 
 namespace avantgarde::macos {
@@ -82,13 +85,14 @@ std::string toLowerAscii(std::string_view value) {
     return out;
 }
 
-struct NodeTextFxStyle {
-    bool active{false};
-    CGFloat jitterX{0.0};
-    CGFloat splitPx{0.0};
-    CGFloat alpha{1.0};
-    uint8_t bandCount{2U};
-    bool alternatePhase{false};
+float textHashToValue01(std::string_view text) {
+    const std::size_t h = std::hash<std::string_view>{}(text);
+    const uint16_t bucket = static_cast<uint16_t>(h & 0xFFFFU);
+    return static_cast<float>(bucket) / 65535.0f;
+}
+
+struct NodeTextFxChain {
+    std::vector<VisualFxRequest> requests{};
 };
 
 } // namespace
@@ -207,46 +211,72 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
             std::chrono::steady_clock::now().time_since_epoch())
             .count());
 
-    auto glitchStyleForNode = [&](const UiLayoutNode* node, const IUiComponent* component) -> NodeTextFxStyle {
-        NodeTextFxStyle style{};
-        if (!node || !ctx.visualFx) {
-            return style;
+    auto textFxChainForNode = [&](const UiLayoutNode* node, const IUiComponent* component) -> NodeTextFxChain {
+        NodeTextFxChain chain{};
+        if (!node || !ctx.visualFx || node->effects.empty()) {
+            return chain;
         }
 
-        VisualFxRequest request{};
-        request.nodeId = node->id;
-        request.instanceKey = component ? std::string(component->id()) : std::string{};
-        request.nodeText = node->text;
-        request.effect = node->effect;
-        request.effectTrigger = node->effectTrigger;
-        request.effectTriggerOutMs = node->effectTriggerOutMs;
-        request.effectIntervalMs = node->effectIntervalMs;
-        request.effectAmount = node->effectAmount;
-        request.effectSpeed = node->effectSpeed;
-        request.nowMs = nowMs;
+        VisualFxRequest base{};
+        base.nodeId = node->id;
+        base.instanceKey = component ? std::string(component->id()) : std::string{};
+        base.nodeText = node->text;
+        base.nowMs = nowMs;
 
         if (const auto* knob = dynamic_cast<const UiKnobComponent*>(component)) {
-            request.hasValue01 = true;
-            request.value01 = knob->value01;
+            base.hasValue01 = true;
+            base.value01 = knob->value01;
+            if (!knob->label.empty()) {
+                base.nodeText = knob->label;
+            }
         } else if (const auto* sw = dynamic_cast<const UiSwitchComponent*>(component)) {
             const uint16_t denom = std::max<uint16_t>(
                 1U,
                 static_cast<uint16_t>(sw->options.size() > 1U ? sw->options.size() - 1U : 1U));
-            request.hasValue01 = true;
-            request.value01 = static_cast<float>(sw->selectedIndex) / static_cast<float>(denom);
+            base.hasValue01 = true;
+            base.value01 = static_cast<float>(sw->selectedIndex) / static_cast<float>(denom);
+            if (!sw->label.empty()) {
+                base.nodeText = sw->label;
+            }
         } else if (const auto* anim = dynamic_cast<const UiAnimSlotComponent*>(component)) {
-            request.hasValue01 = true;
-            request.value01 = anim->intensity01;
+            base.hasValue01 = true;
+            base.value01 = anim->intensity01;
+            if (!anim->label.empty()) {
+                base.nodeText = anim->label;
+            }
+        } else if (const auto* t = dynamic_cast<const UiTextComponent*>(component)) {
+            if (!t->text.empty()) {
+                base.hasValue01 = true;
+                base.value01 = textHashToValue01(t->text);
+                base.nodeText = t->text;
+            }
+        } else if (const auto* s = dynamic_cast<const UiStatusBarComponent*>(component)) {
+            if (!s->text.empty()) {
+                base.hasValue01 = true;
+                base.value01 = textHashToValue01(s->text);
+                base.nodeText = s->text;
+            }
+        } else if (!node->text.empty()) {
+            base.hasValue01 = true;
+            base.value01 = textHashToValue01(node->text);
+            base.nodeText = node->text;
         }
 
-        const VisualFxTextStyle fx = ctx.visualFx->resolveTextStyle(request);
-        style.active = fx.active;
-        style.jitterX = static_cast<CGFloat>(fx.jitterX);
-        style.splitPx = static_cast<CGFloat>(fx.splitPx);
-        style.alpha = static_cast<CGFloat>(fx.alpha);
-        style.bandCount = fx.bandCount;
-        style.alternatePhase = fx.alternatePhase;
-        return style;
+        for (const UiLayoutNode::EffectSpec& spec : node->effects) {
+            VisualFxRequest request = base;
+            request.effect = spec.type;
+            request.effectColor = spec.effectColor;
+            request.effectTrigger = spec.effectTrigger;
+            request.effectTransition = spec.effectTransition;
+            request.effectTriggerOutMs = spec.effectTriggerOutMs;
+            request.effectIntervalMs = spec.effectIntervalMs;
+            request.effectAmount = spec.effectAmount;
+            request.effectSpeed = spec.effectSpeed;
+            if (!request.effect.empty()) {
+                chain.requests.push_back(std::move(request));
+            }
+        }
+        return chain;
     };
 
     // Внешняя рамка кадра.
@@ -293,7 +323,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                          NSFont* font,
                          CATextLayerAlignmentMode align,
                          bool wrapText,
-                         const NodeTextFxStyle* fx) {
+                         const NodeTextFxChain* fxChain) {
         if (!text || [text length] == 0) {
             return;
         }
@@ -321,47 +351,218 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                                  CGFloat opacity) {
             [contentLayer addSublayer:makeTextLayer(drawText, layerRect, layerColor, opacity)];
         };
+        auto buildImageWithRgbaFx = [&](NSString* drawText,
+                                        const CGRect& drawRect,
+                                        const std::vector<VisualFxRequest>& requests) -> CGImageRef {
+            const std::size_t pixelW =
+                static_cast<std::size_t>(std::max<CGFloat>(1.0, std::ceil(drawRect.size.width)));
+            const std::size_t pixelH =
+                static_cast<std::size_t>(std::max<CGFloat>(1.0, std::ceil(drawRect.size.height)));
+            const std::size_t stride = pixelW * 4U;
+
+            CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+            const CGBitmapInfo bitmapInfo =
+                static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast) | kCGBitmapByteOrder32Big;
+            CGContextRef bmp = CGBitmapContextCreate(nullptr,
+                                                     static_cast<size_t>(pixelW),
+                                                     static_cast<size_t>(pixelH),
+                                                     8,
+                                                     static_cast<size_t>(stride),
+                                                     cs,
+                                                     bitmapInfo);
+            CGColorSpaceRelease(cs);
+            if (!bmp) {
+                return nullptr;
+            }
+
+            CATextLayer* source = makeTextLayer(drawText,
+                                                CGRectMake(0.0, 0.0, static_cast<CGFloat>(pixelW), static_cast<CGFloat>(pixelH)),
+                                                color,
+                                                1.0);
+            source.contentsScale = 1.0;
+            [source renderInContext:bmp];
+
+            auto* px = static_cast<uint8_t*>(CGBitmapContextGetData(bmp));
+            if (!px) {
+                CGContextRelease(bmp);
+                return nullptr;
+            }
+
+            VisualFxRgbaView roi{};
+            roi.pixels = px;
+            roi.width = static_cast<uint16_t>(std::min<std::size_t>(pixelW, 65535U));
+            roi.height = static_cast<uint16_t>(std::min<std::size_t>(pixelH, 65535U));
+            roi.strideBytes = static_cast<uint32_t>(std::min<std::size_t>(stride, 0xFFFFFFFFU));
+
+            if (!requests.empty()) {
+                const std::size_t byteCount = static_cast<std::size_t>(roi.strideBytes) * roi.height;
+                std::vector<uint8_t> original(byteCount, 0U);
+                std::copy(roi.pixels, roi.pixels + byteCount, original.begin());
+                std::vector<int32_t> accum(byteCount, 0);
+                for (std::size_t i = 0; i < byteCount; ++i) {
+                    accum[i] = static_cast<int32_t>(original[i]);
+                }
+                bool anyApplied = false;
+                for (const VisualFxRequest& req : requests) {
+                    std::vector<uint8_t> tmp = original;
+                    VisualFxRgbaView tmpView{};
+                    tmpView.pixels = tmp.data();
+                    tmpView.width = roi.width;
+                    tmpView.height = roi.height;
+                    tmpView.strideBytes = roi.strideBytes;
+                    if (!ctx.visualFx->applyRgba(tmpView, req)) {
+                        continue;
+                    }
+                    anyApplied = true;
+                    for (std::size_t i = 0; i < byteCount; ++i) {
+                        accum[i] += static_cast<int32_t>(tmp[i]) - static_cast<int32_t>(original[i]);
+                    }
+                }
+                if (anyApplied) {
+                    for (std::size_t i = 0; i < byteCount; ++i) {
+                        roi.pixels[i] = static_cast<uint8_t>(std::clamp(accum[i], 0, 255));
+                    }
+                }
+            }
+
+            CGImageRef image = CGBitmapContextCreateImage(bmp);
+            CGContextRelease(bmp);
+            return image;
+        };
 
         auto drawSegment = [&](NSString* drawText, const CGRect& drawRect) {
-            if (!fx || !fx->active) {
+            if (!fxChain || fxChain->requests.empty() || !ctx.visualFx) {
                 pushTextLayer(drawText, drawRect, color, 1.0);
                 return;
             }
 
-            const CGRect base = CGRectOffset(drawRect, fx->jitterX, 0.0);
-            if (fx->splitPx > 0.01) {
-                NSColor* splitA = [ctx.mid colorWithAlphaComponent:0.42];
-                NSColor* splitB = [ctx.text colorWithAlphaComponent:0.26];
-                pushTextLayer(drawText, CGRectOffset(base, -fx->splitPx, 0.0), splitA, 1.0);
-                pushTextLayer(drawText, CGRectOffset(base, fx->splitPx, 0.0), splitB, 1.0);
+            // Рендерер не знает имен эффектов.
+            // Он только: 1) запрашивает геометрический style у FX-процессора,
+            // 2) применяет универсальную геометрию, 3) для остальных эффектов
+            // оставляет pixel-postprocess pipeline.
+            std::vector<VisualFxRequest> rgbaRequests{};
+            std::vector<render::TextGlitchPlan> geometryPlans{};
+            bool hasReveal = false;
+            float reveal01 = 1.0f;
+            for (const VisualFxRequest& req : fxChain->requests) {
+                const VisualFxTextRevealStyle rv = ctx.visualFx->resolveTextRevealStyle(req);
+                if (rv.active) {
+                    hasReveal = true;
+                    reveal01 = std::min(reveal01, rv.reveal01);
+                    continue;
+                }
+                const VisualFxTextGeometryStyle geo = ctx.visualFx->resolveTextGeometryStyle(req);
+                if (geo.active) {
+                    geometryPlans.push_back(
+                        render::buildTextGlitchPlan(geo, static_cast<float>(drawRect.size.height)));
+                    continue;
+                }
+                rgbaRequests.push_back(req);
             }
-            pushTextLayer(drawText, base, color, fx->alpha);
 
-            // Срезы по крупным полосам: верх/середина/низ с попеременным направлением.
-            const uint8_t bands = std::max<uint8_t>(2U, fx->bandCount);
-            const CGFloat bandH = base.size.height / static_cast<CGFloat>(bands);
-            for (uint8_t i = 0; i < bands; ++i) {
-                const bool rightShift = ((i + (fx->alternatePhase ? 1U : 0U)) % 2U) == 0U;
-                const CGFloat dir = rightShift ? 1.0 : -1.0;
-                const CGFloat shiftX = dir * (0.35 + fx->splitPx * 0.95);
-                const CGFloat sliceY = base.origin.y + static_cast<CGFloat>(i) * bandH;
-                const CGFloat sliceH = (i + 1U == bands) ? (base.size.height - static_cast<CGFloat>(i) * bandH) : bandH;
-
-                CATextLayer* slice = makeTextLayer(
-                    drawText,
-                    CGRectOffset(base, shiftX, 0.0),
-                    [color colorWithAlphaComponent:std::clamp<CGFloat>(fx->alpha + 0.02, 0.0, 1.0)],
-                    1.0);
-
-                CAShapeLayer* mask = [CAShapeLayer layer];
-                mask.frame = CGRectMake(0.0, 0.0, slice.frame.size.width, slice.frame.size.height);
-                CGMutablePathRef p = CGPathCreateMutable();
-                CGPathAddRect(p, nullptr, CGRectMake(0.0, sliceY - slice.frame.origin.y, slice.frame.size.width, sliceH));
-                mask.path = p;
-                CGPathRelease(p);
-                slice.mask = mask;
-                [contentLayer addSublayer:slice];
+            NSString* effectiveText = drawText;
+            if (hasReveal) {
+                const NSUInteger len = [drawText length];
+                const NSUInteger visible = std::min<NSUInteger>(
+                    len,
+                    static_cast<NSUInteger>(std::floor(static_cast<double>(len) *
+                                                       static_cast<double>(std::clamp(reveal01, 0.0f, 1.0f)) +
+                                                       1e-6)));
+                effectiveText = [drawText substringToIndex:visible];
             }
+
+            if (!geometryPlans.empty()) {
+                CGImageRef processedImage = nullptr;
+                if (!rgbaRequests.empty()) {
+                    processedImage = buildImageWithRgbaFx(effectiveText, drawRect, rgbaRequests);
+                }
+                for (const render::TextGlitchPlan& plan : geometryPlans) {
+                    if (!plan.active) {
+                        continue;
+                    }
+                    const CGRect base = CGRectOffset(drawRect, static_cast<CGFloat>(plan.baseOffsetX), 0.0);
+                    if (!processedImage) {
+                        if (plan.splitPx > 0.01f) {
+                            NSColor* splitA = [ctx.mid colorWithAlphaComponent:0.42];
+                            NSColor* splitB = [ctx.text colorWithAlphaComponent:0.26];
+                            pushTextLayer(effectiveText,
+                                          CGRectOffset(base, static_cast<CGFloat>(-plan.splitPx), 0.0),
+                                          splitA,
+                                          1.0);
+                            pushTextLayer(effectiveText,
+                                          CGRectOffset(base, static_cast<CGFloat>(plan.splitPx), 0.0),
+                                          splitB,
+                                          1.0);
+                        }
+                        pushTextLayer(effectiveText, base, color, static_cast<CGFloat>(plan.alpha));
+                    } else {
+                        auto pushImageLayer = [&](const CGRect& lr, CGFloat opacity) {
+                            CALayer* layer = [CALayer layer];
+                            layer.frame = lr;
+                            layer.contentsGravity = kCAGravityResize;
+                            layer.contents = (__bridge id)processedImage;
+                            layer.contentsScale = std::max<CGFloat>(scale, 1.0);
+                            layer.opacity = static_cast<float>(std::clamp(opacity, 0.0, 1.0));
+                            [contentLayer addSublayer:layer];
+                        };
+                        if (plan.splitPx > 0.01f) {
+                            pushImageLayer(CGRectOffset(base, static_cast<CGFloat>(-plan.splitPx), 0.0), 0.42);
+                            pushImageLayer(CGRectOffset(base, static_cast<CGFloat>(plan.splitPx), 0.0), 0.26);
+                        }
+                        pushImageLayer(base, static_cast<CGFloat>(plan.alpha));
+                    }
+
+                    for (const render::TextSliceSpan& span : plan.slices) {
+                        const CGRect shifted = CGRectOffset(base, static_cast<CGFloat>(span.offsetX), 0.0);
+                        CALayer* layer = nil;
+                        if (!processedImage) {
+                            layer = makeTextLayer(effectiveText, shifted, color, 1.0);
+                        } else {
+                            layer = [CALayer layer];
+                            layer.frame = shifted;
+                            layer.contentsGravity = kCAGravityResize;
+                            layer.contents = (__bridge id)processedImage;
+                            layer.contentsScale = std::max<CGFloat>(scale, 1.0);
+                        }
+                        CAShapeLayer* sliceMask = [CAShapeLayer layer];
+                        sliceMask.frame = layer.bounds;
+                        CGMutablePathRef mp = CGPathCreateMutable();
+                        CGPathAddRect(mp,
+                                      nullptr,
+                                      CGRectMake(0.0,
+                                                 static_cast<CGFloat>(span.y),
+                                                 drawRect.size.width,
+                                                 std::max<CGFloat>(1.0, static_cast<CGFloat>(span.height))));
+                        sliceMask.path = mp;
+                        CGPathRelease(mp);
+                        layer.mask = sliceMask;
+                        [contentLayer addSublayer:layer];
+                    }
+                }
+                if (processedImage) {
+                    CGImageRelease(processedImage);
+                }
+                // Если геометрия активна, текст рисуем только ей (без bitmap-пайплайна).
+                return;
+            }
+
+            if (rgbaRequests.empty()) {
+                pushTextLayer(effectiveText, drawRect, color, 1.0);
+                return;
+            }
+            CGImageRef image = buildImageWithRgbaFx(effectiveText, drawRect, rgbaRequests);
+            if (!image) {
+                pushTextLayer(effectiveText, drawRect, color, 1.0);
+                return;
+            }
+
+            CALayer* layer = [CALayer layer];
+            layer.frame = drawRect;
+            layer.contentsGravity = kCAGravityResize;
+            layer.contents = (__bridge id)image;
+            layer.contentsScale = std::max<CGFloat>(scale, 1.0);
+            [contentLayer addSublayer:layer];
+            CGImageRelease(image);
         };
 
         // Для декоративных шрифтов с нулевым space-глифом рисуем слова по отдельности
@@ -372,8 +573,17 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
             const CGFloat spaceW = [@" " sizeWithAttributes:attrs].width;
             manualWordSpacing = (spaceW <= 0.5);
         }
+        bool forceWholeSegment = false;
+        if (fxChain && ctx.visualFx) {
+            for (const VisualFxRequest& req : fxChain->requests) {
+                if (ctx.visualFx->requiresWholeTextPass(req)) {
+                    forceWholeSegment = true;
+                    break;
+                }
+            }
+        }
 
-        if (!manualWordSpacing || wrapText) {
+        if (!manualWordSpacing || wrapText || forceWholeSegment) {
             drawSegment(text, rect);
             return;
         }
@@ -458,7 +668,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
         switch (box.node->type) {
             case UiLayoutNodeType::StatusBar:
             case UiLayoutNodeType::Text: {
-                const NodeTextFxStyle fx = glitchStyleForNode(box.node, component);
+                const NodeTextFxChain fxChain = textFxChainForNode(box.node, component);
                 NSString* text = nil;
                 NSFont* textFont = fontForNode(box.node, ctx.bodyFont);
                 CGRect textRect = rect;
@@ -502,7 +712,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 } else if (!box.node->text.empty()) {
                     text = [NSString stringWithUTF8String:box.node->text.c_str()];
                 }
-                textLayer(textRect, text, ctx.text, textFont, kCAAlignmentLeft, wrapText, &fx);
+                textLayer(textRect, text, ctx.text, textFont, kCAAlignmentLeft, wrapText, &fxChain);
             } break;
 
             case UiLayoutNodeType::Separator: {
@@ -554,9 +764,21 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                     0.2,
                     4.0);
                 const CGFloat sz = std::clamp(baseSide * knobScale, 8.0, maxSide);
-                const CGFloat cx = rect.origin.x + rect.size.width * 0.5;
-                const CGFloat cy = knobAreaY + knobAreaH * 0.5;
                 const CGFloat r = sz * 0.42;
+                CGFloat cx = rect.origin.x + rect.size.width * 0.5;
+                switch (box.node->align) {
+                    case UiLayoutAlign::Start:
+                        cx = rect.origin.x + r + 2.0;
+                        break;
+                    case UiLayoutAlign::End:
+                        cx = rect.origin.x + rect.size.width - r - 2.0;
+                        break;
+                    case UiLayoutAlign::Center:
+                    default:
+                        break;
+                }
+                cx = std::clamp<CGFloat>(cx, rect.origin.x + r + 1.0, rect.origin.x + rect.size.width - r - 1.0);
+                const CGFloat cy = knobAreaY + knobAreaH * 0.5;
 
                 CAShapeLayer* ring = [CAShapeLayer layer];
                 ring.frame = contentLayer.bounds;
@@ -587,13 +809,22 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 [contentLayer addSublayer:needle];
 
                 if (!knob->label.empty()) {
-                    const NodeTextFxStyle fx = glitchStyleForNode(box.node, component);
+                    const NodeTextFxChain fxChain = textFxChainForNode(box.node, component);
                     NSString* label = [NSString stringWithUTF8String:knob->label.c_str()];
+                    NSString* alignMode = kCAAlignmentCenter;
+                    switch (box.node->align) {
+                        case UiLayoutAlign::Start: alignMode = kCAAlignmentLeft; break;
+                        case UiLayoutAlign::End: alignMode = kCAAlignmentRight; break;
+                        case UiLayoutAlign::Center:
+                        default:
+                            alignMode = kCAAlignmentCenter;
+                            break;
+                    }
                     const CGRect lr = CGRectMake(rect.origin.x + 1.0,
                                                  rect.origin.y + rect.size.height - labelH,
                                                  std::max<CGFloat>(8.0, rect.size.width - 2.0),
                                                  labelH);
-                    textLayer(lr, label, ctx.text, labelFont, kCAAlignmentCenter, false, &fx);
+                    textLayer(lr, label, ctx.text, labelFont, alignMode, false, &fxChain);
                 }
             } break;
 
@@ -607,10 +838,10 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                                            ? 0.0
                                            : std::max<CGFloat>(14.0, (labelFont ? labelFont.pointSize * 1.2 : 14.0));
                 if (!sw->label.empty()) {
-                    const NodeTextFxStyle fx = glitchStyleForNode(box.node, component);
+                    const NodeTextFxChain fxChain = textFxChainForNode(box.node, component);
                     NSString* label = [NSString stringWithUTF8String:sw->label.c_str()];
                     const CGRect lr = CGRectMake(rect.origin.x, rect.origin.y, rect.size.width, labelH);
-                    textLayer(lr, label, ctx.text, labelFont, kCAAlignmentLeft, false, &fx);
+                    textLayer(lr, label, ctx.text, labelFont, kCAAlignmentLeft, false, &fxChain);
                 }
                 const CGFloat bodyAreaY = rect.origin.y + labelH + (labelH > 0.0 ? 2.0 : 0.0);
                 const CGFloat bodyAreaH = std::max<CGFloat>(12.0, rect.size.height - labelH - (labelH > 0.0 ? 2.0 : 0.0));
@@ -659,13 +890,15 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 const CGFloat availW = std::max<CGFloat>(0.0, rect.size.width - 8.0);
                 const CGFloat availH = std::max<CGFloat>(0.0, rect.size.height - 8.0);
                 const CGFloat side = std::max<CGFloat>(24.0, std::min<CGFloat>(128.0, std::min<CGFloat>(availW, availH)));
-                const CGFloat drawX = rect.origin.x + (rect.size.width - side) * 0.5;
+                CGFloat drawX = rect.origin.x + (rect.size.width - side) * 0.5;
                 CGFloat drawY = rect.origin.y + (rect.size.height - side) * 0.5;
                 switch (box.node->align) {
                     case UiLayoutAlign::Start:
+                        drawX = rect.origin.x + 2.0;
                         drawY = rect.origin.y + std::max<CGFloat>(0.0, rect.size.height - side - 2.0);
                         break;
                     case UiLayoutAlign::End:
+                        drawX = rect.origin.x + std::max<CGFloat>(2.0, rect.size.width - side - 2.0);
                         drawY = rect.origin.y + 2.0;
                         break;
                     case UiLayoutAlign::Center:

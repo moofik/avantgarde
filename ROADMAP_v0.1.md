@@ -96,35 +96,43 @@ Why this model:
 - keeps real-time ownership clear: one live clock, one live playback graph.
 
 ### Milestone order update
-We intentionally run Pattern before final project save/load schema to avoid format churn.
+We intentionally run pattern/sequencer architecture first, then editing/record UX layers.
 
-## Milestone 1: Sample Envelope Core
-- Add clip envelope params (MVP: Attack/Release, optional Decay/Sustain in schema).
-- Apply envelope in `ClipTrack` playback path without clicks.
-- Cover with DSP tests on short/long clips and different playback speeds.
-
-UX review at milestone end:
-- keep controls immediate (no apply-confirm for continuous params),
-- max 1 screen and minimal actions for envelope editing.
-
-## Milestone 2: Sample Editor (MVP)
-- Introduce `SampleEditorWidget` with start/end/loop/reverse/fade.
-- Map `UiAction -> UiIntent -> control command` only (no renderer logic in widget).
-- Reuse layout-driven flow (`UiPreparedLayout`) for portability.
+## Milestone 1: Pattern Contracts (foundation)
+- Add `IPattern.h` as a dedicated contract layer:
+  - `PatternTransportSnapshot`,
+  - `PatternTrackSnapshot`,
+  - `PatternStepEvent`,
+  - `PatternState`,
+  - `IPatternBank` / `IPatternScheduler` / `IPatternRuntimePlayer`.
+- Fix ownership boundaries in contracts:
+  - pattern layer stores state/events,
+  - live engine remains single RT playback graph.
+- Update `CONTRACTS.md` to make Pattern a first-class system entity (not RT-extension only).
 
 UX review at milestone end:
-- reduce menu-diving,
-- make frequent actions one-step accessible.
+- clear user mental model: pattern change does not create hidden extra engine instances.
 
-## Milestone 3: ClipTrack Record
-- Add record-to-slot flow with arm + record states.
-- Support stop-immediate and quantized stop.
-- Optional post-record normalize/trim flags.
+## Milestone 2: Sequencer command protocol (note lane)
+- Normalize note command IDs in `ids.h`:
+  - `NoteOn`,
+  - `NoteOff`,
+  - `NoteDetune` (fine offset for note events).
+- Document wire payload in `IRtCommandQueue.h` with explicit field mapping (`track/slot/index/value`).
+- Add dispatcher API for note commands and tests for deterministic queue payload.
 
 UX review at milestone end:
-- recording flow must fit into 2-3 explicit user actions.
+- note actions stay immediate and predictable for live input / future MIDI mapping.
 
-## Milestone 4: Pattern System Entity (core)
+## Milestone 3: Sequencer Core (MVP)
+- Add track step lane with mono-voice + retrigger baseline.
+- Add per-step pitch (semitone) and optional fine detune.
+- Keep event model deterministic under quantized transport.
+
+UX review at milestone end:
+- step edit must stay fast with limited controls (encoder + apply flow).
+
+## Milestone 4: Pattern Runtime Entity (core)
 - Add `Pattern`, `PatternBank`, `PatternScheduler`, `PatternRuntimePlayer`.
 - Add minimal step triggers per track (without full p-lock matrix yet).
 - Add quantized pattern switch (`none/beat/bar`) via scheduler.
@@ -133,7 +141,33 @@ UX review at milestone end:
 - transparent pattern switching feedback,
 - no hidden state transitions.
 
-## Milestone 5: Project Model v2 + Save/Load (Pattern-aware)
+## Milestone 5: Sample Envelope Core
+- Add clip envelope params (MVP: Attack/Release, optional Decay/Sustain in schema).
+- Apply envelope in `ClipTrack` playback path without clicks.
+- Cover with DSP tests on short/long clips and different playback speeds.
+
+UX review at milestone end:
+- keep controls immediate (no apply-confirm for continuous params),
+- max 1 screen and minimal actions for envelope editing.
+
+## Milestone 6: Sample Editor (MVP)
+- Introduce `SampleEditorWidget` with start/end/loop/reverse/fade.
+- Map `UiAction -> UiIntent -> control command` only (no renderer logic in widget).
+- Reuse layout-driven flow (`UiPreparedLayout`) for portability.
+
+UX review at milestone end:
+- reduce menu-diving,
+- make frequent actions one-step accessible.
+
+## Milestone 7: ClipTrack Record
+- Add record-to-slot flow with arm + record states.
+- Support stop-immediate and quantized stop.
+- Optional post-record normalize/trim flags.
+
+UX review at milestone end:
+- recording flow must fit into 2-3 explicit user actions.
+
+## Milestone 8: Project Model v2 + Save/Load (Pattern-aware)
 - Introduce canonical `ProjectState` including pattern bank.
 - Add serialization with `schemaVersion`.
 - Add migration hooks for future pattern/step schema expansion.
@@ -141,7 +175,7 @@ UX review at milestone end:
 UX review at milestone end:
 - save/load must be explicit, predictable, and recoverable.
 
-## Milestone 6: Pattern v2 (locks + conditions)
+## Milestone 9: Pattern v2 (locks + conditions)
 - Add parameter locks on steps.
 - Add trig conditions/probability/fill behavior.
 - Integrate undo/redo as grouped transactions for step edits.
@@ -149,7 +183,7 @@ UX review at milestone end:
 UX review at milestone end:
 - step edit flow should remain fast under hardware-limited controls.
 
-## Milestone 7: Performance Layer
+## Milestone 10: Performance Layer
 - Add scene snapshots and macro apply batches.
 - Add one-action performance FX presets.
 - Keep real-time safe command batching for live use.

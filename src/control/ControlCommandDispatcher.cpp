@@ -1,5 +1,7 @@
 #include "control/ControlCommandDispatcher.h"
 
+#include <algorithm>
+
 namespace avantgarde {
 
 ControlCommandDispatcher::ControlCommandDispatcher(IRtCommandQueue* rtQueue) noexcept
@@ -31,6 +33,23 @@ bool ControlCommandDispatcher::sendPlay(int16_t track, int16_t slot) noexcept {
 
 bool ControlCommandDispatcher::sendStop(int16_t track, int16_t slot) noexcept {
     return dispatch(CmdId::Stop, track, slot, /*index=*/kRtIndexUnused, kRtValueOff);
+}
+
+bool ControlCommandDispatcher::sendNoteOn(int16_t track, uint8_t key, float velocity01) noexcept {
+    const uint16_t note = std::clamp<uint16_t>(key, kRtMidiNoteMin, kRtMidiNoteMax);
+    const float velocity = std::clamp(velocity01, 0.0f, 1.0f);
+    return dispatch(CmdId::NoteOn, track, kRtSlotTrackParams, note, velocity);
+}
+
+bool ControlCommandDispatcher::sendNoteOff(int16_t track, uint8_t key) noexcept {
+    const uint16_t note = std::clamp<uint16_t>(key, kRtMidiNoteMin, kRtMidiNoteMax);
+    return dispatch(CmdId::NoteOff, track, kRtSlotTrackParams, note, kRtValueOff);
+}
+
+bool ControlCommandDispatcher::sendNoteDetune(int16_t track, uint8_t key, float detuneNorm) noexcept {
+    const uint16_t note = std::clamp<uint16_t>(key, kRtMidiNoteMin, kRtMidiNoteMax);
+    const float detune = std::clamp(detuneNorm, -1.0f, 1.0f);
+    return dispatch(CmdId::NoteDetune, track, kRtSlotTrackParams, note, detune);
 }
 
 bool ControlCommandDispatcher::sendTrackParamSet(int16_t track, TrackParamId param, float value) noexcept {

@@ -1,0 +1,196 @@
+{
+  "id": "tracks",
+  "layout": {
+    "type": "column",
+    "padding": 0,
+    "gap": 0,
+    "width": 60,
+    "height": 24,
+    "children": [
+      {
+        "type": "statusbar",
+        "id": "header_title",
+        "text": "TRACKS",
+        "bind": "status.scene.title",
+        "font": "gothic",
+        "font_size": 30,
+        "height": 2,
+        "effects": [
+          {
+            "type": "glitch",
+            "effect_interval_ms": 10000,
+            "effect_amount": 0.2,
+            "effect_speed": 0.5
+          }
+        ],
+        "width": "100%"
+      },
+      {
+        "type": "text",
+        "id": "transport_line",
+        "bind": "status.transport",
+        "width": "100%"
+      },
+      {
+        "type": "text",
+        "id": "active_line",
+        "bind": "status.transport.active",
+        "width": "100%"
+      },
+      {
+        "type": "separator",
+        "id": "sep_top",
+        "height": 1,
+        "width": "100%"
+      },
+      {
+        "type": "track_view",
+        "id": "track_view",
+        "height": "auto",
+        "width": "100%",
+        "gap": 1,
+        "children": [
+          {
+            "type": "list",
+            "id": "tracks_body",
+            "width": "100%"
+          },
+          {
+            "type": "row",
+            "id": "track_split",
+            "width": "100%",
+            "gap": 1,
+            "wrap": false,
+            "justify": "start",
+            "align": "start",
+            "children": [
+              {
+                "type": "column",
+                "id": "track_controls_col",
+                "width": "54%",
+                "gap": 0,
+                "children": [
+                  {
+                    "type": "text",
+                    "id": "track_mode_text",
+                    "bind": "track.selected.mode",
+                    "width": "100%",
+                    "font": "gothic",
+                    "font_size": 22,
+                    "effects": [
+                      {
+                        "type": "glow",
+                        "effect_trigger": "change",
+                        "effect_trigger_out": "1350ms",
+                        "effect_amount": 0.8,
+                        "effect_speed": 0.5,
+                        "effect_color": "#330000"
+                      },
+                      {
+                        "type": "typing",
+                        "effect_trigger": "change",
+                        "effect_trigger_out": "850ms",
+                        "effect_amount": 0.3,
+                        "effect_speed": 0.5
+                      }
+                    ]
+                  },
+                  {
+                    "type": "row",
+                    "id": "track_knobs_row",
+                    "width": "100%",
+                    "gap": 1,
+                    "wrap": false,
+                    "justify": "start",
+                    "align": "start",
+                    "children": [
+                      {
+                        "type": "knob",
+                        "id": "track_speed",
+                        "label": "SPD",
+                        "bind": "speed",
+                        "font": "gothic",
+                        "font_size": 22,
+                        "effects": [
+                          {
+                            "type": "glitch",
+                            "effect_trigger": "change",
+                            "effect_amount": 0.2,
+                            "effect_speed": 0.2
+                          }
+                        ],
+                        "width": 6,
+                        "knob_size": 1.7,
+                        "align": "start"
+                      },
+                      {
+                        "type": "knob",
+                        "id": "track_gain",
+                        "label": "GAIN",
+                        "bind": "c",
+                        "font": "gothic",
+                        "font_size": 22,
+                        "effects": [
+                          {
+                            "type": "glitch",
+                            "effect_trigger": "change",
+                            "effect_amount": 0.2,
+                            "effect_speed": 0.2
+                          }
+                        ],
+                        "width": 6,
+                        "knob_size": 1.7,
+                        "align": "start"
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "column",
+                "id": "track_visual_col",
+                "width": "46%",
+                "gap": 0,
+                "align": "start",
+                "children": [
+                  {
+                    "type": "anim_slot",
+                    "id": "track_anim",
+                    "bind": "current",
+                    "height": 8,
+                    "width": 16,
+                    "align": "start"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "id": "sep_bottom",
+        "height": 1,
+        "width": "100%"
+      },
+      {
+        "type": "text",
+        "id": "action_status",
+        "bind": "status.action",
+        "width": "100%"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint_line_1",
+        "bind": "status.keys.1",
+        "width": "100%"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint_line_2",
+        "bind": "status.keys.2",
+        "width": "100%"
+      }
+    ]
+  }
+}

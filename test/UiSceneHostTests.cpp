@@ -305,6 +305,29 @@ TEST_CASE("UiSceneHost: F10 triggers detect BPM quick action on tracks scene") {
     REQUIRE(host.nav().cursor == 1005);
 }
 
+TEST_CASE("UiSceneHost: M-toggle emits SetMetronomeEnabled intent") {
+    UiSceneHost host;
+    REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));
+
+    UiState state{};
+    state.tracks.resize(1);
+    state.transport.metronomeEnabled = false;
+    host.nav().scene = UiScene::Tracks;
+
+    const WidgetOutput onOut = host.handleGesture(UiGesture::ToggleMetronome, state);
+    REQUIRE(onOut.handled);
+    REQUIRE(onOut.intents.size() == 1);
+    REQUIRE(onOut.intents[0].type == UiIntentType::SetMetronomeEnabled);
+    REQUIRE(onOut.intents[0].value == Catch::Approx(1.0f));
+
+    state.transport.metronomeEnabled = true;
+    const WidgetOutput offOut = host.handleGesture(UiGesture::ToggleMetronome, state);
+    REQUIRE(offOut.handled);
+    REQUIRE(offOut.intents.size() == 1);
+    REQUIRE(offOut.intents[0].type == UiIntentType::SetMetronomeEnabled);
+    REQUIRE(offOut.intents[0].value == Catch::Approx(0.0f));
+}
+
 TEST_CASE("UiSceneHost: FxList fast F-keys route to slot nav and quick actions") {
     UiSceneHost host;
     REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));

@@ -156,7 +156,7 @@ UiGesture mapWindowKeyCode(unsigned short keyCode) noexcept {
         case 19: return UiGesture::SelectNextTrack; // 2
         case 43: return UiGesture::TrackPagePrev;   // ,
         case 47: return UiGesture::TrackPageNext;   // .
-        case 46: return UiGesture::OpenManager;     // M
+        case 46: return UiGesture::ToggleMetronome; // M
         case 38: return UiGesture::ListDown;        // J
         case 40: return UiGesture::ListUp;          // K
         case 36: return UiGesture::ListEnter;       // Enter

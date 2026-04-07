@@ -33,6 +33,7 @@ bind = "scene.fx.param.value.0"
 knob_size = 1.35
 effect = "glitch"
 effect_trigger = "change"
+effect_transition = "instant"
 effect_trigger_out = "1s"
 
 [[layout.children.children]]
@@ -72,7 +73,9 @@ text_wrap = true
     REQUIRE(tpl.root.children[1].children[0].type == UiLayoutNodeType::Knob);
     REQUIRE(tpl.root.children[1].children[0].bind == "scene.fx.param.value.0");
     REQUIRE(tpl.root.children[1].children[0].knobSize == Catch::Approx(1.35f));
-    REQUIRE(tpl.root.children[1].children[0].effectTriggerOutMs == 1000U);
+    REQUIRE_FALSE(tpl.root.children[1].children[0].effects.empty());
+    REQUIRE(tpl.root.children[1].children[0].effects[0].effectTransition == "instant");
+    REQUIRE(tpl.root.children[1].children[0].effects[0].effectTriggerOutMs == 1000U);
     REQUIRE(tpl.root.children[1].children[1].type == UiLayoutNodeType::AnimSlot);
     REQUIRE(tpl.root.children[1].children[1].width.unit == UiLayoutSize::Unit::Px);
     REQUIRE(tpl.root.children[1].children[1].width.value == Catch::Approx(128.0f));
@@ -145,9 +148,12 @@ effect_trigger_out = 250
     REQUIRE(UiLayoutTomlLoader::loadFromString(toml, tpl, err));
     REQUIRE(err.empty());
     REQUIRE(tpl.root.children.size() == 3);
-    REQUIRE(tpl.root.children[0].effectTriggerOutMs == 750U);
-    REQUIRE(tpl.root.children[1].effectTriggerOutMs == 1500U);
-    REQUIRE(tpl.root.children[2].effectTriggerOutMs == 250U);
+    REQUIRE_FALSE(tpl.root.children[0].effects.empty());
+    REQUIRE_FALSE(tpl.root.children[1].effects.empty());
+    REQUIRE_FALSE(tpl.root.children[2].effects.empty());
+    REQUIRE(tpl.root.children[0].effects[0].effectTriggerOutMs == 750U);
+    REQUIRE(tpl.root.children[1].effects[0].effectTriggerOutMs == 1500U);
+    REQUIRE(tpl.root.children[2].effects[0].effectTriggerOutMs == 250U);
 }
 
 TEST_CASE("UiLayoutTomlLoader: fails on malformed headers") {

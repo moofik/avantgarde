@@ -41,6 +41,7 @@ std::string GlitchVisualFx::buildStateKey_(const VisualFxRequest& request) const
 
 VisualFxBlockStyle GlitchVisualFx::resolve(const VisualFxRequest& request) {
     VisualFxBlockStyle style{};
+    GlitchVisualFxPayload payload{};
     const std::string key = buildStateKey_(request);
 
     uint32_t intervalMs = (request.effectIntervalMs > 0U) ? request.effectIntervalMs : 2200U;
@@ -60,23 +61,32 @@ VisualFxBlockStyle GlitchVisualFx::resolve(const VisualFxRequest& request) {
     speed = std::clamp(speed, 0.01f, 8.0f);
 
     bool active = false;
+    float phase01 = 0.0f;
     const std::string trigger = toLowerAscii(request.effectTrigger);
     if (trigger == "change") {
         if (request.hasValue01) {
             const float value01 = std::clamp(request.value01, 0.0f, 1.0f);
             const auto prevIt = lastValue01_.find(key);
-            const bool changed = (prevIt == lastValue01_.end()) ||
-                                 (std::fabs(prevIt->second - value01) > 0.0005f);
-            lastValue01_[key] = value01;
-            if (changed) {
-                lastChangeMs_[key] = request.nowMs;
+            bool changed = false;
+            if (prevIt == lastValue01_.end()) {
+                // Baseline init: без автозапуска.
+                lastValue01_[key] = value01;
+            } else {
+                changed = (std::fabs(prevIt->second - value01) > 0.0005f);
+                prevIt->second = value01;
+                if (changed) {
+                    lastChangeMs_[key] = request.nowMs;
+                }
             }
 
-            // В режиме change длительность удержания после последнего изменения
-            // должна быть предсказуемой и задаваться из layout (effect_trigger_out).
-            const uint64_t holdMs = std::clamp<uint64_t>(
+            const uint64_t holdBase = std::clamp<uint64_t>(
                 static_cast<uint64_t>(request.effectTriggerOutMs > 0U ? request.effectTriggerOutMs
                                                                        : 1000U),
+                10ULL,
+                120000ULL);
+            const uint64_t holdMs = std::clamp<uint64_t>(
+                static_cast<uint64_t>(
+                    std::llround(static_cast<double>(holdBase) / static_cast<double>(speed))),
                 10ULL,
                 120000ULL);
             const auto tIt = lastChangeMs_.find(key);
@@ -84,18 +94,24 @@ VisualFxBlockStyle GlitchVisualFx::resolve(const VisualFxRequest& request) {
                 const uint64_t dt =
                     (request.nowMs >= tIt->second) ? (request.nowMs - tIt->second) : 0ULL;
                 active = (dt <= holdMs);
+                if (active) {
+                    phase01 = static_cast<float>(static_cast<double>(dt) /
+                                                 static_cast<double>(std::max<uint64_t>(1ULL, holdMs)));
+                }
             }
         }
     } else {
-        // time/always trigger:
-        // interval задает только период старта, а длительность вспышки вычисляется отдельно.
+        // time/always: interval = период старта, с warmup.
         auto [epochIt, inserted] = timeEpochMs_.emplace(key, request.nowMs);
         if (inserted) {
             epochIt->second = request.nowMs;
         }
         const uint64_t elapsed =
             (request.nowMs >= epochIt->second) ? (request.nowMs - epochIt->second) : 0ULL;
-        const uint64_t phase = (interval > 0U) ? (elapsed % interval) : 0ULL;
+        if (elapsed < interval) {
+            return style;
+        }
+        const uint64_t phase = (interval > 0U) ? ((elapsed - interval) % interval) : 0ULL;
 
         const double slowFactor = 1.0 / static_cast<double>(speed);
         uint64_t burstMs = std::clamp<uint64_t>(
@@ -107,13 +123,16 @@ VisualFxBlockStyle GlitchVisualFx::resolve(const VisualFxRequest& request) {
             burstMs = std::min<uint64_t>(burstMs, interval - 1U);
         }
         active = (phase < burstMs);
+        if (active) {
+            phase01 = static_cast<float>(static_cast<double>(phase) /
+                                         static_cast<double>(std::max<uint64_t>(1ULL, burstMs)));
+        }
     }
 
     if (!active) {
         return style;
     }
 
-    style.active = true;
     const uint64_t stateStepMs = std::clamp<uint64_t>(
         static_cast<uint64_t>(std::llround(300.0 / static_cast<double>(speed))),
         40ULL,
@@ -125,13 +144,29 @@ VisualFxBlockStyle GlitchVisualFx::resolve(const VisualFxRequest& request) {
         return static_cast<float>(mixed & 0xFFFFULL) / 65535.0f;
     };
 
-    style.offsetX = (rnd01(11U) - 0.5f) * amount * 0.85f;
-    style.offsetY = 0.0f;
-    style.splitPx = 0.45f + amount * 1.35f;
-    style.alpha = 0.88f + rnd01(3U) * 0.12f;
-    style.sliceCount = (amount < 0.20f) ? 2U : ((amount < 0.55f) ? 3U : 4U);
-    style.alternatePhase = ((tick & 1ULL) != 0ULL);
+    payload.phase01 = std::clamp(phase01, 0.0f, 1.0f);
+    payload.crumble01 = 0.0f;
+    payload.offsetX = (rnd01(11U) - 0.5f) * amount * 0.85f;
+    payload.offsetY = 0.0f;
+    payload.splitPx = 0.45f + amount * 1.35f;
+    payload.alpha = 0.88f + rnd01(3U) * 0.12f;
+    // Для текстового glitch держим только 2/3 среза (без 4), чтобы эффект
+    // выглядел как "чистые оффсеты по слайсам", без излишней дробности.
+    // Динамика делается от tick, чтобы количество срезов менялось во времени.
+    const float threeProb = std::clamp(0.30f + amount * 0.45f, 0.15f, 0.85f);
+    payload.sliceCount = (rnd01(17U) < threeProb) ? 3U : 2U;
+    payload.alternatePhase = ((tick & 1ULL) != 0ULL);
+    style.active = true;
+    style.payload = payload;
     return style;
+}
+
+bool GlitchVisualFx::applyRgba(VisualFxRgbaView& view, const VisualFxRequest& request) {
+    (void)view;
+    (void)request;
+    // Для текста glitch рендерится геометрией слайсов в renderer.
+    // Pixel post-process здесь намеренно отключен, чтобы не было blur/rgb-пленок.
+    return false;
 }
 
 } // namespace avantgarde

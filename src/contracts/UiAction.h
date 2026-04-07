@@ -69,12 +69,15 @@ struct UiAction {
 
         // Scene actions (tracks-first)
         SceneTrackSelect = 1000,
+        SceneTrackLooperMode,
         SceneTrackMute,
         SceneTrackArm,
         SceneTrackSpeed,
         SceneTrackGain,
         SceneQuantize,
         SceneTempoBpm,
+        ScenePatternPrev,
+        ScenePatternNext,
         SceneDetectProjectBpm,
         SceneAddFx,
         SceneAddReverb,

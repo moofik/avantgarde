@@ -6,8 +6,7 @@
 
 namespace avantgarde::macos {
 
-// Маппинг macOS key events -> унифицированные UiGesture.
-UiGesture mapPrimitiveWindowEvent(NSEvent* event) noexcept;
+// Маппинг macOS key events -> унифицированные UiGestureEvent.
+UiGestureEvent mapPrimitiveWindowEvent(NSEvent* event) noexcept;
 
 } // namespace avantgarde::macos
-

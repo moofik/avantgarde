@@ -119,3 +119,33 @@ TEST_CASE("TracksWidget: apply on Track Select opens TrackContext") {
     REQUIRE(out.intents.size() == 1);
     REQUIRE(out.intents[0].type == UiIntentType::OpenScene);
 }
+
+TEST_CASE("TracksWidget: Looper action toggles SetTrackLooperMode intent") {
+    TracksWidget widget(TracksWidget::Options{});
+
+    UiState state{};
+    state.tracks.resize(1);
+    state.tracks[0].id = 0;
+    state.tracks[0].playbackMode = UiTrackPlaybackMode::Looper;
+
+    UiNavState nav{};
+    nav.scene = UiScene::Tracks;
+    nav.selectedTrack = 0;
+
+    UiActionCatalog catalog = widget.queryAvailableActions(state, nav);
+    const auto it = std::find_if(catalog.actions.begin(), catalog.actions.end(), [](const UiAction& a) {
+        return a.def.id == UiAction::Id::SceneTrackLooperMode;
+    });
+    REQUIRE(it != catalog.actions.end());
+    REQUIRE(it->state.enabled);
+    REQUIRE(it->state.value == Catch::Approx(1.0f));
+
+    UiAction action = *it;
+    action.op = UiAction::Op::Apply;
+    const WidgetOutput out = widget.onAction(action, state, nav);
+    REQUIRE(out.handled);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::SetTrackLooperMode);
+    REQUIRE(out.intents[0].track == 0);
+    REQUIRE(out.intents[0].value == Catch::Approx(0.0f));
+}

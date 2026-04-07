@@ -28,6 +28,7 @@
 20. RT-хуки (`IRtExtension.h`)
 21. Cэмплер/Клип-рекордер (`IClipTrack.h`)
 22. Глобальное музыкальное время и стэйт (`ITransport.h`)
+23. Паттерны и секвенсор (`IPattern.h`)
 
 ---
 
@@ -122,6 +123,101 @@ struct ControlEvent {
 ```
 
 ---
+
+## 23) Паттерны и секвенсор (`IPattern.h`)
+```cpp
+#pragma once
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+#include "ITransport.h"
+#include "types.h"
+
+namespace avantgarde {
+
+using PatternId = uint16_t;
+constexpr PatternId kInvalidPatternId = 0xFFFFu;
+
+enum class PatternStepOp : uint8_t {
+    Trigger = 0,
+    NoteOn = 1,
+    NoteOff = 2,
+    NoteDetune = 3,
+    ParamSet = 4
+};
+
+// Состояние транспорта, сохраняемое в паттерне.
+// Здесь нет sampleTime: живая временная позиция принадлежит только RT-транспорту.
+struct PatternTransportSnapshot {
+    float bpm{120.0f};
+    uint8_t tsNum{4};
+    uint8_t tsDen{4};
+    QuantizeMode quant{QuantizeMode::Bar};
+    float swing01{0.0f};
+};
+
+// Состояние трека в паттерне: только данные, без DSP-инстансов.
+struct PatternTrackSnapshot {
+    uint8_t trackId{0};
+    bool muted{false};
+    bool armed{false};
+    float gain01{1.0f};
+    float playbackInc{1.0f};
+    uint32_t bars{4};
+    uint32_t clipRefId{0};
+    std::vector<ParamKV> trackParams{};
+};
+
+// Шаг секвенсора, который позже транслируется в RtCommand.
+struct PatternStepEvent {
+    uint32_t step{0};
+    uint8_t trackId{0};
+    int16_t slot{-1};
+    PatternStepOp op{PatternStepOp::Trigger};
+    uint16_t index{0};
+    float value{0.0f};
+};
+
+struct PatternState {
+    PatternId id{kInvalidPatternId};
+    PatternTransportSnapshot transport{};
+    uint32_t lengthInSteps{64};
+    uint16_t stepsPerBeat{4};
+    std::vector<PatternTrackSnapshot> tracks{};
+    std::vector<PatternStepEvent> events{};
+};
+
+struct PatternSwitchRequest {
+    PatternId target{kInvalidPatternId};
+    QuantizeMode quantize{QuantizeMode::Bar};
+};
+
+struct IPatternBank {
+    virtual ~IPatternBank() = default;
+    virtual std::size_t size() const noexcept = 0;
+    virtual bool contains(PatternId id) const noexcept = 0;
+    virtual bool get(PatternId id, PatternState& out) const = 0;
+    virtual bool put(const PatternState& state) = 0;
+    virtual bool erase(PatternId id) = 0;
+};
+
+struct IPatternScheduler {
+    virtual ~IPatternScheduler() = default;
+    virtual void requestSwitch(const PatternSwitchRequest& req) noexcept = 0; // control
+    virtual bool popReadySwitch(PatternId& outPatternId) noexcept = 0;        // RT
+    virtual void onTransport(const TransportRtSnapshot& transport) noexcept = 0; // RT
+};
+
+struct IRtCommandQueue;
+struct IPatternRuntimePlayer {
+    virtual ~IPatternRuntimePlayer() = default;
+    virtual void setActivePattern(const PatternState* pattern) noexcept = 0;
+    virtual void processBlock(const TransportRtSnapshot& transport,
+                              IRtCommandQueue& outRtQueue) noexcept = 0;
+};
+
+} // namespace avantgarde
+```
 
 ## 3) `IParameterized.h` — унификация параметров
 ```cpp
@@ -451,14 +547,22 @@ namespace avantgarde {
 // Команды RT‑ядра (используются в RtCommand.id)
 enum class CmdId : uint16_t {
     Play = 1,
-    Stop,
-    StopQuantized,
-    RecArm,
-    RecDisarm,
-    Overdub,
-    ParamSet,
-    Clear,
-    QuantizeMode
+    Stop = 2,
+    StopQuantized = 3,
+    RecArm = 4,
+    RecDisarm = 5,
+    Overdub = 6,
+    ParamSet = 7,
+    Clear = 8,
+    QuantizeMode = 9,
+    Continue = 10,
+    SetTempoBpm = 11,
+    SetTimeSig = 12,    // index=den, value=num
+    SetLoopRegion = 13, // hook: region payload
+    NoteOn = 14,        // index=key, value=velocity
+    NoteOff = 15,       // index=key
+    ClipTrigger = 16,   // index=clipId
+    NoteDetune = 17     // index=key, value=fine detune [-1..1]
 };
 
 // Темы сервисной шины (используются в EventBus.TopicId)

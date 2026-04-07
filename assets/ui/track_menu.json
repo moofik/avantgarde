@@ -1,0 +1,52 @@
+{
+  "id": "track_menu",
+  "layout": {
+    "type": "column",
+    "padding": 0,
+    "gap": 0,
+    "width": 60,
+    "height": 24,
+    "children": [
+      {
+        "type": "statusbar",
+        "id": "header_title",
+        "text": "TRACK MENU",
+        "bind": "status.scene.title",
+        "font": "gothic",
+        "font_size": 18,
+        "width": "100%"
+      },
+      {
+        "type": "separator",
+        "id": "sep_top",
+        "height": 1,
+        "width": "100%"
+      },
+      {
+        "type": "list",
+        "id": "menu_list",
+        "height": "auto",
+        "width": "100%"
+      },
+      {
+        "type": "separator",
+        "id": "sep_bottom",
+        "height": 1,
+        "width": "100%"
+      },
+      {
+        "type": "text",
+        "id": "action_status",
+        "bind": "status.action",
+        "width": "100%"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint",
+        "text": " keys [F5/F6 select] [F1 apply] [esc back] ",
+        "bind": "status.keys",
+        "width": "100%"
+      }
+    ]
+  }
+}

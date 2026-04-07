@@ -64,17 +64,13 @@ UiGesture TerminalUiInput::mapKey(char ch) noexcept {
         case 'q':
         case 'Q':
             return UiGesture::Quit;
-        case '1':
-            return UiGesture::SelectPrevTrack;
-        case '2':
-            return UiGesture::SelectNextTrack;
         case ',':
             return UiGesture::TrackPagePrev;
         case '.':
             return UiGesture::TrackPageNext;
         case 'm':
         case 'M':
-            return UiGesture::OpenManager;
+            return UiGesture::ToggleMetronome;
         case 'j':
         case 'J':
             return UiGesture::ListDown;
@@ -200,6 +196,7 @@ UiGesture TerminalUiInput::mapEscapeSequence(std::string_view seq) noexcept {
 
 bool TerminalUiInput::poll(UiGestureEvent& out) noexcept {
     out.action = UiGesture::None;
+    out.value = 0;
     if (!valid_) {
         return false;
     }
@@ -242,10 +239,31 @@ bool TerminalUiInput::poll(UiGestureEvent& out) noexcept {
             const UiGesture escAction = mapEscapeSequence(seq);
             if (escAction != UiGesture::None) {
                 out.action = escAction;
+                out.value = 0;
                 return true;
             }
         }
         out.action = UiGesture::BackScene;
+        out.value = 0;
+        return true;
+    }
+
+    // Прямой выбор трека: 1..4.
+    if (ch >= '1' && ch <= '4') {
+        out.action = UiGesture::SelectTrackDirect;
+        out.value = static_cast<int16_t>(ch - '0');
+        return true;
+    }
+    // Прямой выбор паттерна: Shift+1..4 => ! @ # $.
+    if (ch == '!' || ch == '@' || ch == '#' || ch == '$') {
+        out.action = UiGesture::SelectPatternDirect;
+        switch (ch) {
+            case '!': out.value = 1; break;
+            case '@': out.value = 2; break;
+            case '#': out.value = 3; break;
+            case '$': out.value = 4; break;
+            default: out.value = 0; break;
+        }
         return true;
     }
 
@@ -255,6 +273,7 @@ bool TerminalUiInput::poll(UiGestureEvent& out) noexcept {
     }
 
     out.action = action;
+    out.value = 0;
     return true;
 }
 

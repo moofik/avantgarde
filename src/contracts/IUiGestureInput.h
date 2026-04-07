@@ -10,6 +10,10 @@ namespace avantgarde {
 enum class UiGesture : uint8_t {
     None = 0,
     Quit,
+    // Прямой выбор трека (индекс/номер передается в UiGestureEvent::value).
+    SelectTrackDirect,
+    // Прямой выбор паттерна (номер паттерна передается в UiGestureEvent::value).
+    SelectPatternDirect,
     SelectPrevTrack,
     SelectNextTrack,
     TrackPagePrev,
@@ -35,6 +39,7 @@ enum class UiGesture : uint8_t {
     QuantBar,
     BpmUp,
     BpmDown,
+    ToggleMetronome,
 
     // Active Action Pointer controls (encoder-like model).
     ActionFocusPrev,
@@ -67,6 +72,8 @@ enum class UiGesture : uint8_t {
 
 struct UiGestureEvent {
     UiGesture action{UiGesture::None};
+    // Числовой payload для параметризованных жестов (например direct-select 1..N).
+    int16_t value{0};
 };
 
 struct IUiGestureInput {

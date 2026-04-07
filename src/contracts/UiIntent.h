@@ -37,6 +37,10 @@ enum class UiIntentType : uint8_t {
     SetTrackMuted,
     // Явная установка arm для трека (value: 0.0=off, 1.0=on).
     SetTrackArmed,
+    // Переключение "из коробки" режима трека:
+    // value: 1.0 = LOOPER, 0.0 = NOTE/SAMPLER.
+    // Под капотом это пресет нескольких трековых policy-параметров.
+    SetTrackLooperMode,
     // Явная установка speed/stretch для трека.
     SetTrackSpeed,
     // Явная установка режима квантизации транспорта
@@ -44,10 +48,18 @@ enum class UiIntentType : uint8_t {
     SetTransportQuant,
     // Явная установка BPM транспорта.
     SetTransportBpm,
+    // Включить/выключить метроном проекта (value: 1.0=on, 0.0=off).
+    SetMetronomeEnabled,
     // Детект BPM из сэмпла активного трека с учетом его speed и установка project BPM.
     DetectProjectBpmFromTrack,
     // Явная установка play/stop транспорта (value: 1.0=play, 0.0=stop).
     SetTransportPlaying,
+    // Запрос на switch к предыдущему паттерну (квантизация берется из транспорта).
+    SwitchPatternPrev,
+    // Запрос на switch к следующему паттерну (квантизация берется из транспорта).
+    SwitchPatternNext,
+    // Запрос на switch к конкретному паттерну (value = pattern id, 1..N).
+    SwitchPatternSet,
     // Intent-обертки над текущими transport/track действиями движка.
     EnginePlayTrack,
     EngineStopTrack,

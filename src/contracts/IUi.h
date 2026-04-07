@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "ITransport.h"
+#include "IPattern.h"
 
 namespace avantgarde {
 
@@ -15,12 +16,23 @@ enum class UiTrackState : uint8_t {
     Recording
 };
 
+// Упрощенный playback-режим трека для UI.
+// Детальные launch/stop policy остаются в engine-параметрах,
+// а UI в "из коробки" сценарии показывает только понятный toggle:
+// Looper <-> Note.
+enum class UiTrackPlaybackMode : uint8_t {
+    Looper = 0,
+    Note = 1
+};
+
 struct UiTransportState {
     bool playing{false};
     float bpm{120.0f};
     uint8_t tsNum{4};
     uint8_t tsDen{4};
     QuantizeMode quant{QuantizeMode::Bar};
+    // Флаг встроенного метронома (клик по сетке 1/16).
+    bool metronomeEnabled{false};
     uint8_t activeTrack{0};
     uint64_t sampleTime{0};
 };
@@ -35,6 +47,10 @@ struct UiTrackStateView {
     bool muted{false};
     // true = трек вооружен для записи/овerdub (для будущего record flow).
     bool armed{false};
+    // Основной режим трека:
+    // - Looper: длинные клипы/лупы, ignore-if-playing, manual-stop.
+    // - Note: note-driven playback, retrigger-on-note-on, stop-by-note-off.
+    UiTrackPlaybackMode playbackMode{UiTrackPlaybackMode::Looper};
     bool loop{false};
     uint8_t fxCount{0};
     // Канонические ID FX по слотам (слот 0 -> fxChainIds[0] и т.д.).
@@ -54,10 +70,24 @@ struct UiTelemetryState {
     bool rtQueueOverflow{false};
 };
 
+// Runtime-состояние pattern-подсистемы для UI.
+// Важно: это отдельный домен, не часть transport.
+struct UiPatternState {
+    // Текущий активный паттерн.
+    PatternId activeId{kInvalidPatternId};
+    // Целевой паттерн, ожидающий квантизированного switch.
+    PatternId pendingId{kInvalidPatternId};
+    // true, если switch заявлен и еще не применен.
+    bool armed{false};
+    // Количество паттернов в банке (для UI-индикации).
+    uint16_t bankSize{0};
+};
+
 struct UiState {
     UiTransportState transport{};
     std::vector<UiTrackStateView> tracks{};
     UiTelemetryState telemetry{};
+    UiPatternState pattern{};
 };
 
 struct IUiRenderer {

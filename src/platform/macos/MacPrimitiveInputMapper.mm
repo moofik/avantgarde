@@ -3,15 +3,20 @@
 namespace avantgarde::macos {
 namespace {
 
+UiGestureEvent makeEvent(UiGesture action, int16_t value = 0) noexcept {
+    UiGestureEvent ev{};
+    ev.action = action;
+    ev.value = value;
+    return ev;
+}
+
 UiGesture mapWindowKeyCode(unsigned short keyCode) noexcept {
     switch (keyCode) {
         case 53: return UiGesture::BackScene;       // Esc
         case 12: return UiGesture::Quit;            // Q
-        case 18: return UiGesture::SelectPrevTrack; // 1
-        case 19: return UiGesture::SelectNextTrack; // 2
         case 43: return UiGesture::TrackPagePrev;   // ,
         case 47: return UiGesture::TrackPageNext;   // .
-        case 46: return UiGesture::OpenManager;     // M
+        case 46: return UiGesture::ToggleMetronome; // M
         case 38: return UiGesture::ListDown;        // J
         case 40: return UiGesture::ListUp;          // K
         case 36: return UiGesture::ListEnter;       // Enter
@@ -54,76 +59,112 @@ UiGesture mapWindowKeyCode(unsigned short keyCode) noexcept {
     }
 }
 
-UiGesture mapWindowChars(NSString* chars) noexcept {
+UiGestureEvent mapDigitSelect(unsigned short keyCode, NSEventModifierFlags mods) noexcept {
+    const bool shift = (mods & NSEventModifierFlagShift) != 0;
+    switch (keyCode) {
+        case 18: return shift ? makeEvent(UiGesture::SelectPatternDirect, 1) : makeEvent(UiGesture::SelectTrackDirect, 1); // 1 / !
+        case 19: return shift ? makeEvent(UiGesture::SelectPatternDirect, 2) : makeEvent(UiGesture::SelectTrackDirect, 2); // 2 / @
+        case 20: return shift ? makeEvent(UiGesture::SelectPatternDirect, 3) : makeEvent(UiGesture::SelectTrackDirect, 3); // 3 / #
+        case 21: return shift ? makeEvent(UiGesture::SelectPatternDirect, 4) : makeEvent(UiGesture::SelectTrackDirect, 4); // 4 / $
+        default:
+            return makeEvent(UiGesture::None);
+    }
+}
+
+UiGestureEvent mapWindowChars(NSString* chars) noexcept {
     if (!chars || [chars length] == 0) {
-        return UiGesture::None;
+        return makeEvent(UiGesture::None);
     }
     const unichar ch = [chars characterAtIndex:0];
     switch (ch) {
-        case 27: return UiGesture::BackScene;
+        case 27: return makeEvent(UiGesture::BackScene);
         case '\r':
         case '\n':
-            return UiGesture::ListEnter;
+            return makeEvent(UiGesture::ListEnter);
         case 8:
         case 127:
-            return UiGesture::ListParent;
+            return makeEvent(UiGesture::ListParent);
         case ' ':
-            return UiGesture::PreviewPlay;
+            return makeEvent(UiGesture::PreviewPlay);
         case 'u':
         case 'U':
-            return UiGesture::UnmuteActiveTrack;
+            return makeEvent(UiGesture::UnmuteActiveTrack);
         case 'i':
         case 'I':
-            return UiGesture::MuteActiveTrack;
+            return makeEvent(UiGesture::MuteActiveTrack);
         case 't':
         case 'T':
-            return UiGesture::MuteToggleActiveTrack;
+            return makeEvent(UiGesture::MuteToggleActiveTrack);
         case 'r':
         case 'R':
-            return UiGesture::ArmToggleActiveTrack;
+            return makeEvent(UiGesture::ArmToggleActiveTrack);
         case ';':
-            return UiGesture::ActionFocusPrev;
+            return makeEvent(UiGesture::ActionFocusPrev);
         case '\'':
-            return UiGesture::ActionFocusNext;
+            return makeEvent(UiGesture::ActionFocusNext);
         case '/':
-            return UiGesture::ActionAdjustPrev;
+            return makeEvent(UiGesture::ActionAdjustPrev);
         case '?':
-            return UiGesture::ActionAdjustNext;
+            return makeEvent(UiGesture::ActionAdjustNext);
         case 'o':
         case 'O':
-            return UiGesture::ActionApply;
+            return makeEvent(UiGesture::ActionApply);
         case 'y':
         case 'Y':
-            return UiGesture::ActionUndo;
+            return makeEvent(UiGesture::ActionUndo);
         case ',':
-            return UiGesture::TrackPagePrev;
+            return makeEvent(UiGesture::TrackPagePrev);
         case '.':
-            return UiGesture::TrackPageNext;
+            return makeEvent(UiGesture::TrackPageNext);
+        case '1':
+            return makeEvent(UiGesture::SelectTrackDirect, 1);
+        case '2':
+            return makeEvent(UiGesture::SelectTrackDirect, 2);
+        case '3':
+            return makeEvent(UiGesture::SelectTrackDirect, 3);
+        case '4':
+            return makeEvent(UiGesture::SelectTrackDirect, 4);
+        case '!':
+            return makeEvent(UiGesture::SelectPatternDirect, 1);
+        case '@':
+            return makeEvent(UiGesture::SelectPatternDirect, 2);
+        case '#':
+            return makeEvent(UiGesture::SelectPatternDirect, 3);
+        case '$':
+            return makeEvent(UiGesture::SelectPatternDirect, 4);
         default:
-            return UiGesture::None;
+            return makeEvent(UiGesture::None);
     }
 }
 
 } // namespace
 
-UiGesture mapPrimitiveWindowEvent(NSEvent* event) noexcept {
+UiGestureEvent mapPrimitiveWindowEvent(NSEvent* event) noexcept {
     if (!event || [event type] != NSEventTypeKeyDown) {
-        return UiGesture::None;
+        return makeEvent(UiGesture::None);
     }
     // Особый кейс для '/' vs '?' (Shift+/).
     if ([event keyCode] == 44) {
         const NSEventModifierFlags mods =
             ([event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask);
         return (mods & NSEventModifierFlagShift)
-                   ? UiGesture::ActionAdjustNext
-                   : UiGesture::ActionAdjustPrev;
+                   ? makeEvent(UiGesture::ActionAdjustNext)
+                   : makeEvent(UiGesture::ActionAdjustPrev);
+    }
+    // Отдельная ветка для 1..4 vs Shift+1..4 (track/pattern select).
+    if ([event keyCode] >= 18 && [event keyCode] <= 21) {
+        const NSEventModifierFlags mods =
+            ([event modifierFlags] & NSEventModifierFlagDeviceIndependentFlagsMask);
+        const UiGestureEvent ev = mapDigitSelect([event keyCode], mods);
+        if (ev.action != UiGesture::None) {
+            return ev;
+        }
     }
     const UiGesture byKeyCode = mapWindowKeyCode([event keyCode]);
     if (byKeyCode != UiGesture::None) {
-        return byKeyCode;
+        return makeEvent(byKeyCode);
     }
     return mapWindowChars([event charactersIgnoringModifiers]);
 }
 
 } // namespace avantgarde::macos
-

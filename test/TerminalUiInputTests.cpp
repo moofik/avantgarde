@@ -6,8 +6,10 @@ using namespace avantgarde;
 
 TEST_CASE("TerminalUiInput: key mapping") {
     REQUIRE(TerminalUiInput::mapKey('q') == UiGesture::Quit);
-    REQUIRE(TerminalUiInput::mapKey('1') == UiGesture::SelectPrevTrack);
-    REQUIRE(TerminalUiInput::mapKey('2') == UiGesture::SelectNextTrack);
+    // 1..4 и Shift+1..4 обрабатываются в poll() как parameterized events (action + value),
+    // поэтому mapKey() для этих символов не должен возвращать жест напрямую.
+    REQUIRE(TerminalUiInput::mapKey('1') == UiGesture::None);
+    REQUIRE(TerminalUiInput::mapKey('2') == UiGesture::None);
     REQUIRE(TerminalUiInput::mapKey(',') == UiGesture::TrackPagePrev);
     REQUIRE(TerminalUiInput::mapKey('.') == UiGesture::TrackPageNext);
     REQUIRE(TerminalUiInput::mapKey('p') == UiGesture::PlayActiveTrack);
@@ -29,6 +31,7 @@ TEST_CASE("TerminalUiInput: key mapping") {
     REQUIRE(TerminalUiInput::mapKey('c') == UiGesture::QuantBar);
     REQUIRE(TerminalUiInput::mapKey(']') == UiGesture::BpmUp);
     REQUIRE(TerminalUiInput::mapKey('[') == UiGesture::BpmDown);
+    REQUIRE(TerminalUiInput::mapKey('m') == UiGesture::ToggleMetronome);
     REQUIRE(TerminalUiInput::mapKey('v') == UiGesture::None);
 }
 

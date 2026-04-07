@@ -14,6 +14,7 @@ class GlitchVisualFx final : public IVisualFx {
 public:
     std::string_view id() const noexcept override { return "glitch"; }
     VisualFxBlockStyle resolve(const VisualFxRequest& request) override;
+    bool applyRgba(VisualFxRgbaView& view, const VisualFxRequest& request) override;
 
 private:
     std::string buildStateKey_(const VisualFxRequest& request) const;
@@ -27,4 +28,3 @@ private:
 };
 
 } // namespace avantgarde
-

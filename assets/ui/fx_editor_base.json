@@ -1,0 +1,62 @@
+{
+  "id": "fx_editor",
+  "layout": {
+    "type": "column",
+    "padding": 0,
+    "gap": 0,
+    "width": 60,
+    "height": 24,
+    "children": [
+      {
+        "type": "statusbar",
+        "id": "header_title",
+        "text": "FX EDITOR",
+        "bind": "status.scene.title",
+        "font": "gothic",
+        "font_size": 18,
+        "width": "100%"
+      },
+      {
+        "type": "separator",
+        "id": "sep_top",
+        "height": 1,
+        "width": "100%"
+      },
+      {
+        "type": "fx_editor_view",
+        "id": "fx_view",
+        "height": "auto",
+        "width": "100%",
+        "gap": 1,
+        "children": [
+          {
+            "type": "column",
+            "id": "fx_body",
+            "width": "100%",
+            "height": "auto",
+            "gap": 1
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "id": "sep_bottom",
+        "height": 1,
+        "width": "100%"
+      },
+      {
+        "type": "text",
+        "id": "action_status",
+        "bind": "status.action",
+        "width": "100%"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint",
+        "text": " keys [F5/F6 param] [F7/F8 value] [F1 bypass] [esc] ",
+        "bind": "status.keys",
+        "width": "100%"
+      }
+    ]
+  }
+}

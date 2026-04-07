@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -65,7 +66,9 @@ private:
     // Один UI render-pass: telemetry + scene render + backend draw.
     void renderUiOnce_();
     // Обработка одного UI-жеста (клавиша/энкодер/кнопка).
-    bool handleGesture_(UiGesture action);
+    bool handleGesture_(const UiGestureEvent& ev);
+    // Обновить pattern-состояние в UiStateStore из engine-слоя.
+    void syncPatternStateToUi_();
 
     // Аудио/RT слой.
     SamplerEngineLayer engine_{};

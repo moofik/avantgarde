@@ -331,6 +331,45 @@ std::vector<std::string> splitPath(std::string_view path) {
     return out;
 }
 
+std::vector<std::string> splitEffectList(std::string_view raw) {
+    std::vector<std::string> out{};
+    std::string token{};
+    auto flush = [&]() {
+        std::string trimmed = trim(token);
+        token.clear();
+        if (trimmed.empty()) {
+            return;
+        }
+        std::transform(trimmed.begin(), trimmed.end(), trimmed.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if (std::find(out.begin(), out.end(), trimmed) == out.end()) {
+            out.push_back(std::move(trimmed));
+        }
+    };
+
+    for (char c : raw) {
+        const bool isSplit = (c == ',' || c == ';' || c == '|' || c == '+' ||
+                              c == ' ' || c == '\t' || c == '\n' || c == '\r');
+        if (isSplit) {
+            flush();
+            continue;
+        }
+        token.push_back(c);
+    }
+    flush();
+    return out;
+}
+
+void ensureLegacyTomlEffect(UiLayoutNode& node) {
+    if (!node.effects.empty()) {
+        return;
+    }
+    UiLayoutNode::EffectSpec fx{};
+    fx.type = "glitch";
+    node.effects.push_back(std::move(fx));
+}
+
 bool parseHeader(std::string_view line, bool& isArrayHeader, std::vector<std::string>& pathOut) {
     const std::string v = trim(line);
     if (v.size() < 3U || v.front() != '[' || v.back() != ']') {
@@ -413,16 +452,46 @@ bool applyNodeProperty(UiLayoutNode& node,
         return true;
     }
     if (key == "effect") {
-        if (!parseQuotedString(value, node.effect)) {
+        std::string rawEffects{};
+        if (!parseQuotedString(value, rawEffects)) {
             errorOut = "line " + std::to_string(lineNo) + ": effect expects quoted string";
             return false;
+        }
+        const std::vector<std::string> effects = splitEffectList(rawEffects);
+        if (effects.empty()) {
+            errorOut = "line " + std::to_string(lineNo) + ": effect expects non-empty value";
+            return false;
+        }
+        node.effects.clear();
+        node.effects.reserve(effects.size());
+        for (const std::string& effectId : effects) {
+            UiLayoutNode::EffectSpec fx{};
+            fx.type = effectId;
+            node.effects.push_back(std::move(fx));
         }
         return true;
     }
     if (key == "effect_trigger") {
-        if (!parseQuotedString(value, node.effectTrigger)) {
+        std::string trigger{};
+        if (!parseQuotedString(value, trigger)) {
             errorOut = "line " + std::to_string(lineNo) + ": effect_trigger expects quoted string";
             return false;
+        }
+        ensureLegacyTomlEffect(node);
+        for (UiLayoutNode::EffectSpec& fx : node.effects) {
+            fx.effectTrigger = trigger;
+        }
+        return true;
+    }
+    if (key == "effect_transition") {
+        std::string transition{};
+        if (!parseQuotedString(value, transition)) {
+            errorOut = "line " + std::to_string(lineNo) + ": effect_transition expects quoted string";
+            return false;
+        }
+        ensureLegacyTomlEffect(node);
+        for (UiLayoutNode::EffectSpec& fx : node.effects) {
+            fx.effectTransition = transition;
         }
         return true;
     }
@@ -433,7 +502,10 @@ bool applyNodeProperty(UiLayoutNode& node,
                        ": effect_trigger_out expects duration (e.g. \"1s\", \"750ms\", 1000)";
             return false;
         }
-        node.effectTriggerOutMs = outMs;
+        ensureLegacyTomlEffect(node);
+        for (UiLayoutNode::EffectSpec& fx : node.effects) {
+            fx.effectTriggerOutMs = outMs;
+        }
         return true;
     }
     if (key == "effect_interval_ms") {
@@ -442,7 +514,10 @@ bool applyNodeProperty(UiLayoutNode& node,
             errorOut = "line " + std::to_string(lineNo) + ": effect_interval_ms expects integer";
             return false;
         }
-        node.effectIntervalMs = ms;
+        ensureLegacyTomlEffect(node);
+        for (UiLayoutNode::EffectSpec& fx : node.effects) {
+            fx.effectIntervalMs = ms;
+        }
         return true;
     }
     if (key == "effect_amount") {
@@ -451,7 +526,10 @@ bool applyNodeProperty(UiLayoutNode& node,
             errorOut = "line " + std::to_string(lineNo) + ": effect_amount expects float";
             return false;
         }
-        node.effectAmount = amount;
+        ensureLegacyTomlEffect(node);
+        for (UiLayoutNode::EffectSpec& fx : node.effects) {
+            fx.effectAmount = amount;
+        }
         return true;
     }
     if (key == "effect_speed") {
@@ -460,7 +538,10 @@ bool applyNodeProperty(UiLayoutNode& node,
             errorOut = "line " + std::to_string(lineNo) + ": effect_speed expects float";
             return false;
         }
-        node.effectSpeed = speed;
+        ensureLegacyTomlEffect(node);
+        for (UiLayoutNode::EffectSpec& fx : node.effects) {
+            fx.effectSpeed = speed;
+        }
         return true;
     }
     if (key == "bind") {

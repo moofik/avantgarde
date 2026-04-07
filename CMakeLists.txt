@@ -83,6 +83,7 @@ add_executable(avantgarde
         ${CMAKE_SOURCE_DIR}/src/app/SamplerApplication.cpp
         ${CMAKE_SOURCE_DIR}/src/app/UiIntentApplier.cpp
         ${CMAKE_SOURCE_DIR}/src/app/HistoryTransactionManager.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/SamplerEnginePatternApplyTarget.cpp
         ${CMAKE_SOURCE_DIR}/src/app/SamplerEngineLayer.cpp
         ${CMAKE_SOURCE_DIR}/src/app/SamplerIoLayer.cpp
         src/module/GainSlewModule.cpp)

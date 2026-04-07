@@ -254,7 +254,7 @@ namespace avantgarde {
 // - 1 slot
 // - user-track режим: follow global transport + mute/arm
 // - preview режим: one-shot gate через CmdId::Play/CmdId::Stop
-// - gain/loop/speed/mute/arm/followTransport via ParamSet (TrackParamId)
+// - gain/loop/speed/mute/arm/followTransport/mode/policies via ParamSet (TrackParamId)
 // ============================================================
 
     class ClipTrackImpl final : public IClipTrack {
@@ -303,6 +303,12 @@ namespace avantgarde {
                     return playbackRt_.armed ? 1.0f : 0.0f;
                 case TrackParamId::FollowTransportEnabled:
                     return playbackRt_.followTransport ? 1.0f : 0.0f;
+                case TrackParamId::PlaybackMode:
+                    return static_cast<float>(static_cast<uint8_t>(playbackRt_.playbackMode));
+                case TrackParamId::LaunchPolicy:
+                    return static_cast<float>(static_cast<uint8_t>(playbackRt_.launchPolicy));
+                case TrackParamId::StopPolicy:
+                    return static_cast<float>(static_cast<uint8_t>(playbackRt_.stopPolicy));
                 default:
                     return 0.0f;
             }
@@ -348,6 +354,9 @@ namespace avantgarde {
             const ClipBuffer* clip = playbackRt_.clip;
             if (!clip || clip->frames <= 0 || !out0) return;
 
+            // Единая точка решения "рендерим ли звук в этом блоке":
+            // - followTransport=true  -> живем по глобальному transport.playing;
+            // - followTransport=false -> живем по локальному one-shot gate.
             const bool runGate = playbackRt_.followTransport ? playbackRt_.transportRunning : playbackRt_.oneshotRunning;
             if (!runGate) return;
             const bool muted = playbackRt_.muted;
@@ -359,6 +368,7 @@ namespace avantgarde {
             const int len = clip->frames;
             const double lenD = static_cast<double>(len);
             const float g = playbackRt_.gain;
+            // loop управляет поведением на конце клипа: wrap или стоп.
             const bool loop = playbackRt_.loop;
             // Базовый шаг по исходному клипу:
             // 1) компенсация sample rate clip -> output (иначе 44.1k клип в 48k host звучит быстрее);
@@ -368,7 +378,13 @@ namespace avantgarde {
                     (clip->sampleRate > 0 && outputSampleRate_ > 1.0)
                     ? (static_cast<double>(clip->sampleRate) / outputSampleRate_)
                     : 1.0;
-            const double inc = std::max(1e-6, clipToOutRate * speed);
+            // Fine detune применяется только в note-режиме:
+            // noteDetuneNorm [-1..1] -> +/-1 полутон.
+            const double detuneRatio =
+                (playbackRt_.playbackMode == TrackPlaybackModeValue::Note)
+                    ? std::exp2(static_cast<double>(playbackRt_.noteDetuneNorm) / 12.0)
+                    : 1.0;
+            const double inc = std::max(1e-6, clipToOutRate * speed * detuneRatio);
 
             const bool hasEnabledFx =
                 !modules_.empty() &&
@@ -385,6 +401,8 @@ namespace avantgarde {
 
             std::size_t offset = 0;
             while (offset < ctx.nframes &&
+                   // Внутри блока followTransport значит "продолжаем до конца блока",
+                   // а в one-shot режиме можем выйти раньше, когда gate погаснет.
                    (playbackRt_.followTransport || playbackRt_.oneshotRunning)) {
                 const std::size_t chunk = std::min(kFxScratchFrames, ctx.nframes - offset);
                 const std::size_t produced = renderClipChunk_(chunk, c0, c1, len, lenD, loop, g, inc, ph);
@@ -467,32 +485,79 @@ namespace avantgarde {
             switch (cid) {
                 case CmdId::Play: {
                     if (cmd.track == kRtTrackGlobal) {
+                        // Global Play управляет только transportRunning.
+                        // Фактический запуск трека решится в process() через runGate.
                         playbackRt_.transportRunning = true;
                         break;
                     }
                     if (playbackRt_.followTransport) {
+                        // В follow-режиме локальный Play для трека игнорируем:
+                        // трек стартует/стопится только глобальным transport.
                         break;
                     }
                     const uint32_t clipSlot = (cmd.slot < 0) ? 0u : static_cast<uint32_t>(cmd.slot);
                     if (clipSlot != 0u) break;
-                    if (playbackRt_.clip && playbackRt_.clip->frames > 0) {
-                        playbackRt_.playhead = 0.0;
-                        playbackRt_.oneshotRunning = true;
-                    }
+                    triggerPlaybackRt_();
                 } break;
 
                 case CmdId::Stop: {
                     if (cmd.track == kRtTrackGlobal) {
+                        // Global Stop гасит transport-running gate для follow-режима.
                         playbackRt_.transportRunning = false;
                         break;
                     }
                     if (playbackRt_.followTransport) {
+                        // В follow-режиме локальный Stop не применяется.
                         break;
                     }
                     const uint32_t clipSlot = (cmd.slot < 0) ? 0u : static_cast<uint32_t>(cmd.slot);
                     if (clipSlot != 0u) break;
                     playbackRt_.oneshotRunning = false;
                     playbackRt_.playhead = 0.0;
+                    playbackRt_.noteHeld = false;
+                    playbackRt_.noteDetuneNorm = 0.0f;
+                } break;
+
+                case CmdId::NoteOn: {
+                    if (cmd.track == kRtTrackGlobal) {
+                        break;
+                    }
+                    playbackRt_.activeNote = cmd.index;
+                    playbackRt_.noteHeld = true; // понадобится при stopPolicy=ByNoteOff
+                    // NoteOn запускает проигрывание только при one-shot gate режиме.
+                    // В follow-transport режиме трек живет по global transport.playing.
+                    if (!playbackRt_.followTransport) {
+                        triggerPlaybackRt_();
+                    }
+                } break;
+
+                case CmdId::NoteOff: {
+                    if (cmd.track == kRtTrackGlobal) {
+                        break;
+                    }
+                    // Защита от "чужого" NoteOff:
+                    // останавливаемся только если отпускание пришло для activeNote.
+                    const bool sameNote = (playbackRt_.activeNote == cmd.index);
+                    if (!sameNote) {
+                        break;
+                    }
+                    playbackRt_.noteHeld = false;
+                    // В note-режиме политика ByNoteOff разрешает гасить one-shot gate
+                    // прямо по отпусканию клавиши.
+                    if (playbackRt_.playbackMode == TrackPlaybackModeValue::Note &&
+                        playbackRt_.stopPolicy == TrackStopPolicyValue::ByNoteOff &&
+                        !playbackRt_.followTransport) {
+                        playbackRt_.oneshotRunning = false;
+                        playbackRt_.playhead = 0.0;
+                    }
+                } break;
+
+                case CmdId::NoteDetune: {
+                    if (cmd.track == kRtTrackGlobal) {
+                        break;
+                    }
+                    // Detune храним как RT-state; сам pitch-factor применяется в process().
+                    playbackRt_.noteDetuneNorm = detail_interp::clampf(cmd.value, -1.0f, 1.0f);
                 } break;
 
                 case CmdId::ParamSet: {
@@ -516,6 +581,8 @@ namespace avantgarde {
                     const float bpm = detail_interp::clampf(cmd.value, 20.0f, 300.0f);
                     playbackRt_.transportBpm = bpm;
                     if (playbackRt_.stretchToBars) {
+                        // В авто-режиме скорость клипа зависит от BPM,
+                        // поэтому на изменение темпа пересчитываем playbackInc.
                         playbackRt_.playbackInc = computeAutoPlaybackIncRt_();
                     }
                 } break;
@@ -526,6 +593,7 @@ namespace avantgarde {
                     playbackRt_.transportTsNum = num;
                     playbackRt_.transportTsDen = den;
                     if (playbackRt_.stretchToBars) {
+                        // Аналогично: размер такта влияет на target длительность в барах.
                         playbackRt_.playbackInc = computeAutoPlaybackIncRt_();
                     }
                 } break;
@@ -542,6 +610,9 @@ namespace avantgarde {
                 case CmdId::Clear:
                 case CmdId::StopQuantized:
                 case CmdId::QuantizeMode:
+                case CmdId::ClipTrigger:
+                case CmdId::SetLoopRegion:
+                case CmdId::Continue:
                 default:
                     // MVP: не реализуем, но не падаем
                     break;
@@ -564,19 +635,36 @@ namespace avantgarde {
             b->sampleRate = sr;
             b->channels   = ch;
             b->frames     = frames;
-            b->ch0        = std::move(c0);
-            b->ch1        = std::move(c1);
-            b->ch[0]      = b->ch0.get();
-            b->ch[1]      = (ch == 2) ? b->ch1.get() : nullptr;
-
-            // Контракт: если слот был в воспроизведении, реализация должна безопасно остановить.
-            // Мы останавливаем RT на границе блока через pendingPublish_.
-            publishClip_(std::move(b));
-            for (auto& mod : modules_) {
-                mod->init(moduleSampleRate_, kFxScratchFrames);
-                mod->reset();
+            b->ch0Shared  = std::shared_ptr<const float[]>(c0.release(), std::default_delete<float[]>());
+            b->ch1Shared  = (ch == 2)
+                            ? std::shared_ptr<const float[]>(c1.release(), std::default_delete<float[]>())
+                            : std::shared_ptr<const float[]>{};
+            b->ch[0]      = b->ch0Shared.get();
+            b->ch[1]      = (ch == 2) ? b->ch1Shared.get() : nullptr;
+            if (!b->ch[0] || (ch == 2 && !b->ch[1])) {
+                return false;
             }
-            return true;
+
+            return publishClipAndResetFx_(std::move(b));
+        }
+
+        bool loadSlotFromBuffer(uint32_t slot, const SharedClipBuffer& buffer) override {
+            if (slot != 0u) return false;
+            if (!buffer.valid()) return false;
+
+            auto b = std::make_shared<ClipBuffer>();
+            b->sampleRate = buffer.sampleRate;
+            b->channels = buffer.channels;
+            b->frames = buffer.frames;
+            b->ch0Shared = buffer.ch0;
+            b->ch1Shared = buffer.ch1;
+            b->ch[0] = b->ch0Shared.get();
+            b->ch[1] = (buffer.channels == 2) ? b->ch1Shared.get() : nullptr;
+            if (!b->ch[0] || (buffer.channels == 2 && !b->ch[1])) {
+                return false;
+            }
+
+            return publishClipAndResetFx_(std::move(b));
         }
 
         bool clearSlot(uint32_t slot) override {
@@ -633,6 +721,7 @@ namespace avantgarde {
                     if (playbackRt_.followTransport) {
                         ph = lenD;
                     } else {
+                        // В one-shot режиме конец клипа автоматически гасит local gate.
                         playbackRt_.oneshotRunning = false;
                         ph = 0.0;
                     }
@@ -656,27 +745,95 @@ namespace avantgarde {
             int channels = 0; // 1 or 2
             int frames   = 0;
 
-            std::unique_ptr<float[]> ch0;
-            std::unique_ptr<float[]> ch1;
+            // Разделяемое владение каналами позволяет быстро переключать клипы
+            // между треками/паттернами без повторного декодирования и копирования.
+            std::shared_ptr<const float[]> ch0Shared;
+            std::shared_ptr<const float[]> ch1Shared;
             const float* ch[2] = {nullptr, nullptr};
         };
 
         struct ClipPlaybackRtState {
+            // Текущий клип, с которым работает RT-поток.
+            // Указатель живет, пока control-side держит clipCtl_.
             const ClipBuffer* clip = nullptr;
+            // Текущая позиция чтения внутри клипа (в исходных сэмплах клипа).
+            // Продвигается в process(), сбрасывается при stop/retrigger/смене клипа.
             double playhead = 0.0;
+            // Базовый шаг чтения клипа (скорость), без учета noteDetune.
+            // 1.0 = исходная скорость, 2.0 = в 2 раза быстрее, 0.5 = в 2 раза медленнее.
             float playbackInc = 1.0f;
+            // Последний известный BPM транспорта (RT-копия).
+            // Используется при auto stretch-to-bars.
             float transportBpm = 120.0f;
+            // Последний известный размер такта (числитель).
             uint8_t transportTsNum = 4;
+            // Последний известный размер такта (знаменатель).
             uint8_t transportTsDen = 4;
+            // Режим автоматического пересчета playbackInc под target bars.
             bool stretchToBars = false;
-            float gain = 1.0f;     // normalized 0..1 (MVP)
+            // Линейный трековый gain [0..1] перед FX-цепочкой.
+            float gain = 1.0f;
+            // Mute-гейт: если true, в master ничего не пишем, но фаза не останавливается.
             bool muted = false;
+            // Arm-флаг трека (используется записью/овердабом).
             bool armed = false;
+            // Источник run-state:
+            // true  -> трек подчиняется transportRunning (global transport),
+            // false -> трек подчиняется oneshotRunning (локальный gate).
             bool followTransport = false;
+            // RT-копия глобального transport.playing.
             bool transportRunning = false;
+            // Локальный one-shot gate для режимов без followTransport.
             bool oneshotRunning = false;
+            // Флаг loop-поведения на конце клипа.
             bool loop = false;
+            // Режим проигрывания трека (Looper/Note).
+            TrackPlaybackModeValue playbackMode = TrackPlaybackModeValue::Looper;
+            // Политика реакции на новый trigger/note-on.
+            TrackLaunchPolicyValue launchPolicy = TrackLaunchPolicyValue::IgnoreIfPlaying;
+            // Политика остановки в note-driven режиме.
+            TrackStopPolicyValue stopPolicy = TrackStopPolicyValue::ManualStop;
+            // Нота, которую считаем "активной" для сверки NoteOff.
+            uint16_t activeNote = 0;
+            // Признак, что активная нота удерживается (NoteOn был, NoteOff еще не пришел).
+            bool noteHeld = false;
+            // Тонкая подстройка высоты для активной ноты, диапазон [-1..1] (~ +/-1 полутон).
+            float noteDetuneNorm = 0.0f;
         };
+
+        static TrackPlaybackModeValue parseTrackMode_(float value) noexcept {
+            const int v = static_cast<int>(std::lround(value));
+            return (v <= 0) ? TrackPlaybackModeValue::Looper : TrackPlaybackModeValue::Note;
+        }
+
+        static TrackLaunchPolicyValue parseLaunchPolicy_(float value) noexcept {
+            const int v = static_cast<int>(std::lround(value));
+            return (v <= 0) ? TrackLaunchPolicyValue::IgnoreIfPlaying : TrackLaunchPolicyValue::RetriggerOnNoteOn;
+        }
+
+        static TrackStopPolicyValue parseStopPolicy_(float value) noexcept {
+            const int v = static_cast<int>(std::lround(value));
+            return (v <= 0) ? TrackStopPolicyValue::ManualStop : TrackStopPolicyValue::ByNoteOff;
+        }
+
+        // Унифицированный запуск one-shot playback по trigger/note-on.
+        // Поведение зависит от launchPolicy:
+        // - IgnoreIfPlaying: если трек уже играет, новый trigger игнорируем;
+        // - RetriggerOnNoteOn: каждый trigger стартует с начала клипа.
+        void triggerPlaybackRt_() noexcept {
+            if (!playbackRt_.clip || playbackRt_.clip->frames <= 0) {
+                return;
+            }
+            if (playbackRt_.launchPolicy == TrackLaunchPolicyValue::IgnoreIfPlaying &&
+                playbackRt_.oneshotRunning) {
+                // Политика IgnoreIfPlaying: повторный trigger во время проигрывания
+                // не сбрасывает playhead и не перезапускает gate.
+                return;
+            }
+            // Retrigger / первичный старт: начинаем клип с нуля.
+            playbackRt_.playhead = 0.0;
+            playbackRt_.oneshotRunning = true;
+        }
 
     private:
         static const ParamMeta& trackNoMeta_() {
@@ -690,14 +847,17 @@ namespace avantgarde {
             return kNoMeta;
         }
 
-        static const std::array<ParamMeta, 6>& trackParamMeta_() {
-            static const std::array<ParamMeta, 6> kMeta{{
+        static const std::array<ParamMeta, 9>& trackParamMeta_() {
+            static const std::array<ParamMeta, 9> kMeta{{
                 ParamMeta{.name = "track.gain", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "norm"},
                 ParamMeta{.name = "track.loop", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
                 ParamMeta{.name = "track.playback_inc", .minValue = 0.05f, .maxValue = 8.0f, .logarithmic = false, .unit = "ratio"},
                 ParamMeta{.name = "track.mute", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
                 ParamMeta{.name = "track.arm", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
                 ParamMeta{.name = "track.follow_transport", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
+                ParamMeta{.name = "track.playback_mode", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "enum"},
+                ParamMeta{.name = "track.launch_policy", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "enum"},
+                ParamMeta{.name = "track.stop_policy", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "enum"},
             }};
             return kMeta;
         }
@@ -713,6 +873,7 @@ namespace avantgarde {
                     break;
                 case TrackParamId::PlaybackInc:
                     playbackRt_.playbackInc = detail_interp::clampf(value, 0.05f, 8.0f);
+                    // Явная ручная скорость отключает авто-режим stretch-to-bars.
                     playbackRt_.stretchToBars = false;
                     break;
                 case TrackParamId::MuteEnabled:
@@ -727,9 +888,23 @@ namespace avantgarde {
                     const bool followTransport = (value >= 0.5f);
                     playbackRt_.followTransport = followTransport;
                     if (followTransport) {
+                        // При переходе в transport-follow локальный one-shot gate
+                        // обязан быть очищен, чтобы не было двойного источника run-state.
                         playbackRt_.oneshotRunning = false;
                     }
                 } break;
+                case TrackParamId::PlaybackMode: {
+                    playbackRt_.playbackMode = parseTrackMode_(value);
+                    // При смене режима сбрасываем note-state, чтобы избежать "залипших" нот.
+                    playbackRt_.noteHeld = false;
+                    playbackRt_.noteDetuneNorm = 0.0f;
+                } break;
+                case TrackParamId::LaunchPolicy:
+                    playbackRt_.launchPolicy = parseLaunchPolicy_(value);
+                    break;
+                case TrackParamId::StopPolicy:
+                    playbackRt_.stopPolicy = parseStopPolicy_(value);
+                    break;
                 default:
                     break;
             }
@@ -777,6 +952,30 @@ namespace avantgarde {
             return detail_interp::clampf(inc, 0.05f, 8.0f);
         }
 
+        bool publishClipAndResetFx_(std::shared_ptr<ClipBuffer>&& b) {
+            if (!b || b->frames <= 0 || b->sampleRate <= 0 || !b->ch[0]) {
+                return false;
+            }
+            if (b->channels != 1 && b->channels != 2) {
+                return false;
+            }
+            if (b->channels == 2 && !b->ch[1]) {
+                return false;
+            }
+
+            // Контракт: если слот был в воспроизведении, реализация должна безопасно остановить.
+            // Мы публикуем новый клип атомарно на границе блока через pendingClip_.
+            publishClip_(std::move(b));
+
+            // Переинициализируем FX-блоки вне RT для детерминированного состояния
+            // после смены исходного клипа.
+            for (auto& mod : modules_) {
+                mod->init(moduleSampleRate_, kFxScratchFrames);
+                mod->reset();
+            }
+            return true;
+        }
+
         void publishClip_(std::shared_ptr<ClipBuffer>&& b) {
             // control thread only
             clipCtl_ = std::move(b);
@@ -790,6 +989,7 @@ namespace avantgarde {
             // Apply pending clear
             if (pendingClear_.exchange(false, std::memory_order_acq_rel)) {
                 playbackRt_.clip = nullptr;
+                // Любая clear-операция должна безусловно погасить локальное проигрывание.
                 playbackRt_.oneshotRunning = false;
                 playbackRt_.playhead = 0.0;
             }
@@ -812,6 +1012,8 @@ namespace avantgarde {
             if (stretchMode == 0) {
                 playbackRt_.stretchToBars = false;
             } else if (stretchMode == 1) {
+                // Включение stretch режима само по себе не меняет inc мгновенно:
+                // пересчет делаем внизу по stretchRecalc/clipChanged.
                 playbackRt_.stretchToBars = true;
             }
 

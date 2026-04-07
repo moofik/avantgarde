@@ -153,6 +153,7 @@ bool SamplerIoLayer::InputEventQueue::tryPop(UiGestureEvent& out) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (queue_.empty()) {
         out.action = UiGesture::None;
+        out.value = 0;
         return false;
     }
     out = queue_.front();

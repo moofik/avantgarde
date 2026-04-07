@@ -25,7 +25,8 @@ namespace avantgarde {
         SetLoopRegion = 13, // index=start(lo16), value=end
         NoteOn        = 14, // track, index=key, value=vel
         NoteOff       = 15, // track, index=key
-        ClipTrigger   = 16  // track, index=clipId
+        ClipTrigger   = 16, // track, index=clipId
+        NoteDetune    = 17  // track, index=key, value=fine detune [-1..1]
     };
 
     // Базовые значения wire-протокола RtCommand.
@@ -36,8 +37,16 @@ namespace avantgarde {
     constexpr float kRtValueOff = 0.0f;
     constexpr float kRtValueOn = 1.0f;
     constexpr uint16_t kRtQuantizeModeIndex = kRtIndexUnused;
+    constexpr uint16_t kRtMidiNoteMin = 0;
+    constexpr uint16_t kRtMidiNoteMax = 127;
 
     // Индексы параметров трека для CmdId::ParamSet при slot = kRtSlotTrackParams.
+    //
+    // ВАЖНО про режимы:
+    // - TrackMode/LaunchPolicy/StopPolicy хранят "сырой policy-state" трека.
+    // - UI-кнопка LOOPER не обязана вручную крутить каждый параметр:
+    //   она применяет заранее заданный пресет политик (см. SamplerEngineLayer::setTrackLooperMode()).
+    // - Продвинутый пользовательский тюнинг может менять параметры по отдельности.
     enum class TrackParamId : uint16_t {
         Gain01 = 0,
         LoopEnabled = 1,
@@ -49,7 +58,37 @@ namespace avantgarde {
         // Режим запуска:
         // 1.0 = follow global transport.playing
         // 0.0 = one-shot gate через CmdId::Play/CmdId::Stop (preview voice)
-        FollowTransportEnabled = 5
+        FollowTransportEnabled = 5,
+        // Трековый playback mode (см. TrackPlaybackModeValue).
+        PlaybackMode = 6,
+        // Политика реакции на новые trigger/note-on во время уже активного проигрывания.
+        LaunchPolicy = 7,
+        // Политика остановки трека в режиме note-driven playback.
+        StopPolicy = 8
+    };
+
+    // Track playback mode:
+    // - Looper: трек ориентирован на loop/клиповый playback.
+    // - Note: трек ориентирован на note/step playback.
+    enum class TrackPlaybackModeValue : uint8_t {
+        Looper = 0,
+        Note = 1
+    };
+
+    // Политика старта при новом trigger/note-on:
+    // - IgnoreIfPlaying: если уже играет, новый trigger игнорируется.
+    // - RetriggerOnNoteOn: новый trigger сбрасывает playhead в начало.
+    enum class TrackLaunchPolicyValue : uint8_t {
+        IgnoreIfPlaying = 0,
+        RetriggerOnNoteOn = 1
+    };
+
+    // Политика остановки:
+    // - ManualStop: останавливаем только явной командой stop.
+    // - ByNoteOff: в note-режиме останавливаем по note-off активной ноты.
+    enum class TrackStopPolicyValue : uint8_t {
+        ManualStop = 0,
+        ByNoteOff = 1
     };
 
     // Индексы параметров транспорта для IParameterized-поверхности global target:
@@ -99,6 +138,18 @@ namespace avantgarde {
 
     constexpr uint16_t toParamIndex(TrackParamId id) noexcept {
         return static_cast<uint16_t>(id);
+    }
+
+    constexpr float toParamValue(TrackPlaybackModeValue v) noexcept {
+        return static_cast<float>(static_cast<uint8_t>(v));
+    }
+
+    constexpr float toParamValue(TrackLaunchPolicyValue v) noexcept {
+        return static_cast<float>(static_cast<uint8_t>(v));
+    }
+
+    constexpr float toParamValue(TrackStopPolicyValue v) noexcept {
+        return static_cast<float>(static_cast<uint8_t>(v));
     }
 
     constexpr uint16_t toParamIndex(TransportParamId id) noexcept {
@@ -159,6 +210,7 @@ namespace avantgarde {
             case CmdId::NoteOn:         return "note_on";
             case CmdId::NoteOff:        return "note_off";
             case CmdId::ClipTrigger:    return "clip_trigger";
+            case CmdId::NoteDetune:     return "note_detune";
             default:                    return "";
         }
     }
@@ -183,6 +235,7 @@ namespace avantgarde {
         if (s == "note_on")          return NoteOn;
         if (s == "note_off")         return NoteOff;
         if (s == "clip_trigger")     return ClipTrigger;
+        if (s == "note_detune")      return NoteDetune;
         return CmdId{}; // 0 = unknown
     }
 } // namespace avantgarde

@@ -55,6 +55,7 @@ std::vector<UiBindOption> tracksKnobCatalog() {
         {"bpm", "transport.bpm", "Темп транспорта"},
         {"speed", "track.selected.speed", "Скорость выбранного трека"},
         {"gain", "track.selected.gain", "Громкость выбранного трека"},
+        {"looper", "track.selected.looper_mode", "Режим LOOPER выбранного трека (0/1)"},
     };
 }
 
@@ -247,7 +248,7 @@ UiBindResolution resolveTracksKnob(std::string_view key) {
     }
 
     out.ok = false;
-    out.error = "Unknown Tracks knob bind. Expected aliases like bpm/speed/gain.";
+    out.error = "Unknown Tracks bind. Expected aliases like bpm/speed/gain/looper.";
     return out;
 }
 

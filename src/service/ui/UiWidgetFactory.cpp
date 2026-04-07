@@ -5,15 +5,17 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "service/ui/FxEditorWidget.h"
 #include "service/ui/FxListWidget.h"
+#include "service/ui/UiLayoutJsonLoader.h"
 #include "service/ui/ManagerWidget.h"
 #include "service/ui/TrackContextMenuWidget.h"
 #include "service/ui/TracksWidget.h"
-#include "service/ui/UiLayoutTomlLoader.h"
 
 namespace avantgarde {
 namespace {
@@ -23,12 +25,6 @@ UiLayoutTemplate loadTemplateOrThrow(const UiWidgetFactoryOptions& options,
     if (fileName.empty()) {
         throw std::runtime_error("UiWidgetFactory: empty layout file name");
     }
-    if (!options.enableTomlLayouts) {
-        const std::string msg = "UiWidgetFactory: TOML layouts are disabled, strict UI requires enabled layouts";
-        std::fprintf(stderr, "[UI][LAYOUT][ERROR] %s\n", msg.c_str());
-        throw std::runtime_error(msg);
-    }
-
     std::string diagnostics{};
     for (const std::string& root : options.layoutSearchRoots) {
         if (root.empty()) {
@@ -37,7 +33,7 @@ UiLayoutTemplate loadTemplateOrThrow(const UiWidgetFactoryOptions& options,
         const std::filesystem::path path = std::filesystem::path(root) / std::string(fileName);
         UiLayoutTemplate tpl{};
         std::string err{};
-        if (UiLayoutTomlLoader::loadFromFile(path.string(), tpl, err)) {
+        if (UiLayoutJsonLoader::loadFromFile(path.string(), tpl, err)) {
             return tpl;
         }
         diagnostics += "  - " + path.string();
@@ -67,28 +63,28 @@ std::unique_ptr<IUiWidget> UiWidgetFactory::create(UiScene scene) const {
     switch (scene) {
         case UiScene::Tracks:
             // Основной экран: прокидываем общие параметры кадра и заголовка.
-            // Теперь сюда же подключаем TOML-layout (если найден).
+            // Загружаем строгий JSON layout.
             return std::make_unique<TracksWidget>(
                 TracksWidget::Options{
                     .frameWidth = options_.frameWidth,
                     .headerTitle = options_.tracksHeaderTitle,
                     .speedStep = options_.tracksSpeedStep,
                     .bpmStep = options_.tracksBpmStep,
-                    .layoutTemplate = loadTemplateOrThrow(options_, "tracks.toml"),
+                    .layoutTemplate = loadTemplateOrThrow(options_, "tracks.json"),
                 });
         case UiScene::TrackContext:
             return std::make_unique<TrackContextMenuWidget>(
                 options_.frameWidth,
-                loadTemplateOrThrow(options_, "track_menu.toml"));
+                loadTemplateOrThrow(options_, "track_menu.json"));
         case UiScene::Manager:
             // Файловый менеджер использует только ширину рамки.
             return std::make_unique<ManagerWidget>(
                 options_.frameWidth,
-                loadTemplateOrThrow(options_, "manager.toml"));
+                loadTemplateOrThrow(options_, "manager.json"));
         case UiScene::FxList:
             return std::make_unique<FxListWidget>(
                 options_.frameWidth,
-                loadTemplateOrThrow(options_, "fx_list.toml"));
+                loadTemplateOrThrow(options_, "fx_list.json"));
         case UiScene::FxEditor: {
             // Строгая модель: base + отдельный профиль для каждого FX (без fallback).
             auto baseLayout = loadTemplateOrThrow(options_, options_.fxEditorBaseLayout);
