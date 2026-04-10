@@ -8,18 +8,9 @@
 #include "contracts/UiAction.h"
 #include "contracts/UiLayout.h"
 #include "contracts/UiScene.h"
+#include "service/ui/UiBindTypes.h"
 
 namespace avantgarde {
-
-// Один вариант bind-а для UI-подсказок/каталога.
-struct UiBindOption {
-    // Короткий алиас, который пользователь может написать в шаблоне.
-    std::string alias{};
-    // Канонический bind-ключ, в который резолвится алиас.
-    std::string canonical{};
-    // Короткое объяснение назначения bind-а.
-    std::string description{};
-};
 
 // Результат резолва bind-строки.
 struct UiBindResolution {
@@ -38,7 +29,7 @@ struct UiBindResolution {
 
 // Резолвер "прозрачного" bind:
 // - принимает короткий алиас (например "wet");
-// - выдает канонический bind (например "fx.param.wet");
+// - выдает канонический bind (например "fx.selected.param.0");
 // - валидирует, что bind уместен в конкретном виджете/узле.
 class UiBindResolver final {
 public:

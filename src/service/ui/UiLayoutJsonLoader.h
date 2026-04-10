@@ -8,7 +8,7 @@
 namespace avantgarde {
 
 // Минимальный JSON-загрузчик UI-шаблонов.
-// Поддерживает тот же контракт UiLayoutTemplate, что и TOML-loader.
+// Возвращает универсальный контракт UiLayoutTemplate.
 class UiLayoutJsonLoader final {
 public:
     // Загрузить шаблон из файла.
@@ -23,4 +23,3 @@ public:
 };
 
 } // namespace avantgarde
-

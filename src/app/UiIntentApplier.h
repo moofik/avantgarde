@@ -4,15 +4,16 @@
 
 #include "app/SamplerEngineLayer.h"
 #include "contracts/UiIntent.h"
+#include "contracts/UiNavState.h"
 #include "service/UiStateStore.h"
 
 namespace avantgarde {
 
 // Централизованный применитель UiIntent.
 // Важно:
-// - класс не знает про ввод/виджеты/сцены;
+// - класс не знает про ввод/виджеты;
 // - класс не хранит undo/redo;
-// - только применяет intent к engine + control model + ui store.
+// - применяет intent к engine + control model + ui store + ui nav-router.
 class UiIntentApplier {
 public:
     // Явный runtime-контекст применения, который оркестратор подает снаружи.
@@ -21,6 +22,8 @@ public:
         UiStateStore& uiStore;
         UiTransportState& transport;
         std::vector<UiTrackStateView>& tracks;
+        // UI-навигация (scene/cursor/scroll). Может быть nullptr в headless-тестах.
+        UiNavState* nav{nullptr};
     };
 
     // Сформировать обратный intent для undo на основе текущего состояния.
@@ -45,4 +48,3 @@ private:
 };
 
 } // namespace avantgarde
-

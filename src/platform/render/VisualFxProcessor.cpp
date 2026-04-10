@@ -10,6 +10,7 @@
 #include "platform/render/GlitchVisualFx.h"
 #include "platform/render/GlowVisualFx.h"
 #include "platform/render/TypingVisualFx.h"
+#include "platform/render/ColorFilterVisualFx.h"
 
 namespace avantgarde {
 namespace {
@@ -47,6 +48,7 @@ VisualFxProcessor::VisualFxProcessor() {
     registerFx(std::make_unique<GlitchVisualFx>());
     registerFx(std::make_unique<GlowVisualFx>());
     registerFx(std::make_unique<TypingVisualFx>());
+    registerFx(std::make_unique<ColorFilterVisualFx>());
 }
 
 void VisualFxProcessor::registerFx(std::unique_ptr<IVisualFx> fx) {

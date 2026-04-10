@@ -1,9 +1,9 @@
 #include <catch2/catch_all.hpp>
 
-#include "service/ui/FxEditorWidget.h"
-#include "service/ui/FxListWidget.h"
-#include "service/ui/TrackContextMenuWidget.h"
-#include "service/ui/TracksWidget.h"
+#include "service/ui/widgets/FxEditorWidget.h"
+#include "service/ui/widgets/FxListWidget.h"
+#include "service/ui/widgets/TrackContextMenuWidget.h"
+#include "service/ui/widgets/TracksWidget.h"
 #include "service/ui/UiSceneHost.h"
 
 using namespace avantgarde;
@@ -29,10 +29,6 @@ const UiLayoutTemplate& fakeTemplate() {
 class FakeWidget final : public IUiWidget {
 public:
     const char* id() const noexcept override { return "fake"; }
-
-    void render(UiTextBuffer& out, const UiState&, const UiNavState& navState) override {
-        out.lines.push_back(navState.selectedTrack == 0 ? "track0" : "track1");
-    }
 
     bool buildPreparedLayout(UiPreparedLayout& out, const UiState&, const UiNavState& navState) const override {
         UiPreparedLayoutBuilder b{};
@@ -106,10 +102,6 @@ class FakePreparedWidget final : public IUiWidget {
 public:
     const char* id() const noexcept override { return "fake_prepared"; }
 
-    void render(UiTextBuffer&, const UiState&, const UiNavState&) override {
-        renderCalled = true;
-    }
-
     bool buildPreparedLayout(UiPreparedLayout& out, const UiState&, const UiNavState&) const override {
         UiPreparedLayoutBuilder b{};
         b.sceneId("fake_prepared")
@@ -122,41 +114,31 @@ public:
 
     WidgetOutput onGesture(UiGesture, const UiState&, UiNavState&) override { return {}; }
 
-    mutable bool renderCalled{false};
 };
 
 } // namespace
 
-TEST_CASE("UiSceneHost: registers widget and renders active scene") {
+TEST_CASE("UiSceneHost: registers widget and builds prepared layout for active scene") {
     UiSceneHost host;
     REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakeWidget>()));
 
     UiState state{};
     state.tracks.resize(2);
-    UiTextBuffer out{};
-    REQUIRE(host.renderActive(out, state));
-    REQUIRE_FALSE(out.lines.empty());
-    bool hasTrack0 = false;
-    for (const std::string& line : out.lines) {
-        if (line.find("track0") != std::string::npos) {
-            hasTrack0 = true;
-            break;
-        }
-    }
-    REQUIRE(hasTrack0);
+    UiPreparedLayout prepared{};
+    REQUIRE(host.buildPreparedActive(prepared, state));
+    REQUIRE(prepared.layoutTemplate != nullptr);
+    REQUIRE_FALSE(prepared.components.empty());
 }
 
-TEST_CASE("UiSceneHost: prefers prepared layout path over legacy widget render") {
+TEST_CASE("UiSceneHost: prefers prepared layout path from widget") {
     UiSceneHost host;
-    auto widget = std::make_unique<FakePreparedWidget>();
-    FakePreparedWidget* ptr = widget.get();
-    REQUIRE(host.registerWidget(UiScene::Tracks, std::move(widget)));
+    REQUIRE(host.registerWidget(UiScene::Tracks, std::make_unique<FakePreparedWidget>()));
 
     UiState state{};
-    UiTextBuffer out{};
-    REQUIRE(host.renderActive(out, state));
-    REQUIRE(ptr != nullptr);
-    REQUIRE_FALSE(ptr->renderCalled);
+    UiPreparedLayout prepared{};
+    REQUIRE(host.buildPreparedActive(prepared, state));
+    REQUIRE(prepared.layoutTemplate != nullptr);
+    REQUIRE_FALSE(prepared.components.empty());
 }
 
 TEST_CASE("UiSceneHost: handles global track navigation and delegates local input") {
@@ -426,7 +408,10 @@ TEST_CASE("UiSceneHost: apply on Track Select opens TrackContext scene") {
 
     const WidgetOutput out = host.handleGesture(UiGesture::F1, state);
     REQUIRE(out.handled);
-    REQUIRE(host.scene() == UiScene::TrackContext);
     REQUIRE(out.intents.size() == 1);
     REQUIRE(out.intents[0].type == UiIntentType::OpenScene);
+    REQUIRE(out.intents[0].scene == UiScene::TrackContext);
+    REQUIRE(out.intents[0].resetCursor);
+    REQUIRE(out.intents[0].resetScroll);
+    REQUIRE(out.intents[0].resetSceneActionIndex);
 }

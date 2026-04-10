@@ -1,0 +1,60 @@
+{
+  "id": "manager",
+  "layout": {
+    "type": "column",
+    "style_ref": "@styles.frame.root",
+    "padding": 0,
+    "gap": 0,
+    "width": 60,
+    "height": 24,
+    "children": [
+      {
+        "type": "statusbar",
+        "id": "header_title",
+        "text": "MANAGER",
+        "bind": "status.scene.title",
+        "style_ref": "@styles.header.title.default",
+        "effects": [
+          {
+            "preset": "@effects.glitch.header.manager"
+          }
+        ]
+      },
+      {
+        "type": "text",
+        "id": "cwd_line",
+        "bind": "status.cwd",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_top",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "list",
+        "id": "manager_list",
+        "height": "auto",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_bottom",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "text",
+        "id": "status_line",
+        "bind": "status.message",
+        "style_ref": "@styles.footer.action"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint",
+        "text": " keys [j/k] [enter/open] [h/up] [space preview] [a auto] [esc back] ",
+        "bind": "status.keys",
+        "style_ref": "@styles.footer.keys"
+      }
+    ]
+  }
+}

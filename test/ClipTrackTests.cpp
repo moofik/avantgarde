@@ -601,7 +601,7 @@ TEST_CASE("ClipTrack: clearSlot resets audio (no playback after clear)") {
 TEST_CASE("ClipTrack: IParameterized surface exposes and applies track params") {
     avantgarde::ClipTrackImpl tr;
 
-    REQUIRE(tr.getParamCount() == 9);
+    REQUIRE(tr.getParamCount() == 11);
     REQUIRE(tr.getParamMeta(avantgarde::toParamIndex(avantgarde::TrackParamId::MuteEnabled)).name == "track.mute");
 
     tr.setParam(avantgarde::toParamIndex(avantgarde::TrackParamId::Gain01), 0.25f);

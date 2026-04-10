@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -19,7 +20,9 @@ enum class UiComponentType : uint8_t {
     FxEditorView,
     Knob,
     Switch,
+    Icon,
     AnimSlot,
+    Waveform,
     List,
     Separator,
 };
@@ -28,9 +31,32 @@ enum class UiComponentType : uint8_t {
 // Компонент хранит только данные кадра и не содержит логики отрисовки.
 class IUiComponent {
 public:
+    // Визуальное состояние компонента после резолва условий.
+    enum class VisualState : uint8_t {
+        Active = 0,   // Нода активна и интерактивна.
+        Inactive,     // Нода доступна, но "приглушена" (read-only/не в фокусе).
+        Disabled      // Нода недоступна для изменения.
+    };
+
     virtual ~IUiComponent() = default;
     virtual UiComponentType type() const noexcept = 0;
     virtual std::string_view id() const noexcept = 0;
+
+    bool isVisible() const noexcept { return visible_; }
+    bool isEnabled() const noexcept { return enabled_; }
+    bool isActive() const noexcept { return visualState_ == VisualState::Active; }
+    VisualState visualState() const noexcept { return visualState_; }
+    float opacity() const noexcept { return opacity_; }
+    void setVisible(bool value) noexcept { visible_ = value; }
+    void setEnabled(bool value) noexcept { enabled_ = value; }
+    void setVisualState(VisualState value) noexcept { visualState_ = value; }
+    void setOpacity(float value) noexcept { opacity_ = std::clamp(value, 0.0f, 1.0f); }
+
+private:
+    bool visible_{true};
+    bool enabled_{true};
+    VisualState visualState_{VisualState::Active};
+    float opacity_{1.0f};
 };
 
 // Статусная строка в верхней/нижней части layout.
@@ -91,6 +117,16 @@ public:
     std::string_view id() const noexcept override { return idValue; }
 };
 
+// Компонент "иконка" (путь до растрового ассета, например PNG).
+class UiIconComponent final : public IUiComponent {
+public:
+    std::string idValue{};
+    std::string path{};
+
+    UiComponentType type() const noexcept override { return UiComponentType::Icon; }
+    std::string_view id() const noexcept override { return idValue; }
+};
+
 // Слот анимации (например для FX-визуализации).
 class UiAnimSlotComponent final : public IUiComponent {
 public:
@@ -100,6 +136,20 @@ public:
     float intensity01{0.0f};
 
     UiComponentType type() const noexcept override { return UiComponentType::AnimSlot; }
+    std::string_view id() const noexcept override { return idValue; }
+};
+
+// Компонент waveform (пиковая огибающая в нормализованном виде [0..1]).
+class UiWaveformComponent final : public IUiComponent {
+public:
+    std::string idValue{};
+    // Пики по X-оси: каждый элемент соответствует одному "столбцу" волны.
+    std::vector<float> peaks01{};
+    // Нормализованные границы trim-региона [0..1].
+    float trimStart01{0.0f};
+    float trimEnd01{1.0f};
+
+    UiComponentType type() const noexcept override { return UiComponentType::Waveform; }
     std::string_view id() const noexcept override { return idValue; }
 };
 
@@ -297,6 +347,24 @@ private:
     UiSwitchComponent component_{};
 };
 
+// Builder: UiIconComponent.
+class UiIconBuilder final {
+public:
+    explicit UiIconBuilder(std::string id) { component_.idValue = std::move(id); }
+
+    UiIconBuilder& path(std::string value) {
+        component_.path = std::move(value);
+        return *this;
+    }
+
+    std::unique_ptr<IUiComponent> build() && {
+        return std::make_unique<UiIconComponent>(std::move(component_));
+    }
+
+private:
+    UiIconComponent component_{};
+};
+
 // Builder: UiAnimSlotComponent.
 class UiAnimSlotBuilder final {
 public:
@@ -323,6 +391,34 @@ public:
 
 private:
     UiAnimSlotComponent component_{};
+};
+
+// Builder: UiWaveformComponent.
+class UiWaveformBuilder final {
+public:
+    explicit UiWaveformBuilder(std::string id) { component_.idValue = std::move(id); }
+
+    UiWaveformBuilder& peaks01(std::vector<float> values) {
+        component_.peaks01 = std::move(values);
+        return *this;
+    }
+
+    UiWaveformBuilder& trimStart01(float value) {
+        component_.trimStart01 = value;
+        return *this;
+    }
+
+    UiWaveformBuilder& trimEnd01(float value) {
+        component_.trimEnd01 = value;
+        return *this;
+    }
+
+    std::unique_ptr<IUiComponent> build() && {
+        return std::make_unique<UiWaveformComponent>(std::move(component_));
+    }
+
+private:
+    UiWaveformComponent component_{};
 };
 
 // Builder: UiListComponent.

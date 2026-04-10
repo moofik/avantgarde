@@ -1,6 +1,3 @@
-// src/runtime/tracks/ClipTrackImpl.h
-#pragma once
-
 #include <atomic>
 #include <algorithm>
 #include <array>
@@ -309,6 +306,10 @@ namespace avantgarde {
                     return static_cast<float>(static_cast<uint8_t>(playbackRt_.launchPolicy));
                 case TrackParamId::StopPolicy:
                     return static_cast<float>(static_cast<uint8_t>(playbackRt_.stopPolicy));
+                case TrackParamId::StartNorm:
+                    return detail_interp::clampf(playbackRt_.startNorm, 0.0f, 0.99f);
+                case TrackParamId::EndNorm:
+                    return detail_interp::clampf(playbackRt_.endNorm, 0.01f, 1.0f);
                 default:
                     return 0.0f;
             }
@@ -366,7 +367,8 @@ namespace avantgarde {
 
             double ph = playbackRt_.playhead;
             const int len = clip->frames;
-            const double lenD = static_cast<double>(len);
+            const double regionStart = clipRegionStartFrameRt_();
+            const double regionEnd = clipRegionEndFrameRt_();
             const float g = playbackRt_.gain;
             // loop управляет поведением на конце клипа: wrap или стоп.
             const bool loop = playbackRt_.loop;
@@ -405,7 +407,8 @@ namespace avantgarde {
                    // а в one-shot режиме можем выйти раньше, когда gate погаснет.
                    (playbackRt_.followTransport || playbackRt_.oneshotRunning)) {
                 const std::size_t chunk = std::min(kFxScratchFrames, ctx.nframes - offset);
-                const std::size_t produced = renderClipChunk_(chunk, c0, c1, len, lenD, loop, g, inc, ph);
+                const std::size_t produced =
+                    renderClipChunk_(chunk, c0, c1, len, loop, g, inc, regionStart, regionEnd, ph);
                 if (produced == 0) {
                     break;
                 }
@@ -513,7 +516,7 @@ namespace avantgarde {
                     const uint32_t clipSlot = (cmd.slot < 0) ? 0u : static_cast<uint32_t>(cmd.slot);
                     if (clipSlot != 0u) break;
                     playbackRt_.oneshotRunning = false;
-                    playbackRt_.playhead = 0.0;
+                    playbackRt_.playhead = clipRegionStartFrameRt_();
                     playbackRt_.noteHeld = false;
                     playbackRt_.noteDetuneNorm = 0.0f;
                 } break;
@@ -544,11 +547,13 @@ namespace avantgarde {
                     playbackRt_.noteHeld = false;
                     // В note-режиме политика ByNoteOff разрешает гасить one-shot gate
                     // прямо по отпусканию клавиши.
+                    // LOOPER MODE LOGIC (note gate stop):
+                    // остановка по NoteOff разрешена только в NOTE режиме + ByNoteOff policy.
                     if (playbackRt_.playbackMode == TrackPlaybackModeValue::Note &&
                         playbackRt_.stopPolicy == TrackStopPolicyValue::ByNoteOff &&
                         !playbackRt_.followTransport) {
                         playbackRt_.oneshotRunning = false;
-                        playbackRt_.playhead = 0.0;
+                        playbackRt_.playhead = clipRegionStartFrameRt_();
                     }
                 } break;
 
@@ -708,27 +713,33 @@ namespace avantgarde {
                                      const float* c0,
                                      const float* c1,
                                      int len,
-                                     double lenD,
                                      bool loop,
                                      float gain,
                                      double inc,
+                                     double regionStart,
+                                     double regionEnd,
                                      double& ph) noexcept {
             std::size_t produced = 0;
+            const double span = std::max(1.0, regionEnd - regionStart);
             for (; produced < maxFrames; ++produced) {
-                if (!loop && ph >= lenD) {
+                if (ph < regionStart) {
+                    ph = regionStart;
+                }
+                if (!loop && ph >= regionEnd) {
                     // Для followTransport one-shot флаг не используем:
                     // просто остаемся в "конце клипа" и выдаем тишину до retrigger.
                     if (playbackRt_.followTransport) {
-                        ph = lenD;
+                        ph = regionEnd;
                     } else {
                         // В one-shot режиме конец клипа автоматически гасит local gate.
                         playbackRt_.oneshotRunning = false;
-                        ph = 0.0;
+                        ph = regionStart;
                     }
                     break;
                 }
 
-                while (loop && ph >= lenD) ph -= lenD;
+                while (loop && ph >= regionEnd) ph -= span;
+                while (loop && ph < regionStart) ph += span;
 
                 const float src0 = detail_interp::sampleCubic(c0, len, ph, loop);
                 const float src1 = c1 ? detail_interp::sampleCubic(c1, len, ph, loop) : src0;
@@ -787,7 +798,12 @@ namespace avantgarde {
             bool oneshotRunning = false;
             // Флаг loop-поведения на конце клипа.
             bool loop = false;
-            // Режим проигрывания трека (Looper/Note).
+            // Нормализованная граница начала playback-региона [0..1].
+            float startNorm = 0.0f;
+            // Нормализованная граница конца playback-региона [0..1].
+            float endNorm = 1.0f;
+            // LOOPER MODE LOGIC (runtime state):
+            // режим проигрывания трека (Looper/Note) хранится отдельно для КАЖДОГО трека.
             TrackPlaybackModeValue playbackMode = TrackPlaybackModeValue::Looper;
             // Политика реакции на новый trigger/note-on.
             TrackLaunchPolicyValue launchPolicy = TrackLaunchPolicyValue::IgnoreIfPlaying;
@@ -816,6 +832,31 @@ namespace avantgarde {
             return (v <= 0) ? TrackStopPolicyValue::ManualStop : TrackStopPolicyValue::ByNoteOff;
         }
 
+        double clipRegionStartFrameRt_() const noexcept {
+            const ClipBuffer* clip = playbackRt_.clip;
+            if (!clip || clip->frames <= 1) {
+                return 0.0;
+            }
+            const double maxIndex = static_cast<double>(clip->frames - 1);
+            const double start = static_cast<double>(
+                detail_interp::clampf(playbackRt_.startNorm, 0.0f, 0.99f)) * maxIndex;
+            return std::clamp(start, 0.0, maxIndex);
+        }
+
+        double clipRegionEndFrameRt_() const noexcept {
+            const ClipBuffer* clip = playbackRt_.clip;
+            if (!clip || clip->frames <= 1) {
+                return 1.0;
+            }
+            const double totalFrames = static_cast<double>(clip->frames);
+            const double start = clipRegionStartFrameRt_();
+            double end = static_cast<double>(detail_interp::clampf(playbackRt_.endNorm, 0.01f, 1.0f)) * totalFrames;
+            if (end <= start + 1.0) {
+                end = std::min(totalFrames, start + 1.0);
+            }
+            return std::clamp(end, start + 1.0, totalFrames);
+        }
+
         // Унифицированный запуск one-shot playback по trigger/note-on.
         // Поведение зависит от launchPolicy:
         // - IgnoreIfPlaying: если трек уже играет, новый trigger игнорируем;
@@ -830,8 +871,8 @@ namespace avantgarde {
                 // не сбрасывает playhead и не перезапускает gate.
                 return;
             }
-            // Retrigger / первичный старт: начинаем клип с нуля.
-            playbackRt_.playhead = 0.0;
+            // Retrigger / первичный старт: начинаем с start-границы текущего playback-региона.
+            playbackRt_.playhead = clipRegionStartFrameRt_();
             playbackRt_.oneshotRunning = true;
         }
 
@@ -847,8 +888,8 @@ namespace avantgarde {
             return kNoMeta;
         }
 
-        static const std::array<ParamMeta, 9>& trackParamMeta_() {
-            static const std::array<ParamMeta, 9> kMeta{{
+        static const std::array<ParamMeta, 11>& trackParamMeta_() {
+            static const std::array<ParamMeta, 11> kMeta{{
                 ParamMeta{.name = "track.gain", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "norm"},
                 ParamMeta{.name = "track.loop", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
                 ParamMeta{.name = "track.playback_inc", .minValue = 0.05f, .maxValue = 8.0f, .logarithmic = false, .unit = "ratio"},
@@ -858,6 +899,8 @@ namespace avantgarde {
                 ParamMeta{.name = "track.playback_mode", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "enum"},
                 ParamMeta{.name = "track.launch_policy", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "enum"},
                 ParamMeta{.name = "track.stop_policy", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "enum"},
+                ParamMeta{.name = "track.start_norm", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "norm"},
+                ParamMeta{.name = "track.end_norm", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "norm"},
             }};
             return kMeta;
         }
@@ -894,6 +937,8 @@ namespace avantgarde {
                     }
                 } break;
                 case TrackParamId::PlaybackMode: {
+                    // LOOPER MODE LOGIC (runtime apply):
+                    // обновляем mode текущего трека из параметра PlaybackMode.
                     playbackRt_.playbackMode = parseTrackMode_(value);
                     // При смене режима сбрасываем note-state, чтобы избежать "залипших" нот.
                     playbackRt_.noteHeld = false;
@@ -905,6 +950,26 @@ namespace avantgarde {
                 case TrackParamId::StopPolicy:
                     playbackRt_.stopPolicy = parseStopPolicy_(value);
                     break;
+                case TrackParamId::StartNorm: {
+                    const float start = detail_interp::clampf(value, 0.0f, 0.99f);
+                    playbackRt_.startNorm = start;
+                    if (playbackRt_.endNorm <= start + 0.01f) {
+                        playbackRt_.endNorm = std::min(1.0f, start + 0.01f);
+                    }
+                    if (playbackRt_.playhead < clipRegionStartFrameRt_()) {
+                        playbackRt_.playhead = clipRegionStartFrameRt_();
+                    }
+                } break;
+                case TrackParamId::EndNorm: {
+                    const float end = detail_interp::clampf(value, 0.01f, 1.0f);
+                    playbackRt_.endNorm = end;
+                    if (playbackRt_.startNorm >= end - 0.01f) {
+                        playbackRt_.startNorm = std::max(0.0f, end - 0.01f);
+                    }
+                    if (playbackRt_.playhead > clipRegionEndFrameRt_()) {
+                        playbackRt_.playhead = clipRegionStartFrameRt_();
+                    }
+                } break;
                 default:
                     break;
             }
@@ -998,7 +1063,7 @@ namespace avantgarde {
             if (const ClipBuffer* p = pendingClip_.exchange(nullptr, std::memory_order_acq_rel)) {
                 playbackRt_.clip = p;
                 playbackRt_.oneshotRunning = false;  // безопасно: при смене клипа останавливаем one-shot gate
-                playbackRt_.playhead = 0.0;
+                playbackRt_.playhead = clipRegionStartFrameRt_();
                 clipChanged = true;
             }
 
@@ -1020,6 +1085,14 @@ namespace avantgarde {
             const bool stretchRecalc = pendingStretchRecalc_.exchange(false, std::memory_order_acq_rel);
             if ((stretchRecalc || clipChanged) && playbackRt_.stretchToBars) {
                 playbackRt_.playbackInc = computeAutoPlaybackIncRt_();
+            }
+
+            if (playbackRt_.clip) {
+                const double regionStart = clipRegionStartFrameRt_();
+                const double regionEnd = clipRegionEndFrameRt_();
+                if (playbackRt_.playhead < regionStart || playbackRt_.playhead >= regionEnd) {
+                    playbackRt_.playhead = regionStart;
+                }
             }
 
             // armRecordSlot() публикует флаг вне RT, читаем его в начале блока.

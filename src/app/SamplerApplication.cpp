@@ -7,27 +7,29 @@
 #include <string>
 #include <utility>
 
+#include "app/AppDiagnostics.h"
 #include "contracts/IUiGestureInput.h"
 #include "contracts/ids.h"
-#include "service/ui/layout/UiPreparedLayoutAsciiRenderer.h"
 #include "service/ui/UiWidgetFactory.h"
 
 namespace avantgarde {
 
 SamplerApplication::~SamplerApplication() {
     // Безопасное завершение всех циклов/потоков в любом сценарии выхода.
+    AppDiagnostics::log(AppLogLevel::Info, "SamplerApplication dtor: shutdown begin");
     stopUi_.store(true, std::memory_order_release);
     if (controlThread_.joinable()) {
         controlThread_.join();
     }
-    if (uiThread_.joinable()) {
-        uiThread_.join();
-    }
-    io_.stopTerminalInput();
     engine_.stop();
+    AppDiagnostics::log(AppLogLevel::Info, "SamplerApplication dtor: shutdown complete");
 }
 
 int SamplerApplication::run(const SamplerAppConfig& config) {
+    AppDiagnostics::logf(AppLogLevel::Info,
+                         "run begin: tracks=%u startupClips=%zu",
+                         static_cast<unsigned>(config.engine.trackCount),
+                         config.startupClipLoads.size());
     // 1) Инициализация движка и IO.
     UiState bootstrap{};
     std::string error;
@@ -62,6 +64,9 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
         tracksCtl_[t].muted = false;
         tracksCtl_[t].armed = false;
         tracksCtl_[t].loop = true;
+        tracksCtl_[t].playbackProfile = UiTrackPlaybackProfile::Loop;
+        tracksCtl_[t].trimStart01 = 0.0f;
+        tracksCtl_[t].trimEnd01 = 1.0f;
     }
 
     refreshAllTrackViewStates_();
@@ -78,11 +83,12 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
     try {
         UiWidgetFactory widgetFactory(
             UiWidgetFactoryOptions{
-                .frameWidth = config.gbTextWidth,
+                .frameWidth = 60U,
                 .tracksHeaderTitle = "AVANTGARDE",
             });
         (void)sceneHost_.registerWidget(UiScene::Tracks, widgetFactory.create(UiScene::Tracks));
         (void)sceneHost_.registerWidget(UiScene::TrackContext, widgetFactory.create(UiScene::TrackContext));
+        (void)sceneHost_.registerWidget(UiScene::SampleEdit, widgetFactory.create(UiScene::SampleEdit));
         (void)sceneHost_.registerWidget(UiScene::Manager, widgetFactory.create(UiScene::Manager));
         (void)sceneHost_.registerWidget(UiScene::FxList, widgetFactory.create(UiScene::FxList));
         (void)sceneHost_.registerWidget(UiScene::FxEditor, widgetFactory.create(UiScene::FxEditor));
@@ -100,64 +106,64 @@ int SamplerApplication::run(const SamplerAppConfig& config) {
         return 3;
     }
 
-    // 4) Запуск фонового input (terminal) и control-потока.
+    // 4) Запуск control-потока (обработка input -> intents).
     stopUi_.store(false, std::memory_order_release);
-    // В оконном режиме input должен идти из окна, без зависимости от terminal focus.
-    // Поэтому terminal input thread запускаем только для неоконных backend-ов.
-    if (!io_.renderOnMainThread()) {
-        io_.startTerminalInput(stopUi_);
-    }
 
     controlThread_ = std::thread([this]() {
-        while (!stopUi_.load(std::memory_order_acquire)) {
-            if (engine_.processPendingPatternSwitches()) {
+        try {
+            while (!stopUi_.load(std::memory_order_acquire)) {
+                if (engine_.processPendingPatternSwitches()) {
+                    syncPatternStateToUi_();
+                }
+
+                UiGestureEvent ev{};
+                if (!io_.readNextInputEvent(ev)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    continue;
+                }
+                if (!handleGesture_(ev)) {
+                    break;
+                }
                 syncPatternStateToUi_();
             }
-
-            UiGestureEvent ev{};
-            if (!io_.readNextInputEvent(ev)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-            if (!handleGesture_(ev)) {
-                break;
-            }
-            syncPatternStateToUi_();
+            // Гарантированно гасим preview-голос при завершении control loop.
+            engine_.previewStop();
+        } catch (const std::exception& ex) {
+            AppDiagnostics::logf(AppLogLevel::Fatal, "control thread exception: %s", ex.what());
+            stopUi_.store(true, std::memory_order_release);
+        } catch (...) {
+            AppDiagnostics::log(AppLogLevel::Fatal, "control thread exception: unknown");
+            stopUi_.store(true, std::memory_order_release);
         }
-        // Гарантированно гасим preview-голос при завершении control loop.
-        engine_.previewStop();
     });
 
-    // 5) Для оконного режима рендер идет в main thread, иначе - отдельный поток.
-    if (!io_.renderOnMainThread()) {
-        uiThread_ = std::thread([this]() {
-            while (!stopUi_.load(std::memory_order_acquire)) {
-                renderUiOnce_();
-                std::this_thread::sleep_for(std::chrono::milliseconds(120));
-            }
-        });
-    }
-
-    // 6) Главный цикл: pump событий окна + рендер.
+    // 5) Главный цикл main thread: pump событий окна + рендер кадра.
     while (!stopUi_.load(std::memory_order_acquire)) {
-        if (io_.readWindowEvents()) {
-            renderUiOnce_();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        } else {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        try {
+            if (io_.readWindowEvents()) {
+                renderUiOnce_();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+        } catch (const std::exception& ex) {
+            AppDiagnostics::logf(AppLogLevel::Fatal, "main loop exception: %s", ex.what());
+            stopUi_.store(true, std::memory_order_release);
+            break;
+        } catch (...) {
+            AppDiagnostics::log(AppLogLevel::Fatal, "main loop exception: unknown");
+            stopUi_.store(true, std::memory_order_release);
+            break;
         }
     }
 
-    // 7) Аккуратный stop/join.
+    // 6) Аккуратный stop/join.
     stopUi_.store(true, std::memory_order_release);
     if (controlThread_.joinable()) {
         controlThread_.join();
     }
-    if (uiThread_.joinable()) {
-        uiThread_.join();
-    }
-    io_.stopTerminalInput();
     engine_.stop();
+    AppDiagnostics::log(AppLogLevel::Info, "run complete");
     return 0;
 }
 
@@ -169,11 +175,18 @@ uint8_t SamplerApplication::clampUiTrack_(uint8_t track) const noexcept {
 }
 
 void SamplerApplication::dispatchWidgetIntent_(const UiIntent& intent) {
-    UiIntentApplier::Context ctx{engine_, uiStore_, trCtl_, tracksCtl_};
+    UiIntentApplier::Context ctx{engine_, uiStore_, trCtl_, tracksCtl_, &sceneHost_.nav()};
 
     UiIntent undoIntent{};
     const bool undoable = intentApplier_.buildUndoIntent(intent, trCtl_, tracksCtl_, undoIntent);
-    const bool changed = intentApplier_.apply(intent, ctx);
+    bool changed = false;
+    if (intent.type == UiIntentType::OpenScene ||
+        intent.type == UiIntentType::Back) {
+        std::lock_guard<std::mutex> lock(sceneMutex_);
+        changed = intentApplier_.apply(intent, ctx);
+    } else {
+        changed = intentApplier_.apply(intent, ctx);
+    }
     if (!changed) {
         return;
     }
@@ -224,30 +237,36 @@ void SamplerApplication::renderUiOnce_() {
     const UiState state = uiComposer_.compose(uiStore_.snapshot(), telemetry);
 
     // Рендер сцены держим под sceneMutex_, чтобы не гоняться с control-потоком.
-    UiTextBuffer sceneText{};
     UiPreparedLayout prepared{};
-    UiScene scene = UiScene::Tracks;
     bool hasSceneFrame = false;
+    UiScene activeScene = UiScene::Tracks;
     {
         std::lock_guard<std::mutex> lock(sceneMutex_);
-        scene = sceneHost_.scene();
-        hasSceneFrame = sceneHost_.buildPreparedActive(prepared, state);
-    }
-
-    if (hasSceneFrame) {
-        sceneText.lines = UiPreparedLayoutAsciiRenderer::render(prepared);
-    }
-
-    std::string frame;
-    if (hasSceneFrame) {
-        // Преобразуем line-buffer в единый кадр для backend renderer.
-        for (const std::string& line : sceneText.lines) {
-            frame += line;
-            frame.push_back('\n');
+        activeScene = sceneHost_.scene();
+        try {
+            hasSceneFrame = sceneHost_.buildPreparedActive(prepared, state);
+        } catch (const std::exception& ex) {
+            static auto lastLogAt = std::chrono::steady_clock::time_point{};
+            const auto now = std::chrono::steady_clock::now();
+            if (lastLogAt.time_since_epoch().count() == 0 ||
+                now - lastLogAt > std::chrono::seconds(2)) {
+                AppDiagnostics::logf(AppLogLevel::Error,
+                                     "buildPreparedActive failed scene=%u: %s",
+                                     static_cast<unsigned>(activeScene),
+                                     ex.what());
+                lastLogAt = now;
+            }
+            hasSceneFrame = false;
         }
     }
-    const bool showHeaderOverlay = (scene == UiScene::Tracks);
-    io_.render(state, hasSceneFrame ? &prepared : nullptr, frame, showHeaderOverlay);
+
+    try {
+        io_.render(state, hasSceneFrame ? &prepared : nullptr);
+    } catch (const std::exception& ex) {
+        AppDiagnostics::logf(AppLogLevel::Error, "io.render failed: %s", ex.what());
+    } catch (...) {
+        AppDiagnostics::log(AppLogLevel::Error, "io.render failed: unknown");
+    }
 }
 
 bool SamplerApplication::handleGesture_(const UiGestureEvent& ev) {
@@ -290,14 +309,14 @@ bool SamplerApplication::handleGesture_(const UiGestureEvent& ev) {
     // F2/F9 резервируются под аппаратные кнопки, ActionUndo/ActionRedo —
     // под универсальный слой pointer-команд.
     if (action == UiGesture::ActionUndo || action == UiGesture::F2) {
-        UiIntentApplier::Context ctx{engine_, uiStore_, trCtl_, tracksCtl_};
+        UiIntentApplier::Context ctx{engine_, uiStore_, trCtl_, tracksCtl_, &sceneHost_.nav()};
         (void)history_.undo([this, &ctx](const UiIntent& intent) {
             return intentApplier_.apply(intent, ctx);
         });
         return true;
     }
     if (action == UiGesture::ActionRedo || action == UiGesture::F9) {
-        UiIntentApplier::Context ctx{engine_, uiStore_, trCtl_, tracksCtl_};
+        UiIntentApplier::Context ctx{engine_, uiStore_, trCtl_, tracksCtl_, &sceneHost_.nav()};
         (void)history_.redo([this, &ctx](const UiIntent& intent) {
             return intentApplier_.apply(intent, ctx);
         });
@@ -309,7 +328,15 @@ bool SamplerApplication::handleGesture_(const UiGestureEvent& ev) {
     WidgetOutput widgetOut{};
     {
         std::lock_guard<std::mutex> lock(sceneMutex_);
-        widgetOut = sceneHost_.handleGesture(action, widgetState);
+        try {
+            widgetOut = sceneHost_.handleGesture(action, widgetState);
+        } catch (const std::exception& ex) {
+            AppDiagnostics::logf(AppLogLevel::Error, "sceneHost.handleGesture failed: %s", ex.what());
+            return true;
+        } catch (...) {
+            AppDiagnostics::log(AppLogLevel::Error, "sceneHost.handleGesture failed: unknown");
+            return true;
+        }
     }
     // Пакет scene-intent'ов от одного input события пишем как одну транзакцию.
     const bool txOpened = !widgetOut.intents.empty() && history_.begin();

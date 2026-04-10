@@ -7,7 +7,6 @@ file(GLOB_RECURSE PLATFORM_SOURCES CONFIGURE_DEPENDS
 if(APPLE)
     list(APPEND PLATFORM_SOURCES
             ${CMAKE_CURRENT_LIST_DIR}/macos/MacAudioHost.mm
-            ${CMAKE_CURRENT_LIST_DIR}/macos/MacGbWindowRenderer.mm
             ${CMAKE_CURRENT_LIST_DIR}/macos/MacPrimitiveWindowInput.mm
             ${CMAKE_CURRENT_LIST_DIR}/macos/MacPrimitiveWindowRenderer.mm
             ${CMAKE_CURRENT_LIST_DIR}/macos/MacPrimitiveInputMapper.mm
@@ -33,13 +32,6 @@ target_include_directories(avantgarde_platform
 if(APPLE)
     set_source_files_properties(
             ${CMAKE_CURRENT_LIST_DIR}/macos/MacAudioHost.mm
-            PROPERTIES
-            LANGUAGE CXX
-            COMPILE_OPTIONS "-x;objective-c++"
-    )
-
-    set_source_files_properties(
-            ${CMAKE_CURRENT_LIST_DIR}/macos/MacGbWindowRenderer.mm
             PROPERTIES
             LANGUAGE CXX
             COMPILE_OPTIONS "-x;objective-c++"

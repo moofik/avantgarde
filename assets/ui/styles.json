@@ -1,0 +1,109 @@
+{
+  "styles": {
+    "frame.root": {
+      "background_color": "@theme.colors.bg.main",
+      "border_color": "@theme.colors.border.default",
+      "default_text_color": "@theme.colors.text.primary"
+    },
+    "header.title.base": {
+      "font": "@theme.fonts.display",
+      "font_size": "@theme.sizes.font.header.base",
+      "text_color": "@theme.colors.text.header",
+      "background_color": "@theme.colors.bg.panel",
+      "width": "100%"
+    },
+    "header.title.default": {
+      "style_ref": "@styles.header.title.base",
+      "font_size": "@theme.sizes.font.header.default"
+    },
+    "header.title.tracks": {
+      "style_ref": "@styles.header.title.base",
+      "font_size": "@theme.sizes.font.header.tracks",
+      "effects": [
+        { "preset": "@effects.glitch.header.tracks" }
+      ]
+    },
+
+    "separator.default": {
+      "border_color": "@theme.colors.border.default",
+      "height": 1,
+      "width": "100%"
+    },
+
+    "text.primary": {
+      "text_color": "@theme.colors.text.primary",
+      "width": "100%"
+    },
+    "text.secondary": {
+      "text_color": "@theme.colors.text.secondary",
+      "width": "100%"
+    },
+
+    "footer.action": {
+      "style_ref": "@styles.text.primary"
+    },
+    "footer.keys": {
+      "style_ref": "@styles.text.secondary"
+    },
+
+    "track.icon": {
+      "font": "@theme.fonts.medieval",
+      "font_size": "@theme.sizes.font.track.icon",
+      "text_color": "@theme.colors.text.primary"
+    },
+    "track.mode": {
+      "font": "@theme.fonts.medieval",
+      "font_size": "@theme.sizes.font.track.mode",
+      "text_color": "@theme.colors.text.header",
+      "effects": [
+        { "preset": "@effects.mode.glow" },
+        { "preset": "@effects.mode.typing" }
+      ]
+    },
+    "track.animslot": {
+      "border_color": "@theme.colors.border.accent",
+      "text_color": "@theme.colors.text.anim"
+    },
+
+    "sample.waveform": {
+      "border_color": "@theme.colors.border.accent",
+      "text_color": "@theme.colors.text.wave",
+      "background_color": "@theme.colors.fx.wave_fill"
+    },
+    "sample.knob": {
+      "font": "@theme.fonts.knob",
+      "font_size": "@theme.sizes.font.sample.knob",
+      "knob_size": "@theme.sizes.knob.sample",
+      "text_color": "@theme.colors.text.header",
+      "border_color": "@theme.colors.text.header"
+    },
+
+    "fx.meta": {
+      "text_color": "@theme.colors.text.primary",
+      "width": "100%"
+    },
+    "fx.knob.base": {
+      "font": "@theme.fonts.gothic",
+      "font_size": "@theme.sizes.font.fx.knob",
+      "knob_size": "@theme.sizes.knob.sample",
+      "text_color": "@theme.colors.text.header",
+      "border_color": "@theme.colors.text.header"
+    },
+    "fx.knob.glitch_on_change": {
+      "effects": [
+        { "preset": "@effects.glitch.knob.change" }
+      ]
+    },
+    "fx.switch.base": {
+      "font": "@theme.fonts.gothic",
+      "font_size": "@theme.sizes.font.fx.switch",
+      "text_color": "@theme.colors.text.header",
+      "border_color": "@theme.colors.text.header",
+      "background_color": "@theme.colors.fx.wave_fill"
+    },
+    "fx.animslot": {
+      "border_color": "@theme.colors.border.accent",
+      "text_color": "@theme.colors.text.anim"
+    }
+  }
+}

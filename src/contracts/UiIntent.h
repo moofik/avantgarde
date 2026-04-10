@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <string>
 
+#include "contracts/UiScene.h"
+
 namespace avantgarde {
 
 // Команды высокого уровня от виджетов к application-layer dispatcher.
@@ -41,8 +43,17 @@ enum class UiIntentType : uint8_t {
     // value: 1.0 = LOOPER, 0.0 = NOTE/SAMPLER.
     // Под капотом это пресет нескольких трековых policy-параметров.
     SetTrackLooperMode,
+    // Явная установка одного из 4 профилей playback-режима трека:
+    // value: 0=PATTERN, 1=PATTERN_ONCE, 2=LOOP, 3=ONESHOT.
+    SetTrackPlaybackProfile,
     // Явная установка speed/stretch для трека.
     SetTrackSpeed,
+    // Явная установка gain [0..1] для трека.
+    SetTrackGain,
+    // Явная установка стартовой границы playback-региона [0..1].
+    SetTrackTrimStart,
+    // Явная установка конечной границы playback-региона [0..1].
+    SetTrackTrimEnd,
     // Явная установка режима квантизации транспорта
     // (value: 0=None, 1=Beat, 2=Bar).
     SetTransportQuant,
@@ -72,6 +83,14 @@ enum class UiIntentType : uint8_t {
 // Поля используются частично в зависимости от типа.
 struct UiIntent {
     UiIntentType type{UiIntentType::None};
+    // Целевая сцена для навигационных intent-ов (OpenScene/Back).
+    UiScene scene{UiScene::Tracks};
+    // Флаги сброса UI-навигации. Применяются внешним роутером.
+    bool resetCursor{false};
+    bool resetScroll{false};
+    bool resetSceneActionIndex{false};
+    bool resetSelectedFx{false};
+    bool closeFxAddPopup{false};
     // Целевой трек (если intent track-scoped).
     uint8_t track{0};
     // FX slot в цепочке трека (для FxList/FxEditor действий).

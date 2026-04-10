@@ -1,31 +1,14 @@
 #include "app/SamplerIoLayer.h"
 
-#include <chrono>
-
-#include "control/TerminalUiInput.h"
-#include "platform/lowres/LowResUiRenderer.h"
+#if defined(__APPLE__)
 #include "platform/macos/MacPrimitiveWindowInput.h"
 #include "platform/macos/MacPrimitiveWindowRenderer.h"
-#include "platform/terminal/AnsiUiRenderer.h"
-#include "platform/terminal/GothicGbUiRenderer.h"
-#include "platform/terminal/TerminalCharDisplay.h"
+#endif
 
 namespace avantgarde {
 
 bool parseSamplerUiMode(std::string_view raw, SamplerUiMode& out) noexcept {
-    if (raw == "ansi") {
-        out = SamplerUiMode::Ansi;
-        return true;
-    }
-    if (raw == "lowres") {
-        out = SamplerUiMode::LowRes;
-        return true;
-    }
-    if (raw == "gb") {
-        out = SamplerUiMode::Gb;
-        return true;
-    }
-    if (raw == "gb-window") {
+    if (raw == "gb-window" || raw == "window") {
         out = SamplerUiMode::GbWindow;
         return true;
     }
@@ -34,66 +17,28 @@ bool parseSamplerUiMode(std::string_view raw, SamplerUiMode& out) noexcept {
 
 SamplerIoLayer::SamplerIoLayer() = default;
 
-SamplerIoLayer::~SamplerIoLayer() {
-    // Safety: гарантируем join фонового input thread.
-    stopTerminalInput();
-}
+SamplerIoLayer::~SamplerIoLayer() = default;
 
 bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) {
-    // Для GB-режимов по умолчанию используем gothic-тему.
-    const UiTheme effectiveGbTheme = config.themeProvided ? config.theme : UiTheme::Gothic;
+    const UiTheme effectiveTheme = config.themeProvided ? config.theme : UiTheme::Gothic;
 
-    if (config.mode == SamplerUiMode::LowRes) {
-        display_ = std::make_unique<TerminalCharDisplay>(64, 16);
-        renderer_ = std::make_unique<LowResUiRenderer>(*display_);
-        return true;
-    }
+#if defined(__APPLE__)
     if (config.mode == SamplerUiMode::GbWindow) {
-        // В window backend запоминаем типизированный указатель для input pump.
-        renderer_ = std::make_unique<MacPrimitiveWindowRenderer>(effectiveGbTheme);
+        renderer_ = std::make_unique<MacPrimitiveWindowRenderer>(effectiveTheme);
         windowRenderer_ = dynamic_cast<MacPrimitiveWindowRenderer*>(renderer_.get());
         windowInput_ = std::make_unique<macos::MacPrimitiveWindowInput>();
         return true;
     }
+#endif
     windowRenderer_ = nullptr;
     windowInput_.reset();
-    if (config.mode == SamplerUiMode::Gb) {
-        renderer_ = std::make_unique<GothicGbUiRenderer>(effectiveGbTheme, config.gbTextWidth);
-        return true;
-    }
-    if (config.mode == SamplerUiMode::Ansi) {
-        renderer_ = std::make_unique<AnsiUiRenderer>();
-        return true;
-    }
-
-    errorOut = "unsupported io mode";
+    (void)effectiveTheme;
+    errorOut = "gb-window mode is supported only on macOS";
     return false;
 }
 
-void SamplerIoLayer::startTerminalInput(std::atomic<bool>& stopFlag) {
-    // Перезапуск потока разрешен: сначала стопаем старый.
-    stopTerminalInput();
-    terminalInputThread_ = std::thread([this, &stopFlag]() {
-        TerminalUiInput input;
-        while (!stopFlag.load(std::memory_order_acquire)) {
-            UiGestureEvent ev{};
-            if (input.poll(ev)) {
-                inputQueue_.push(ev);
-                continue;
-            }
-            // Небольшой sleep снижает CPU spin в idle.
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    });
-}
-
-void SamplerIoLayer::stopTerminalInput() noexcept {
-    if (terminalInputThread_.joinable()) {
-        terminalInputThread_.join();
-    }
-}
-
 bool SamplerIoLayer::readWindowEvents() {
+#if defined(__APPLE__)
     if (!windowRenderer_ || !windowInput_) {
         return false;
     }
@@ -104,39 +49,28 @@ bool SamplerIoLayer::readWindowEvents() {
         inputQueue_.push(ev);
     }
     return true;
+#else
+    return false;
+#endif
 }
 
 bool SamplerIoLayer::readNextInputEvent(UiGestureEvent& out) {
     return inputQueue_.tryPop(out);
 }
 
-bool SamplerIoLayer::renderOnMainThread() const noexcept {
-    return windowRenderer_ != nullptr;
-}
-
 void SamplerIoLayer::render(const UiState& state,
-                            const UiPreparedLayout* preparedLayout,
-                            const std::string& sceneFrame,
-                            bool showHeaderOverlay) {
-    (void)showHeaderOverlay;
+                            const UiPreparedLayout* preparedLayout) {
     if (!renderer_) {
         return;
     }
-    // Новый примитивный renderer читает непосредственно UiPreparedLayout.
+#if defined(__APPLE__)
     if (preparedLayout) {
         if (auto* windowRenderer = dynamic_cast<MacPrimitiveWindowRenderer*>(renderer_.get())) {
             windowRenderer->renderPreparedLayout(*preparedLayout);
             return;
         }
     }
-    // Fallback для старых backend-ов: текстовый scene-frame либо обычный render(state).
-    if (!sceneFrame.empty()) {
-        if (auto* gbRenderer = dynamic_cast<GothicGbUiRenderer*>(renderer_.get())) {
-            gbRenderer->renderCustomFrame(sceneFrame);
-            return;
-        }
-    }
-    // Fallback: обычный render(state) для backends без custom frame.
+#endif
     renderer_->render(state);
 }
 

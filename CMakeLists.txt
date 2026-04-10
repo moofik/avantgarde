@@ -80,6 +80,7 @@ endif()
 # -------------------------------------------------------
 add_executable(avantgarde
         ${CMAKE_SOURCE_DIR}/main.cpp
+        ${CMAKE_SOURCE_DIR}/src/app/AppDiagnostics.cpp
         ${CMAKE_SOURCE_DIR}/src/app/SamplerApplication.cpp
         ${CMAKE_SOURCE_DIR}/src/app/UiIntentApplier.cpp
         ${CMAKE_SOURCE_DIR}/src/app/HistoryTransactionManager.cpp

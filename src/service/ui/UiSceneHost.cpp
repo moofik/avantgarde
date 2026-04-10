@@ -5,13 +5,16 @@
 #include <stdexcept>
 #include <string>
 
-#include "service/ui/layout/UiPreparedLayoutAsciiRenderer.h"
-
 namespace avantgarde {
 namespace {
 
+// На одной странице показываем один трек.
+// Значение используется только в UI-навигации и не влияет на аудио-движок.
 constexpr std::size_t kTracksPerPage = 1;
 
+// Сдвиг активного трека назад с циклическим переходом.
+// Если current вышел за диапазон (например после изменения числа треков),
+// сначала зажимаем его к последнему валидному индексу.
 uint8_t selectPrevTrack(uint8_t current, std::size_t totalTracks) noexcept {
     if (totalTracks == 0) {
         return 0;
@@ -23,6 +26,8 @@ uint8_t selectPrevTrack(uint8_t current, std::size_t totalTracks) noexcept {
     return (current == 0U) ? last : static_cast<uint8_t>(current - 1U);
 }
 
+// Сдвиг активного трека вперед с циклическим переходом.
+// Если current невалидный, начинаем с нулевого индекса.
 uint8_t selectNextTrack(uint8_t current, std::size_t totalTracks) noexcept {
     if (totalTracks == 0) {
         return 0;
@@ -34,6 +39,8 @@ uint8_t selectNextTrack(uint8_t current, std::size_t totalTracks) noexcept {
     return (current == last) ? 0U : static_cast<uint8_t>(current + 1U);
 }
 
+// Вычисление номера UI-страницы по индексу трека.
+// Это чисто визуальная навигация: номер страницы не отправляется в RT.
 uint16_t pageForTrack(uint8_t track, std::size_t totalTracks) noexcept {
     if (totalTracks == 0) {
         return 0;
@@ -63,6 +70,8 @@ UiGesture normalizeHardwareAction(UiGesture action) noexcept {
     }
 }
 
+// Признак, что gesture относится к active-action-pointer модели:
+// перемещение фокуса, изменение значения, apply, undo/redo и т.д.
 bool isPointerAction(UiGesture action) noexcept {
     switch (action) {
         case UiGesture::ActionFocusPrev:
@@ -82,6 +91,8 @@ bool isPointerAction(UiGesture action) noexcept {
     }
 }
 
+// Преобразуем жест в операцию UiAction::Op.
+// Это центральная точка сопоставления "кнопка -> семантика действия".
 UiAction::Op toActionOp(UiGesture action) noexcept {
     switch (action) {
         case UiGesture::ActionFocusPrev: return UiAction::Op::FocusPrev;
@@ -99,6 +110,7 @@ UiAction::Op toActionOp(UiGesture action) noexcept {
     }
 }
 
+// Операции, которые считаются подтверждением/запуском действия.
 bool isApplyLikeOp(UiAction::Op op) noexcept {
     return op == UiAction::Op::Apply ||
            op == UiAction::Op::Press;
@@ -110,7 +122,7 @@ bool UiSceneHost::registerWidget(UiScene scene, std::unique_ptr<IUiWidget> widge
     if (!widget) {
         return false;
     }
-    // Registry keeps single owner for each scene widget.
+    // Host владеет виджетом и гарантирует один активный экземпляр на сцену.
     widgets_[sceneIndex_(scene)] = std::move(widget);
     return true;
 }
@@ -131,18 +143,9 @@ const UiNavState& UiSceneHost::nav() const noexcept {
     return nav_;
 }
 
-bool UiSceneHost::renderActive(UiTextBuffer& out, const UiState& rtState) const {
-    // Всегда начинаем с чистого кадрового буфера для детерминированного рендера.
-    out.clear();
-    UiPreparedLayout prepared{};
-    if (!buildPreparedActive(prepared, rtState)) {
-        return false;
-    }
-    out.lines = UiPreparedLayoutAsciiRenderer::render(prepared);
-    return true;
-}
-
 bool UiSceneHost::buildPreparedActive(UiPreparedLayout& out, const UiState& rtState) const {
+    // Всегда очищаем выходной контейнер до сборки нового кадра,
+    // чтобы рендерер не получил "хвосты" от предыдущей сцены.
     out = UiPreparedLayout{};
     const auto& widget = widgets_[sceneIndex_(nav_.scene)];
     if (!widget) {
@@ -150,6 +153,8 @@ bool UiSceneHost::buildPreparedActive(UiPreparedLayout& out, const UiState& rtSt
         std::fprintf(stderr, "[UI][RENDER][ERROR] %s\n", msg.c_str());
         throw std::runtime_error(msg);
     }
+    // Виджет собирает только декларативный prepared-layout.
+    // Геометрию и пиксели строит отдельный рендер-слой.
     if (!widget->buildPreparedLayout(out, rtState, nav_)) {
         std::string msg = "UiSceneHost: widget '";
         msg += widget->id();
@@ -163,11 +168,13 @@ bool UiSceneHost::buildPreparedActive(UiPreparedLayout& out, const UiState& rtSt
 UiActionCatalog UiSceneHost::queryGlobalActions_(const UiState& rtState) const {
     UiActionCatalog out{};
 
+    // Локальный helper уменьшает повторение boilerplate.
     auto push = [&out](UiAction action) {
         out.actions.push_back(std::move(action));
     };
 
     {
+        // Play/Stop храним как bool-value, чтобы UI мог показать текущий статус.
         UiAction a{};
         a.def.id = UiAction::Id::GlobalPlayStop;
         a.def.scope = UiAction::Scope::Global;
@@ -179,6 +186,7 @@ UiActionCatalog UiSceneHost::queryGlobalActions_(const UiState& rtState) const {
         push(std::move(a));
     }
     {
+        // Универсальный "назад": контекстный выход из текущей сцены.
         UiAction a{};
         a.def.id = UiAction::Id::GlobalBack;
         a.def.scope = UiAction::Scope::Global;
@@ -189,6 +197,7 @@ UiActionCatalog UiSceneHost::queryGlobalActions_(const UiState& rtState) const {
         push(std::move(a));
     }
     {
+        // Пагинация имеет смысл только если треков больше одной страницы.
         const bool hasMultiPage = rtState.tracks.size() > kTracksPerPage;
         UiAction a{};
         a.def.id = UiAction::Id::GlobalPagePrev;
@@ -212,9 +221,12 @@ UiActionCatalog UiSceneHost::queryGlobalActions_(const UiState& rtState) const {
     }
 
     if (!out.actions.empty()) {
+        // Курсор глобальных action-ов переживает перерисовки,
+        // поэтому зажимаем его к текущему размеру каталога.
         out.currentIndex = std::min<uint16_t>(
             nav_.globalActionIndex,
             static_cast<uint16_t>(out.actions.size() - 1U));
+        // Явно помечаем выбранный action, чтобы виджет мог отрисовать индикацию.
         for (std::size_t i = 0; i < out.actions.size(); ++i) {
             out.actions[i].state.selected = (i == out.currentIndex);
         }
@@ -224,8 +236,10 @@ UiActionCatalog UiSceneHost::queryGlobalActions_(const UiState& rtState) const {
 
 WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtState) {
     WidgetOutput out{};
+    // По умолчанию считаем, что global action распознан host-ом.
     out.handled = true;
     if (!action.state.enabled) {
+        // Disabled действие не генерирует intents.
         return out;
     }
 
@@ -234,6 +248,7 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
             if (!isApplyLikeOp(action.op)) {
                 return out;
             }
+            // Интент работает как toggle на основании актуального transport-state.
             UiIntent it{};
             it.type = UiIntentType::SetTransportPlaying;
             it.value = rtState.transport.playing ? 0.0f : 1.0f;
@@ -244,19 +259,21 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
             if (!isApplyLikeOp(action.op)) {
                 return out;
             }
+            // Шаг 1: FxEditor -> FxList.
             if (nav_.scene == UiScene::FxEditor && widgets_[sceneIndex_(UiScene::FxList)]) {
-                nav_.scene = UiScene::FxList;
-                nav_.sceneActionIndex = 0;
                 UiIntent it{};
                 it.type = UiIntentType::Back;
+                it.scene = UiScene::FxList;
+                it.resetSceneActionIndex = true;
                 out.intents.push_back(std::move(it));
                 return out;
             }
+            // Шаг 2: любая непустая сцена -> Tracks.
             if (nav_.scene != UiScene::Tracks) {
-                nav_.scene = UiScene::Tracks;
-                nav_.sceneActionIndex = 0;
                 UiIntent it{};
                 it.type = UiIntentType::Back;
+                it.scene = UiScene::Tracks;
+                it.resetSceneActionIndex = true;
                 out.intents.push_back(std::move(it));
             }
             return out;
@@ -268,6 +285,8 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
             if (rtState.tracks.empty()) {
                 return out;
             }
+            // Обновляем и selectedTrack, и trackPage, чтобы UI и state
+            // оставались согласованными после перелистывания.
             nav_.selectedTrack = selectPrevTrack(nav_.selectedTrack, rtState.tracks.size());
             nav_.trackPage = pageForTrack(nav_.selectedTrack, rtState.tracks.size());
             UiIntent it{};
@@ -296,10 +315,13 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
         case UiAction::Id::GlobalMasterVolume:
         case UiAction::Id::SceneTrackSelect:
         case UiAction::Id::SceneTrackLooperMode:
+        case UiAction::Id::SceneTrackPlaybackProfile:
         case UiAction::Id::SceneTrackMute:
         case UiAction::Id::SceneTrackArm:
         case UiAction::Id::SceneTrackSpeed:
         case UiAction::Id::SceneTrackGain:
+        case UiAction::Id::SceneTrackTrimStart:
+        case UiAction::Id::SceneTrackTrimEnd:
         case UiAction::Id::SceneQuantize:
         case UiAction::Id::SceneTempoBpm:
         case UiAction::Id::ScenePatternPrev:
@@ -312,6 +334,7 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
         case UiAction::Id::SceneTrackMenuLoadSample:
         case UiAction::Id::SceneTrackMenuClear:
         case UiAction::Id::SceneTrackMenuFxList:
+        case UiAction::Id::SceneTrackMenuSampleEdit:
         case UiAction::Id::SceneFxTypeSelect:
         case UiAction::Id::SceneFxSlotSelect:
         case UiAction::Id::SceneFxEnabled:
@@ -321,12 +344,15 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
         case UiAction::Id::SceneFxParamValue:
         case UiAction::Id::SceneFxBack:
         default:
+            // Не-global id: передаем управление scene-слою.
             out.handled = false;
             return out;
     }
 }
 
 WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState) {
+    // Единая нормализация аппаратных клавиш в "виртуальные" действия.
+    // Это позволяет поддерживать один и тот же pipeline на desktop и device.
     action = normalizeHardwareAction(action);
 
     // В трековой сцене даем удобные алиасы под active-action-pointer:
@@ -342,6 +368,8 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
     }
 
     if (action == UiGesture::ActionScopeToggle) {
+        // Переключаем контекст active-action-pointer:
+        // Scene scope <-> Global scope.
         nav_.actionScope = (nav_.actionScope == UiAction::Scope::Scene)
                                ? UiAction::Scope::Global
                                : UiAction::Scope::Scene;
@@ -351,6 +379,7 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
     // Direct-select (track/pattern) обрабатывается в SamplerApplication,
     // где есть доступ к payload UiGestureEvent::value.
     if (action == UiGesture::SelectPrevTrack) {
+        // Старый direct-control путь без action-pointer.
         nav_.selectedTrack = selectPrevTrack(nav_.selectedTrack, rtState.tracks.size());
         nav_.trackPage = pageForTrack(nav_.selectedTrack, rtState.tracks.size());
         UiIntent it{};
@@ -389,32 +418,38 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         return WidgetOutput{true, {it}};
     }
     if (action == UiGesture::OpenManager) {
+        // Открываем сцену только если виджет менеджера зарегистрирован.
         if (widgets_[sceneIndex_(UiScene::Manager)]) {
-            nav_.scene = UiScene::Manager;
             UiIntent openIntent{};
             openIntent.type = UiIntentType::OpenScene;
+            openIntent.scene = UiScene::Manager;
+            openIntent.resetCursor = true;
+            openIntent.resetScroll = true;
+            openIntent.resetSceneActionIndex = true;
             return WidgetOutput{true, {openIntent}};
         }
         return {};
     }
     if (action == UiGesture::BackScene) {
+        // Специальный случай: если в FxList открыт popup выбора эффекта,
+        // сначала закрываем popup жестом самого виджета, а не выходим из сцены.
         if (nav_.scene == UiScene::FxList &&
             nav_.fxAddPopupOpen &&
             widgets_[sceneIndex_(UiScene::FxList)]) {
             return widgets_[sceneIndex_(UiScene::FxList)]->onGesture(UiGesture::BackScene, rtState, nav_);
         }
         if (nav_.scene == UiScene::FxEditor && widgets_[sceneIndex_(UiScene::FxList)]) {
-            nav_.scene = UiScene::FxList;
-            nav_.sceneActionIndex = 0;
             UiIntent backIntent{};
             backIntent.type = UiIntentType::Back;
+            backIntent.scene = UiScene::FxList;
+            backIntent.resetSceneActionIndex = true;
             return WidgetOutput{true, {backIntent}};
         }
         if (nav_.scene != UiScene::Tracks) {
-            nav_.scene = UiScene::Tracks;
-            nav_.sceneActionIndex = 0;
             UiIntent backIntent{};
             backIntent.type = UiIntentType::Back;
+            backIntent.scene = UiScene::Tracks;
+            backIntent.resetSceneActionIndex = true;
             return WidgetOutput{true, {backIntent}};
         }
         return {};
@@ -423,6 +458,8 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
     // Глобальные transport/track hotkeys больше не обрабатываются в Application legacy-switch.
     // Все команды заворачиваются в intents прямо здесь.
     if (action == UiGesture::PlayActiveTrack || action == UiGesture::StopActiveTrack) {
+        // С исторических причин жест называется *ActiveTrack, но семантика
+        // теперь глобальная: запускаем/останавливаем транспорт целиком.
         UiIntent it{};
         it.type = UiIntentType::SetTransportPlaying;
         it.value = (action == UiGesture::PlayActiveTrack) ? 1.0f : 0.0f;
@@ -431,6 +468,7 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
     if (action == UiGesture::QuantNone ||
         action == UiGesture::QuantBeat ||
         action == UiGesture::QuantBar) {
+        // Значения 0/1/2 совпадают с enum QuantizeMode в dispatcher-слое.
         UiIntent it{};
         it.type = UiIntentType::SetTransportQuant;
         it.value = (action == UiGesture::QuantNone) ? 0.0f : (action == UiGesture::QuantBeat ? 1.0f : 2.0f);
@@ -446,6 +484,7 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         }
         UiIntent it{};
         it.type = UiIntentType::SetTransportBpm;
+        // Защищаемся от выхода за рабочий диапазон BPM.
         const float dir = (action == UiGesture::BpmUp) ? 1.0f : -1.0f;
         it.value = std::clamp(rtState.transport.bpm + dir, 20.0f, 300.0f);
         return WidgetOutput{true, {it}};
@@ -465,6 +504,8 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         if (rtState.tracks.empty()) {
             return WidgetOutput{true, {}};
         }
+        // selectedTrack может устареть после изменения конфигурации проекта,
+        // поэтому зажимаем индекс перед чтением трековых полей.
         const uint8_t t = (nav_.selectedTrack >= rtState.tracks.size())
                               ? static_cast<uint8_t>(rtState.tracks.size() - 1U)
                               : nav_.selectedTrack;
@@ -489,6 +530,7 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
             return WidgetOutput{true, {it}};
         }
         it.type = UiIntentType::SetTrackSpeed;
+        // speed-step фиксированный для hotkey-пути; pointer-путь берет step из action.def.
         const float dir = (action == UiGesture::TrackSpeedUp) ? 1.0f : -1.0f;
         it.value = std::clamp(rtState.tracks[t].stretchRatio + dir * 0.05f, 0.25f, 4.0f);
         return WidgetOutput{true, {it}};
@@ -496,6 +538,8 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
 
     auto& widget = widgets_[sceneIndex_(nav_.scene)];
     if (!widget) {
+        // Если для активной сцены виджет не зарегистрирован,
+        // возвращаем "не обработано" без генерации интентов.
         return {};
     }
 
@@ -562,13 +606,16 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
     // action + navState + uiState -> intent (вычисляется в виджете).
     if (isPointerAction(action)) {
         const bool globalScope = (nav_.actionScope == UiAction::Scope::Global);
+        // В зависимости от scope берем action-каталог либо у host-а, либо у виджета.
         UiActionCatalog catalog = globalScope
                                       ? queryGlobalActions_(rtState)
                                       : widget->queryAvailableActions(rtState, nav_);
         if (catalog.actions.empty()) {
+            // В режиме pointer пустой каталог = жест обработан, но делать нечего.
             return WidgetOutput{true, {}};
         }
 
+        // Курсор action-ов живет в nav_ и сохраняется между кадрами.
         uint16_t& cursor = globalScope ? nav_.globalActionIndex : nav_.sceneActionIndex;
         cursor = std::min<uint16_t>(cursor, static_cast<uint16_t>(catalog.actions.size() - 1U));
 
@@ -588,17 +635,28 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
 
         UiAction active = catalog.actions[cursor];
         active.op = op;
+        if (!active.state.enabled &&
+            (op == UiAction::Op::Apply ||
+             op == UiAction::Op::Press ||
+             op == UiAction::Op::AdjustPrev ||
+             op == UiAction::Op::AdjustNext)) {
+            return WidgetOutput{true, {}};
+        }
+        // delta рассчитываем только для относительных операций изменения.
         if (op == UiAction::Op::AdjustPrev) {
             active.delta = -std::max(0.0f, active.def.step);
         } else if (op == UiAction::Op::AdjustNext) {
             active.delta = std::max(0.0f, active.def.step);
         }
         if (globalScope) {
+            // Global scope не вызывает виджет напрямую.
             return onGlobalAction_(active, rtState);
         }
+        // Scene scope: виджет сам маппит action в intents.
         return widget->onAction(active, rtState, nav_);
     }
 
+    // Финальный fallback: отдаем жест виджету как есть.
     return widget->onGesture(action, rtState, nav_);
 }
 

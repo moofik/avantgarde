@@ -1,0 +1,65 @@
+{
+  "id": "fx_profile_hpf",
+  "layout": {
+    "type": "column",
+    "padding": 0,
+    "gap": 1,
+    "children": [
+      {
+        "type": "text",
+        "id": "fx_meta",
+        "bind": "status.fx.meta",
+        "style_ref": "@styles.fx.meta"
+      },
+      {
+        "type": "row",
+        "id": "fx_split",
+        "width": "100%",
+        "gap": 2,
+        "children": [
+          {
+            "type": "column",
+            "id": "fx_controls_col",
+            "width": "56%",
+            "gap": 1,
+            "children": [
+              {
+                "type": "row",
+                "id": "fx_knobs_row",
+                "width": "100%",
+                "gap": 1,
+                "children": [
+                  {
+                    "type": "knob",
+                    "id": "cutoff",
+                    "label": "CUTOFF",
+                    "bind": "fx.selected.param.0",
+                    "target": "param.fx.selected.0",
+                    "style_ref": "@styles.fx.knob.base",
+                    "width": "100%"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "column",
+            "id": "fx_visual_col",
+            "width": "44%",
+            "gap": 1,
+            "children": [
+              {
+                "type": "anim_slot",
+                "id": "fx_anim",
+                "width": "100%",
+                "height": 8,
+                "bind": "fx.anim.hpf",
+                "style_ref": "@styles.fx.animslot"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

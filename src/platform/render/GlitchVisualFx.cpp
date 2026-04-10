@@ -3,7 +3,9 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <functional>
+#include <vector>
 
 namespace avantgarde {
 namespace {
@@ -162,11 +164,49 @@ VisualFxBlockStyle GlitchVisualFx::resolve(const VisualFxRequest& request) {
 }
 
 bool GlitchVisualFx::applyRgba(VisualFxRgbaView& view, const VisualFxRequest& request) {
-    (void)view;
-    (void)request;
-    // Для текста glitch рендерится геометрией слайсов в renderer.
-    // Pixel post-process здесь намеренно отключен, чтобы не было blur/rgb-пленок.
-    return false;
+    if (!view.pixels || view.width == 0U || view.height == 0U || view.strideBytes < view.width * 4U) {
+        return false;
+    }
+
+    const VisualFxBlockStyle style = resolve(request);
+    if (!style.active) {
+        return false;
+    }
+    const auto* glitch = std::get_if<GlitchVisualFxPayload>(&style.payload);
+    if (!glitch) {
+        return false;
+    }
+
+    const std::size_t byteCount = static_cast<std::size_t>(view.strideBytes) * view.height;
+    std::vector<uint8_t> src(byteCount, 0U);
+    std::copy(view.pixels, view.pixels + byteCount, src.begin());
+    std::fill(view.pixels, view.pixels + byteCount, 0U);
+
+    const uint16_t slices = static_cast<uint16_t>(std::clamp<int>(static_cast<int>(glitch->sliceCount), 2, 4));
+    bool changed = false;
+    for (uint16_t y = 0U; y < view.height; ++y) {
+        const uint16_t sliceIdx = static_cast<uint16_t>(
+            std::min<uint32_t>(slices - 1U, (static_cast<uint32_t>(y) * slices) / std::max<uint16_t>(1U, view.height)));
+        const bool rightShift = (((sliceIdx + (glitch->alternatePhase ? 1U : 0U)) % 2U) == 0U);
+        const float dir = rightShift ? 1.0f : -1.0f;
+        const float shiftF = glitch->offsetX + dir * (0.35f + glitch->splitPx * 0.95f);
+        const int32_t shiftPx = static_cast<int32_t>(std::lround(shiftF));
+        changed = changed || (shiftPx != 0);
+
+        uint8_t* dstRow = view.pixels + static_cast<std::size_t>(y) * view.strideBytes;
+        const uint8_t* srcRow = src.data() + static_cast<std::size_t>(y) * view.strideBytes;
+        for (uint16_t x = 0U; x < view.width; ++x) {
+            const int32_t sx = static_cast<int32_t>(x) - shiftPx;
+            if (sx < 0 || sx >= static_cast<int32_t>(view.width)) {
+                continue;
+            }
+            const std::size_t dstOff = static_cast<std::size_t>(x) * 4U;
+            const std::size_t srcOff = static_cast<std::size_t>(sx) * 4U;
+            std::memcpy(dstRow + dstOff, srcRow + srcOff, 4U);
+        }
+    }
+
+    return changed;
 }
 
 } // namespace avantgarde

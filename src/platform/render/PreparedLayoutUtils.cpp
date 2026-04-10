@@ -53,7 +53,9 @@ void collectComponentsById(const IUiComponent* component, UiComponentIndex& out)
         case UiComponentType::Text:
         case UiComponentType::Knob:
         case UiComponentType::Switch:
+        case UiComponentType::Icon:
         case UiComponentType::AnimSlot:
+        case UiComponentType::Waveform:
         case UiComponentType::List:
         case UiComponentType::Separator:
         default:
@@ -107,4 +109,3 @@ std::string markerPrefix(UiListComponent::Marker marker, bool selected) {
 }
 
 } // namespace avantgarde::render
-

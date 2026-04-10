@@ -9,6 +9,7 @@
 #include "contracts/IPlatform.h"
 #include "contracts/ITransport.h"
 #include "contracts/IPattern.h"
+#include "contracts/ids.h"
 #include "service/pattern/PatternSnapshotManager.h"
 
 namespace avantgarde {
@@ -77,6 +78,9 @@ public:
     // true  -> Looper + IgnoreIfPlaying + ManualStop (+follow transport, loop on)
     // false -> Note   + RetriggerOnNoteOn + ByNoteOff (+one-shot note gate, loop off)
     bool setTrackLooperMode(uint8_t track, bool looperEnabled) noexcept;
+    // Установить один из 4 пользовательских профилей playback-режима трека:
+    // Pattern / PatternOnce / Loop / OneShot.
+    bool setTrackPlaybackProfile(uint8_t track, TrackPlaybackProfileValue profile) noexcept;
     bool setTrackSpeed(uint8_t track, float speed) noexcept;
     // Универсальная установка track-параметра по индексу ids.h.
     bool setTrackParam(uint8_t track, uint16_t paramIndex, float value) noexcept;

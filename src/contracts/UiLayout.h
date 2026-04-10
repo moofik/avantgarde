@@ -23,7 +23,9 @@ enum class UiLayoutNodeType : uint8_t {
     Separator,
     Knob,
     Switch,
+    Icon,
     AnimSlot,
+    Waveform,
     Spacer
 };
 
@@ -63,7 +65,7 @@ enum class UiLayoutAlign : uint8_t {
 struct UiLayoutNode {
     // Описание одного визуального эффекта для UI-ноды.
     struct EffectSpec {
-        // Тип эффекта, например "glitch" или "glow".
+        // Тип эффекта, например "glitch", "glow", "typing", "color_filter".
         std::string type{};
         // Цвет эффекта в hex-формате, например "#A86DB5" (опционально).
         std::string effectColor{};
@@ -85,6 +87,20 @@ struct UiLayoutNode {
     std::string id{};
     std::string text{};
     std::string label{};
+    // Для type="icon": путь к изображению.
+    // Допускаются:
+    // - абсолютный путь;
+    // - путь относительно cwd процесса;
+    // - короткий вид "images/foo.png" -> "assets/images/foo.png".
+    std::string assetPath{};
+    // Цвет текста ноды в hex-формате (например "#D6D1E6").
+    std::string textColor{};
+    // Цвет границы/линии ноды в hex-формате.
+    std::string borderColor{};
+    // Цвет фоновой заливки ноды в hex-формате.
+    std::string backgroundColor{};
+    // Дефолтный цвет текста для дочерних элементов (обычно для root-контейнера).
+    std::string defaultTextColor{};
     // Роль/источник шрифта для рендереров, которые поддерживают типографику.
     // Поддерживаемые значения:
     // - "default" / "body" / "gothic"
@@ -95,8 +111,52 @@ struct UiLayoutNode {
     float fontSize{0.0f};
     // Новый контракт: цепочка эффектов с параметрами на каждый эффект.
     std::vector<EffectSpec> effects{};
+    // Переопределения для конкретного визуального состояния.
+    // Внутри state-блока можно задать условие перехода в состояние и
+    // локальные style-override поля. Если поле пустое/нулевое, берется
+    // базовое значение ноды.
+    struct StateSpec {
+        // Условие, при котором нода попадает в данное состояние.
+        // Пример: "track.selected.fx.enabled", "!target.active".
+        // Для active пустое условие означает "использовать по умолчанию".
+        std::string ifExpr{};
+        // Множитель прозрачности состояния [0..1].
+        float opacity{1.0f};
+        // Эффекты именно для этого состояния.
+        // Если пусто — рендерер использует node.effects.
+        std::vector<EffectSpec> effects{};
+        // Локальные style-override поля.
+        std::string textColor{};
+        std::string borderColor{};
+        std::string backgroundColor{};
+        std::string font{};
+        float fontSize{0.0f};
+        float knobSize{0.0f};
 
+        StateSpec() = default;
+        explicit StateSpec(float opacityDefault) : opacity(opacityDefault) {}
+    };
+
+    // bind — источник значения для отображения (read path).
+    // Пример: "track.selected.speed", "status.transport", "fx.anim.current".
     std::string bind{};
+    // target — цель изменения значения (write path).
+    // По умолчанию пустой: тогда интент изменения берется из bind/контекста виджета.
+    // Пример: "param.track.selected.speed", "param.fx.selected.0".
+    std::string target{};
+    // Условие видимости ноды.
+    // Если условие false, компонент остается в prepared-layout, но не рендерится.
+    // Пример: "track.selected.exists", "!fx.selected.exists", "target.active".
+    std::string visibleIf{};
+    // Базовая прозрачность ноды [0..1].
+    float opacity{1.0f};
+    // Декларация поведения/стилей по состояниям.
+    // active / inactive / disabled заменяют legacy-поля:
+    // enabled_if, active_if, active_opacity, inactive_opacity, disabled_opacity,
+    // effects_active, effects_inactive, effects_disabled.
+    StateSpec active{1.0f};
+    StateSpec inactive{0.45f};
+    StateSpec disabled{0.28f};
     // Масштаб крутилки (только для нод type="knob"):
     // 1.0 = дефолтный размер, <1 уменьшает, >1 увеличивает.
     // Рендерер дополнительно ограничивает размер рамками layout-ячейки.
@@ -114,6 +174,9 @@ struct UiLayoutNode {
     UiLayoutAlign align{UiLayoutAlign::Start};
     // Для text/statusbar: разрешить перенос строк внутри выделенного прямоугольника.
     bool textWrap{false};
+    // Внешний отступ элемента (space вокруг ноды, влияет на раскладку соседей).
+    uint16_t margin{0};
+    // Внутренний отступ элемента (space внутри ноды, влияет на контент).
     uint16_t padding{0};
     uint16_t gap{0};
     std::vector<UiLayoutNode> children{};
@@ -156,7 +219,9 @@ inline const char* toString(UiLayoutNodeType type) noexcept {
         case UiLayoutNodeType::Separator: return "separator";
         case UiLayoutNodeType::Knob: return "knob";
         case UiLayoutNodeType::Switch: return "switch";
+        case UiLayoutNodeType::Icon: return "icon";
         case UiLayoutNodeType::AnimSlot: return "anim_slot";
+        case UiLayoutNodeType::Waveform: return "waveform";
         case UiLayoutNodeType::Spacer: return "spacer";
         case UiLayoutNodeType::Unknown:
         default:
@@ -164,7 +229,7 @@ inline const char* toString(UiLayoutNodeType type) noexcept {
     }
 }
 
-// Мини-парсер строкового имени узла (для загрузчиков TOML/JSON и т.д.).
+// Мини-парсер строкового имени узла (для JSON-загрузчика и runtime-утилит).
 inline UiLayoutNodeType parseUiLayoutNodeType(std::string_view raw) noexcept {
     if (raw == "column") return UiLayoutNodeType::Column;
     if (raw == "row") return UiLayoutNodeType::Row;
@@ -178,7 +243,9 @@ inline UiLayoutNodeType parseUiLayoutNodeType(std::string_view raw) noexcept {
     if (raw == "separator") return UiLayoutNodeType::Separator;
     if (raw == "knob") return UiLayoutNodeType::Knob;
     if (raw == "switch") return UiLayoutNodeType::Switch;
+    if (raw == "icon") return UiLayoutNodeType::Icon;
     if (raw == "anim_slot") return UiLayoutNodeType::AnimSlot;
+    if (raw == "waveform") return UiLayoutNodeType::Waveform;
     if (raw == "spacer") return UiLayoutNodeType::Spacer;
     return UiLayoutNodeType::Unknown;
 }

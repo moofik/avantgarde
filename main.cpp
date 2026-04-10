@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 
+#include "app/AppDiagnostics.h"
 #include "app/SamplerApplication.h"
 #include "app/SamplerIoLayer.h"
 #include "contracts/IPlatform.h"
@@ -12,12 +13,12 @@
 using namespace avantgarde;
 
 int main(int argc, char** argv) {
-    SamplerUiMode uiMode =
-#if defined(__APPLE__)
-        SamplerUiMode::GbWindow;
-#else
-        SamplerUiMode::Ansi;
-#endif
+    const char* logPathEnv = std::getenv("AVANTGARDE_LOG_PATH");
+    (void)AppDiagnostics::init(logPathEnv ? logPathEnv : "logs/avantgarde.log");
+    AppDiagnostics::installCrashHandlers();
+    AppDiagnostics::logf(AppLogLevel::Info, "main start argc=%d", argc);
+
+    SamplerUiMode uiMode = SamplerUiMode::GbWindow;
     UiTheme uiTheme = UiTheme::Default;
     bool uiThemeProvided = false;
     uint8_t trackCount = 4;
@@ -82,7 +83,7 @@ int main(int argc, char** argv) {
             continue;
         }
         if (arg == "--ui") {
-            std::printf("Missing value for --ui (expected: ansi|lowres|gb|gb-window)\n");
+            std::printf("Missing value for --ui (expected: gb-window|window)\n");
             return 1;
         }
         if (arg == "--theme") {
@@ -100,14 +101,10 @@ int main(int argc, char** argv) {
         break;
     }
 
-    static constexpr uint16_t kGbTextWidth = 60;
-
     SamplerAppConfig config{};
     config.io.mode = uiMode;
     config.io.theme = uiTheme;
     config.io.themeProvided = uiThemeProvided;
-    config.io.gbTextWidth = kGbTextWidth;
-    config.gbTextWidth = kGbTextWidth;
     config.engine.trackCount = trackCount;
     config.audioHost = createDefaultAudioHost();
     if (!config.audioHost) {
@@ -127,5 +124,8 @@ int main(int argc, char** argv) {
     }
 
     SamplerApplication app;
-    return app.run(config);
+    const int rc = app.run(config);
+    AppDiagnostics::logf(AppLogLevel::Info, "main exit rc=%d", rc);
+    AppDiagnostics::shutdown();
+    return rc;
 }

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <sstream>
@@ -180,7 +181,8 @@ private:
                         if (cp <= 0x7FU) {
                             out.push_back(static_cast<char>(cp));
                         } else {
-                            // Для конфигов нам достаточно ASCII; остальное заменяем маркером.
+                            // Для layout-конфигов достаточно базового набора символов;
+                            // неподдерживаемые unicode-коды заменяем маркером.
                             out.push_back('?');
                         }
                     } break;
@@ -400,6 +402,28 @@ bool parseSizeFromString(std::string_view raw, UiLayoutSize& out) {
         out.value = percent;
         return true;
     }
+    auto parsePxLike = [&](std::string_view suffix) -> bool {
+        if (value.size() <= suffix.size()) {
+            return false;
+        }
+        if (value.rfind(suffix) != value.size() - suffix.size()) {
+            return false;
+        }
+        float px = 0.0f;
+        if (!parseFloatToken(std::string_view(value.data(), value.size() - suffix.size()), px)) {
+            return false;
+        }
+        out.unit = UiLayoutSize::Unit::Px;
+        out.value = px;
+        return true;
+    };
+    // Внутренние единицы layout — grid-cell.
+    // Для понятности поддерживаем явные синонимы:
+    // - px, cell/cells, ch, row/rows, col/cols.
+    if (parsePxLike("px") || parsePxLike("cells") || parsePxLike("cell") || parsePxLike("rows") ||
+        parsePxLike("row") || parsePxLike("cols") || parsePxLike("col") || parsePxLike("ch")) {
+        return true;
+    }
     float px = 0.0f;
     if (!parseFloatToken(value, px)) {
         return false;
@@ -511,15 +535,178 @@ const JsonValue* findObjectField(const JsonValue& object, std::string_view key) 
     return nullptr;
 }
 
+struct ParseContext {
+    const JsonValue* stylesRoot{nullptr};
+    const JsonValue* themeRoot{nullptr};
+    const JsonValue* effectsRoot{nullptr};
+    std::vector<std::string> styleStack{};
+    std::vector<std::string> effectPresetStack{};
+};
+
+std::string normalizeStyleRef(std::string_view raw) {
+    std::string ref = toLowerAscii(std::string(raw));
+    if (ref.rfind("@styles.", 0) == 0U) {
+        return ref.substr(std::string("@styles.").size());
+    }
+    if (ref.rfind("styles.", 0) == 0U) {
+        return ref.substr(std::string("styles.").size());
+    }
+    return ref;
+}
+
+std::string normalizeThemeRef(std::string_view raw) {
+    std::string ref = toLowerAscii(std::string(raw));
+    if (ref.size() > 3U && ref.front() == '{' && ref.back() == '}') {
+        ref = ref.substr(1U, ref.size() - 2U);
+    }
+    if (ref.rfind("@theme.", 0) == 0U) {
+        return ref.substr(std::string("@theme.").size());
+    }
+    if (ref.rfind("@themes.", 0) == 0U) {
+        return ref.substr(std::string("@themes.").size());
+    }
+    if (ref.rfind("theme.", 0) == 0U) {
+        return ref.substr(std::string("theme.").size());
+    }
+    if (ref.rfind("themes.", 0) == 0U) {
+        return ref.substr(std::string("themes.").size());
+    }
+    return ref;
+}
+
+std::string normalizeEffectPresetRef(std::string_view raw) {
+    std::string ref = toLowerAscii(std::string(raw));
+    if (ref.rfind("@effects.", 0) == 0U) {
+        return ref.substr(std::string("@effects.").size());
+    }
+    if (ref.rfind("effects.", 0) == 0U) {
+        return ref.substr(std::string("effects.").size());
+    }
+    return ref;
+}
+
+const JsonValue* findObjectFieldCaseInsensitive(const JsonValue& object, std::string_view keyLower) {
+    if (object.type != JsonValue::Type::Object) {
+        return nullptr;
+    }
+    for (const auto& [name, value] : object.objectValue) {
+        if (toLowerAscii(name) == keyLower) {
+            return &value;
+        }
+    }
+    return nullptr;
+}
+
+const JsonValue* findDottedNode(const JsonValue& root, std::string_view dottedLower) {
+    if (root.type != JsonValue::Type::Object) {
+        return nullptr;
+    }
+    std::string remain(dottedLower);
+    const JsonValue* current = &root;
+    while (true) {
+        if (current->type != JsonValue::Type::Object) {
+            return nullptr;
+        }
+        if (const JsonValue* exact = findObjectFieldCaseInsensitive(*current, remain)) {
+            return exact;
+        }
+
+        const std::size_t dotPos = remain.find('.');
+        if (dotPos == std::string::npos) {
+            return findObjectFieldCaseInsensitive(*current, remain);
+        }
+        const std::string head = remain.substr(0U, dotPos);
+        const JsonValue* next = findObjectFieldCaseInsensitive(*current, head);
+        if (!next) {
+            return nullptr;
+        }
+        current = next;
+        remain = remain.substr(dotPos + 1U);
+    }
+}
+
+const JsonValue* resolveThemeToken(const ParseContext* context, std::string_view raw) {
+    if (!context || !context->themeRoot) {
+        return nullptr;
+    }
+    const std::string lowered = toLowerAscii(std::string(raw));
+    const bool startsWithRef = lowered.rfind("@theme.", 0) == 0U || lowered.rfind("@themes.", 0) == 0U ||
+                               lowered.rfind("{@theme.", 0) == 0U || lowered.rfind("{@themes.", 0) == 0U ||
+                               lowered.rfind("theme.", 0) == 0U || lowered.rfind("themes.", 0) == 0U;
+    if (!startsWithRef) {
+        return nullptr;
+    }
+    const std::string key = normalizeThemeRef(raw);
+    if (key.empty()) {
+        return nullptr;
+    }
+    return findDottedNode(*context->themeRoot, key);
+}
+
+bool looksLikeThemeToken(std::string_view raw) {
+    const std::string lowered = toLowerAscii(std::string(raw));
+    return lowered.rfind("@theme.", 0) == 0U || lowered.rfind("@themes.", 0) == 0U ||
+           lowered.rfind("{@theme.", 0) == 0U || lowered.rfind("{@themes.", 0) == 0U ||
+           lowered.rfind("theme.", 0) == 0U || lowered.rfind("themes.", 0) == 0U;
+}
+
+const JsonValue* findStyleNode(const JsonValue& stylesRoot, std::string_view rawRef) {
+    if (stylesRoot.type != JsonValue::Type::Object) {
+        return nullptr;
+    }
+    const std::string key = normalizeStyleRef(rawRef);
+    if (key.empty()) {
+        return nullptr;
+    }
+    for (const auto& [name, value] : stylesRoot.objectValue) {
+        if (toLowerAscii(name) == key) {
+            return &value;
+        }
+    }
+    return nullptr;
+}
+
+const JsonValue* findEffectPresetNode(const JsonValue& effectsRoot, std::string_view rawRef) {
+    if (effectsRoot.type != JsonValue::Type::Object) {
+        return nullptr;
+    }
+    const std::string key = normalizeEffectPresetRef(rawRef);
+    if (key.empty()) {
+        return nullptr;
+    }
+    return findDottedNode(effectsRoot, key);
+}
+
+void mergeStyleObjectMap(JsonValue& dstStyles, const JsonValue& srcStyles) {
+    if (dstStyles.type != JsonValue::Type::Object || srcStyles.type != JsonValue::Type::Object) {
+        return;
+    }
+    for (const auto& [srcKey, srcVal] : srcStyles.objectValue) {
+        bool replaced = false;
+        for (auto& [dstKey, dstVal] : dstStyles.objectValue) {
+            if (toLowerAscii(dstKey) == toLowerAscii(srcKey)) {
+                dstVal = srcVal;
+                replaced = true;
+                break;
+            }
+        }
+        if (!replaced) {
+            dstStyles.objectValue.emplace_back(srcKey, srcVal);
+        }
+    }
+}
+
 bool parseNode(const JsonValue& nodeValue,
                UiLayoutNode& out,
                std::string& errorOut,
-               std::string path);
+               std::string path,
+               ParseContext* context);
 
 bool parseChildren(const JsonValue& value,
                    UiLayoutNode& out,
                    std::string& errorOut,
-                   const std::string& path) {
+                   const std::string& path,
+                   ParseContext* context) {
     if (value.type != JsonValue::Type::Array) {
         errorOut = path + ".children must be array";
         return false;
@@ -528,7 +715,11 @@ bool parseChildren(const JsonValue& value,
     out.children.reserve(value.arrayValue.size());
     for (std::size_t i = 0; i < value.arrayValue.size(); ++i) {
         UiLayoutNode child{};
-        if (!parseNode(value.arrayValue[i], child, errorOut, path + ".children[" + std::to_string(i) + "]")) {
+        if (!parseNode(value.arrayValue[i],
+                       child,
+                       errorOut,
+                       path + ".children[" + std::to_string(i) + "]",
+                       context)) {
             return false;
         }
         out.children.push_back(std::move(child));
@@ -536,19 +727,382 @@ bool parseChildren(const JsonValue& value,
     return true;
 }
 
+bool applyEffectSpecObject(const JsonValue& effectObject,
+                           UiLayoutNode::EffectSpec& fx,
+                           bool& hasType,
+                           ParseContext* context,
+                           const std::string& path,
+                           std::string& errorOut) {
+    if (effectObject.type != JsonValue::Type::Object) {
+        errorOut = path + " must be object";
+        return false;
+    }
+
+    if (const JsonValue* preset = findObjectField(effectObject, "preset")) {
+        if (preset->type != JsonValue::Type::String || preset->stringValue.empty()) {
+            errorOut = path + ".preset expects non-empty string";
+            return false;
+        }
+        if (!context || !context->effectsRoot) {
+            errorOut = path + ".preset requires effects catalog";
+            return false;
+        }
+        const std::string presetKey = normalizeEffectPresetRef(preset->stringValue);
+        if (presetKey.empty()) {
+            errorOut = path + ".preset contains empty reference";
+            return false;
+        }
+        if (std::find(context->effectPresetStack.begin(), context->effectPresetStack.end(), presetKey) !=
+            context->effectPresetStack.end()) {
+            errorOut = path + ".preset cyclic reference: " + presetKey;
+            return false;
+        }
+        const JsonValue* presetNode = findEffectPresetNode(*context->effectsRoot, preset->stringValue);
+        if (!presetNode) {
+            errorOut = path + ".preset unresolved: " + preset->stringValue;
+            return false;
+        }
+        context->effectPresetStack.push_back(presetKey);
+        const bool ok = applyEffectSpecObject(*presetNode,
+                                              fx,
+                                              hasType,
+                                              context,
+                                              path + ".preset(" + preset->stringValue + ")",
+                                              errorOut);
+        context->effectPresetStack.pop_back();
+        if (!ok) {
+            return false;
+        }
+    }
+
+    for (const auto& [fxKey, rawFxVal] : effectObject.objectValue) {
+        if (fxKey == "preset") {
+            continue;
+        }
+        const JsonValue* fxValPtr = &rawFxVal;
+        if (rawFxVal.type == JsonValue::Type::String) {
+            if (const JsonValue* themed = resolveThemeToken(context, rawFxVal.stringValue)) {
+                fxValPtr = themed;
+            } else if (looksLikeThemeToken(rawFxVal.stringValue)) {
+                errorOut = path + "." + fxKey + " unresolved theme token: " + rawFxVal.stringValue;
+                return false;
+            }
+        }
+        const JsonValue& fxVal = *fxValPtr;
+
+        if (fxKey == "type") {
+            if (fxVal.type != JsonValue::Type::String || fxVal.stringValue.empty()) {
+                errorOut = path + ".type expects non-empty string";
+                return false;
+            }
+            fx.type = fxVal.stringValue;
+            hasType = true;
+            continue;
+        }
+        if (fxKey == "effect_trigger") {
+            if (fxVal.type != JsonValue::Type::String) {
+                errorOut = path + ".effect_trigger expects string";
+                return false;
+            }
+            fx.effectTrigger = fxVal.stringValue;
+            continue;
+        }
+        if (fxKey == "effect_color") {
+            if (fxVal.type != JsonValue::Type::String) {
+                errorOut = path + ".effect_color expects string";
+                return false;
+            }
+            fx.effectColor = fxVal.stringValue;
+            continue;
+        }
+        if (fxKey == "effect_transition") {
+            if (fxVal.type != JsonValue::Type::String) {
+                errorOut = path + ".effect_transition expects string";
+                return false;
+            }
+            fx.effectTransition = fxVal.stringValue;
+            continue;
+        }
+        if (fxKey == "effect_trigger_out") {
+            uint32_t outMs = 0;
+            if (fxVal.type == JsonValue::Type::Number) {
+                const double rounded = std::llround(fxVal.numberValue);
+                if (std::fabs(fxVal.numberValue - rounded) > 0.000001 || rounded < 0.0 ||
+                    rounded > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
+                    errorOut = path + ".effect_trigger_out expects duration number/string";
+                    return false;
+                }
+                outMs = static_cast<uint32_t>(rounded);
+            } else if (fxVal.type == JsonValue::Type::String) {
+                if (!parseDurationMs(fxVal.stringValue, outMs)) {
+                    errorOut = path + ".effect_trigger_out expects duration (e.g. \"1s\", \"750ms\", 1000)";
+                    return false;
+                }
+            } else {
+                errorOut = path + ".effect_trigger_out expects duration number/string";
+                return false;
+            }
+            fx.effectTriggerOutMs = outMs;
+            continue;
+        }
+        if (fxKey == "effect_interval_ms") {
+            uint16_t ms = 0;
+            if (!parseUint16Number(fxVal, ms)) {
+                errorOut = path + ".effect_interval_ms expects integer";
+                return false;
+            }
+            fx.effectIntervalMs = ms;
+            continue;
+        }
+        if (fxKey == "effect_amount") {
+            float amount = 0.0f;
+            if (!parseFloatNumber(fxVal, amount)) {
+                errorOut = path + ".effect_amount expects number";
+                return false;
+            }
+            fx.effectAmount = amount;
+            continue;
+        }
+        if (fxKey == "effect_speed") {
+            float speed = 0.0f;
+            if (!parseFloatNumber(fxVal, speed)) {
+                errorOut = path + ".effect_speed expects number";
+                return false;
+            }
+            fx.effectSpeed = speed;
+            continue;
+        }
+        errorOut = path + ": unsupported key '" + fxKey + "'";
+        return false;
+    }
+    return true;
+}
+
 bool parseNode(const JsonValue& nodeValue,
                UiLayoutNode& out,
                std::string& errorOut,
-               std::string path) {
+               std::string path,
+               ParseContext* context) {
     if (nodeValue.type != JsonValue::Type::Object) {
         errorOut = path + " must be object";
         return false;
     }
 
-    for (const auto& [key, value] : nodeValue.objectValue) {
+    // style_ref разворачиваем перед локальными полями ноды.
+    // Приоритет: локальные поля ноды выше style_ref.
+    if (const JsonValue* styleRef = findObjectField(nodeValue, "style_ref")) {
+        if (!context || !context->stylesRoot) {
+            errorOut = path + ".style_ref requires styles catalog";
+            return false;
+        }
+        std::vector<std::string> refs{};
+        if (styleRef->type == JsonValue::Type::String) {
+            refs.push_back(styleRef->stringValue);
+        } else if (styleRef->type == JsonValue::Type::Array) {
+            refs.reserve(styleRef->arrayValue.size());
+            for (const JsonValue& item : styleRef->arrayValue) {
+                if (item.type != JsonValue::Type::String || item.stringValue.empty()) {
+                    errorOut = path + ".style_ref expects string or string[]";
+                    return false;
+                }
+                refs.push_back(item.stringValue);
+            }
+        } else {
+            errorOut = path + ".style_ref expects string or string[]";
+            return false;
+        }
+
+        for (const std::string& rawRef : refs) {
+            const std::string key = normalizeStyleRef(rawRef);
+            if (key.empty()) {
+                errorOut = path + ".style_ref contains empty reference";
+                return false;
+            }
+            if (std::find(context->styleStack.begin(), context->styleStack.end(), key) != context->styleStack.end()) {
+                errorOut = path + ".style_ref cyclic reference: " + key;
+                return false;
+            }
+            const JsonValue* styleNode = findStyleNode(*context->stylesRoot, key);
+            if (!styleNode) {
+                errorOut = path + ".style_ref unresolved: " + rawRef;
+                return false;
+            }
+            if (styleNode->type != JsonValue::Type::Object) {
+                errorOut = path + ".style_ref points to non-object style: " + rawRef;
+                return false;
+            }
+            if (findObjectField(*styleNode, "children")) {
+                errorOut = path + ".style_ref style must not contain children: " + rawRef;
+                return false;
+            }
+            context->styleStack.push_back(key);
+            const bool ok = parseNode(*styleNode,
+                                      out,
+                                      errorOut,
+                                      path + ".style_ref(" + rawRef + ")",
+                                      context);
+            context->styleStack.pop_back();
+            if (!ok) {
+                return false;
+            }
+        }
+    }
+
+    auto parseEffectsArrayForNode = [&](const JsonValue& arrayValue,
+                                        std::string_view keyName,
+                                        std::vector<UiLayoutNode::EffectSpec>& outEffects) -> bool {
+        if (arrayValue.type != JsonValue::Type::Array) {
+            errorOut = path + "." + std::string(keyName) + " expects array";
+            return false;
+        }
+        outEffects.clear();
+        outEffects.reserve(arrayValue.arrayValue.size());
+        for (std::size_t i = 0; i < arrayValue.arrayValue.size(); ++i) {
+            const JsonValue& item = arrayValue.arrayValue[i];
+            if (item.type != JsonValue::Type::Object) {
+                errorOut = path + "." + std::string(keyName) + "[" + std::to_string(i) + "] must be object";
+                return false;
+            }
+            UiLayoutNode::EffectSpec fx{};
+            bool hasType = false;
+            if (!applyEffectSpecObject(item,
+                                       fx,
+                                       hasType,
+                                       context,
+                                       path + "." + std::string(keyName) + "[" + std::to_string(i) + "]",
+                                       errorOut)) {
+                return false;
+            }
+            if (!hasType) {
+                errorOut = path + "." + std::string(keyName) + "[" + std::to_string(i) + "].type is required";
+                return false;
+            }
+            outEffects.push_back(std::move(fx));
+        }
+        return true;
+    };
+
+    auto parseNodeStateBlock = [&](const JsonValue& stateValue,
+                                   std::string_view stateKey,
+                                   UiLayoutNode::StateSpec& outState) -> bool {
+        const std::string statePath = path + "." + std::string(stateKey);
+        if (stateValue.type != JsonValue::Type::Object) {
+            errorOut = statePath + " expects object";
+            return false;
+        }
+        for (const auto& [key, rawStateValue] : stateValue.objectValue) {
+            const JsonValue* valuePtr = &rawStateValue;
+            if (rawStateValue.type == JsonValue::Type::String) {
+                if (const JsonValue* themed = resolveThemeToken(context, rawStateValue.stringValue)) {
+                    valuePtr = themed;
+                } else if (looksLikeThemeToken(rawStateValue.stringValue)) {
+                    errorOut = statePath + "." + key + " unresolved theme token: " + rawStateValue.stringValue;
+                    return false;
+                }
+            }
+            const JsonValue& value = *valuePtr;
+
+            if (key == "if") {
+                if (value.type != JsonValue::Type::String) {
+                    errorOut = statePath + ".if expects string";
+                    return false;
+                }
+                outState.ifExpr = value.stringValue;
+                continue;
+            }
+            if (key == "opacity") {
+                float v = 0.0f;
+                if (!parseFloatNumber(value, v)) {
+                    errorOut = statePath + ".opacity expects number";
+                    return false;
+                }
+                outState.opacity = std::clamp(v, 0.0f, 1.0f);
+                continue;
+            }
+            if (key == "effects") {
+                if (!parseEffectsArrayForNode(value, stateKey == std::string_view("active")
+                                                         ? "active.effects"
+                                                         : (stateKey == std::string_view("inactive")
+                                                                ? "inactive.effects"
+                                                                : "disabled.effects"),
+                                              outState.effects)) {
+                    return false;
+                }
+                continue;
+            }
+            if (key == "text_color") {
+                if (value.type != JsonValue::Type::String) {
+                    errorOut = statePath + ".text_color expects string";
+                    return false;
+                }
+                outState.textColor = value.stringValue;
+                continue;
+            }
+            if (key == "border_color") {
+                if (value.type != JsonValue::Type::String) {
+                    errorOut = statePath + ".border_color expects string";
+                    return false;
+                }
+                outState.borderColor = value.stringValue;
+                continue;
+            }
+            if (key == "background_color") {
+                if (value.type != JsonValue::Type::String) {
+                    errorOut = statePath + ".background_color expects string";
+                    return false;
+                }
+                outState.backgroundColor = value.stringValue;
+                continue;
+            }
+            if (key == "font") {
+                if (value.type != JsonValue::Type::String) {
+                    errorOut = statePath + ".font expects string";
+                    return false;
+                }
+                outState.font = value.stringValue;
+                continue;
+            }
+            if (key == "font_size") {
+                float v = 0.0f;
+                if (!parseFloatNumber(value, v)) {
+                    errorOut = statePath + ".font_size expects number";
+                    return false;
+                }
+                outState.fontSize = v;
+                continue;
+            }
+            if (key == "knob_size") {
+                float v = 0.0f;
+                if (!parseFloatNumber(value, v)) {
+                    errorOut = statePath + ".knob_size expects number";
+                    return false;
+                }
+                outState.knobSize = std::clamp(v, 0.2f, 4.0f);
+                continue;
+            }
+            errorOut = statePath + ": unsupported key '" + key + "'";
+            return false;
+        }
+        return true;
+    };
+
+    for (const auto& [key, rawValue] : nodeValue.objectValue) {
         if (key == "children") {
             continue;
         }
+        if (key == "style_ref") {
+            continue;
+        }
+        const JsonValue* valuePtr = &rawValue;
+        if (rawValue.type == JsonValue::Type::String) {
+            if (const JsonValue* themed = resolveThemeToken(context, rawValue.stringValue)) {
+                valuePtr = themed;
+            } else if (looksLikeThemeToken(rawValue.stringValue)) {
+                errorOut = path + "." + key + " unresolved theme token: " + rawValue.stringValue;
+                return false;
+            }
+        }
+        const JsonValue& value = *valuePtr;
         if (key == "type") {
             if (value.type != JsonValue::Type::String) {
                 errorOut = path + ".type expects string";
@@ -585,6 +1139,46 @@ bool parseNode(const JsonValue& nodeValue,
             out.label = value.stringValue;
             continue;
         }
+        if (key == "path") {
+            if (value.type != JsonValue::Type::String) {
+                errorOut = path + ".path expects string";
+                return false;
+            }
+            out.assetPath = value.stringValue;
+            continue;
+        }
+        if (key == "text_color") {
+            if (value.type != JsonValue::Type::String) {
+                errorOut = path + ".text_color expects string";
+                return false;
+            }
+            out.textColor = value.stringValue;
+            continue;
+        }
+        if (key == "border_color") {
+            if (value.type != JsonValue::Type::String) {
+                errorOut = path + ".border_color expects string";
+                return false;
+            }
+            out.borderColor = value.stringValue;
+            continue;
+        }
+        if (key == "background_color") {
+            if (value.type != JsonValue::Type::String) {
+                errorOut = path + ".background_color expects string";
+                return false;
+            }
+            out.backgroundColor = value.stringValue;
+            continue;
+        }
+        if (key == "default_text_color") {
+            if (value.type != JsonValue::Type::String) {
+                errorOut = path + ".default_text_color expects string";
+                return false;
+            }
+            out.defaultTextColor = value.stringValue;
+            continue;
+        }
         if (key == "font") {
             if (value.type != JsonValue::Type::String) {
                 errorOut = path + ".font expects string";
@@ -603,114 +1197,26 @@ bool parseNode(const JsonValue& nodeValue,
             continue;
         }
         if (key == "effects") {
-            if (value.type != JsonValue::Type::Array) {
-                errorOut = path + ".effects expects array";
+            if (!parseEffectsArrayForNode(value, "effects", out.effects)) {
                 return false;
             }
-            out.effects.clear();
-            out.effects.reserve(value.arrayValue.size());
-            for (std::size_t i = 0; i < value.arrayValue.size(); ++i) {
-                const JsonValue& item = value.arrayValue[i];
-                if (item.type != JsonValue::Type::Object) {
-                    errorOut = path + ".effects[" + std::to_string(i) + "] must be object";
-                    return false;
-                }
-                UiLayoutNode::EffectSpec fx{};
-                bool hasType = false;
-                for (const auto& [fxKey, fxVal] : item.objectValue) {
-                    if (fxKey == "type") {
-                        if (fxVal.type != JsonValue::Type::String || fxVal.stringValue.empty()) {
-                            errorOut = path + ".effects[" + std::to_string(i) + "].type expects non-empty string";
-                            return false;
-                        }
-                        fx.type = fxVal.stringValue;
-                        hasType = true;
-                        continue;
-                    }
-                    if (fxKey == "effect_trigger") {
-                        if (fxVal.type != JsonValue::Type::String) {
-                            errorOut = path + ".effects[" + std::to_string(i) + "].effect_trigger expects string";
-                            return false;
-                        }
-                        fx.effectTrigger = fxVal.stringValue;
-                        continue;
-                    }
-                    if (fxKey == "effect_color") {
-                        if (fxVal.type != JsonValue::Type::String) {
-                            errorOut = path + ".effects[" + std::to_string(i) + "].effect_color expects string";
-                            return false;
-                        }
-                        fx.effectColor = fxVal.stringValue;
-                        continue;
-                    }
-                    if (fxKey == "effect_transition") {
-                        if (fxVal.type != JsonValue::Type::String) {
-                            errorOut = path + ".effects[" + std::to_string(i) + "].effect_transition expects string";
-                            return false;
-                        }
-                        fx.effectTransition = fxVal.stringValue;
-                        continue;
-                    }
-                    if (fxKey == "effect_trigger_out") {
-                        uint32_t outMs = 0;
-                        if (fxVal.type == JsonValue::Type::Number) {
-                            const double rounded = std::llround(fxVal.numberValue);
-                            if (std::fabs(fxVal.numberValue - rounded) > 0.000001 || rounded < 0.0 ||
-                                rounded > static_cast<double>(std::numeric_limits<uint32_t>::max())) {
-                                errorOut = path + ".effects[" + std::to_string(i) +
-                                           "].effect_trigger_out expects duration number/string";
-                                return false;
-                            }
-                            outMs = static_cast<uint32_t>(rounded);
-                        } else if (fxVal.type == JsonValue::Type::String) {
-                            if (!parseDurationMs(fxVal.stringValue, outMs)) {
-                                errorOut = path + ".effects[" + std::to_string(i) +
-                                           "].effect_trigger_out expects duration (e.g. \"1s\", \"750ms\", 1000)";
-                                return false;
-                            }
-                        } else {
-                            errorOut = path + ".effects[" + std::to_string(i) +
-                                       "].effect_trigger_out expects duration number/string";
-                            return false;
-                        }
-                        fx.effectTriggerOutMs = outMs;
-                        continue;
-                    }
-                    if (fxKey == "effect_interval_ms") {
-                        uint16_t ms = 0;
-                        if (!parseUint16Number(fxVal, ms)) {
-                            errorOut = path + ".effects[" + std::to_string(i) + "].effect_interval_ms expects integer";
-                            return false;
-                        }
-                        fx.effectIntervalMs = ms;
-                        continue;
-                    }
-                    if (fxKey == "effect_amount") {
-                        float amount = 0.0f;
-                        if (!parseFloatNumber(fxVal, amount)) {
-                            errorOut = path + ".effects[" + std::to_string(i) + "].effect_amount expects number";
-                            return false;
-                        }
-                        fx.effectAmount = amount;
-                        continue;
-                    }
-                    if (fxKey == "effect_speed") {
-                        float speed = 0.0f;
-                        if (!parseFloatNumber(fxVal, speed)) {
-                            errorOut = path + ".effects[" + std::to_string(i) + "].effect_speed expects number";
-                            return false;
-                        }
-                        fx.effectSpeed = speed;
-                        continue;
-                    }
-                    errorOut = path + ".effects[" + std::to_string(i) + "]: unsupported key '" + fxKey + "'";
-                    return false;
-                }
-                if (!hasType) {
-                    errorOut = path + ".effects[" + std::to_string(i) + "].type is required";
-                    return false;
-                }
-                out.effects.push_back(std::move(fx));
+            continue;
+        }
+        if (key == "active") {
+            if (!parseNodeStateBlock(value, "active", out.active)) {
+                return false;
+            }
+            continue;
+        }
+        if (key == "inactive") {
+            if (!parseNodeStateBlock(value, "inactive", out.inactive)) {
+                return false;
+            }
+            continue;
+        }
+        if (key == "disabled") {
+            if (!parseNodeStateBlock(value, "disabled", out.disabled)) {
+                return false;
             }
             continue;
         }
@@ -726,6 +1232,31 @@ bool parseNode(const JsonValue& nodeValue,
                 return false;
             }
             out.bind = value.stringValue;
+            continue;
+        }
+        if (key == "target") {
+            if (value.type != JsonValue::Type::String) {
+                errorOut = path + ".target expects string";
+                return false;
+            }
+            out.target = value.stringValue;
+            continue;
+        }
+        if (key == "visible_if") {
+            if (value.type != JsonValue::Type::String) {
+                errorOut = path + ".visible_if expects string";
+                return false;
+            }
+            out.visibleIf = value.stringValue;
+            continue;
+        }
+        if (key == "opacity") {
+            float v = 0.0f;
+            if (!parseFloatNumber(value, v)) {
+                errorOut = path + ".opacity expects number";
+                return false;
+            }
+            out.opacity = std::clamp(v, 0.0f, 1.0f);
             continue;
         }
         if (key == "knob_size") {
@@ -753,6 +1284,15 @@ bool parseNode(const JsonValue& nodeValue,
             }
             continue;
         }
+        if (key == "margin") {
+            uint16_t v = 0;
+            if (!parseUint16Number(value, v)) {
+                errorOut = path + ".margin expects integer";
+                return false;
+            }
+            out.margin = v;
+            continue;
+        }
         if (key == "padding") {
             uint16_t v = 0;
             if (!parseUint16Number(value, v)) {
@@ -771,10 +1311,17 @@ bool parseNode(const JsonValue& nodeValue,
             out.gap = v;
             continue;
         }
+        if (key == "enabled_if" || key == "enabled_id" ||
+            key == "active_if" || key == "active_id" ||
+            key == "effects_active" || key == "effects_inactive" || key == "effects_disabled" ||
+            key == "active_opacity" || key == "inactive_opacity" || key == "disabled_opacity") {
+            errorOut = path + "." + key + " is removed, use active/inactive/disabled state blocks";
+            return false;
+        }
         if (key == "width") {
             UiLayoutSize sz{};
             if (!parseSize(value, sz)) {
-                errorOut = path + ".width expects px/percent/auto";
+                errorOut = path + ".width expects number/px/%/auto/rows/cols/cells";
                 return false;
             }
             out.width = sz;
@@ -783,7 +1330,7 @@ bool parseNode(const JsonValue& nodeValue,
         if (key == "height") {
             UiLayoutSize sz{};
             if (!parseSize(value, sz)) {
-                errorOut = path + ".height expects px/percent/auto";
+                errorOut = path + ".height expects number/px/%/auto/rows/cols/cells";
                 return false;
             }
             out.height = sz;
@@ -848,7 +1395,7 @@ bool parseNode(const JsonValue& nodeValue,
     }
 
     if (const JsonValue* children = findObjectField(nodeValue, "children")) {
-        if (!parseChildren(*children, out, errorOut, path)) {
+        if (!parseChildren(*children, out, errorOut, path, context)) {
             return false;
         }
     }
@@ -856,7 +1403,12 @@ bool parseNode(const JsonValue& nodeValue,
     return true;
 }
 
-bool parseTemplate(const JsonValue& root, UiLayoutTemplate& out, std::string& errorOut) {
+bool parseTemplate(const JsonValue& root,
+                   const JsonValue* externalThemes,
+                   const JsonValue* externalStyles,
+                   const JsonValue* externalEffects,
+                   UiLayoutTemplate& out,
+                   std::string& errorOut) {
     if (root.type != JsonValue::Type::Object) {
         errorOut = "root must be object";
         return false;
@@ -872,14 +1424,155 @@ bool parseTemplate(const JsonValue& root, UiLayoutTemplate& out, std::string& er
         return false;
     }
 
+    JsonValue mergedStyles{};
+    mergedStyles.type = JsonValue::Type::Object;
+    if (externalStyles && externalStyles->type == JsonValue::Type::Object) {
+        mergedStyles = *externalStyles;
+    }
+    if (const JsonValue* inlineStyles = findObjectField(root, "styles")) {
+        if (inlineStyles->type != JsonValue::Type::Object) {
+            errorOut = "top-level styles must be object";
+            return false;
+        }
+        mergeStyleObjectMap(mergedStyles, *inlineStyles);
+    }
+
+    JsonValue mergedThemes{};
+    mergedThemes.type = JsonValue::Type::Object;
+    if (externalThemes && externalThemes->type == JsonValue::Type::Object) {
+        mergedThemes = *externalThemes;
+    }
+    if (const JsonValue* inlineTheme = findObjectField(root, "theme")) {
+        if (inlineTheme->type != JsonValue::Type::Object) {
+            errorOut = "top-level theme must be object";
+            return false;
+        }
+        mergeStyleObjectMap(mergedThemes, *inlineTheme);
+    }
+    if (const JsonValue* inlineThemes = findObjectField(root, "themes")) {
+        if (inlineThemes->type != JsonValue::Type::Object) {
+            errorOut = "top-level themes must be object";
+            return false;
+        }
+        if (const JsonValue* nestedTheme = findObjectField(*inlineThemes, "theme")) {
+            if (nestedTheme->type != JsonValue::Type::Object) {
+                errorOut = "top-level themes.theme must be object";
+                return false;
+            }
+            mergeStyleObjectMap(mergedThemes, *nestedTheme);
+        } else {
+            mergeStyleObjectMap(mergedThemes, *inlineThemes);
+        }
+    }
+
+    JsonValue mergedEffects{};
+    mergedEffects.type = JsonValue::Type::Object;
+    if (externalEffects && externalEffects->type == JsonValue::Type::Object) {
+        mergedEffects = *externalEffects;
+    }
+    if (const JsonValue* inlineEffects = findObjectField(root, "effects")) {
+        if (inlineEffects->type != JsonValue::Type::Object) {
+            errorOut = "top-level effects must be object";
+            return false;
+        }
+        mergeStyleObjectMap(mergedEffects, *inlineEffects);
+    }
+
+    ParseContext context{};
+    context.stylesRoot = mergedStyles.objectValue.empty() ? nullptr : &mergedStyles;
+    context.themeRoot = mergedThemes.objectValue.empty() ? nullptr : &mergedThemes;
+    context.effectsRoot = mergedEffects.objectValue.empty() ? nullptr : &mergedEffects;
+
     out = UiLayoutTemplate{};
     out.widgetId = id->stringValue;
-    if (!parseNode(*layout, out.root, errorOut, "layout")) {
+    if (!parseNode(*layout, out.root, errorOut, "layout", &context)) {
         return false;
     }
     if (out.root.type == UiLayoutNodeType::Unknown) {
         out.root.type = UiLayoutNodeType::Column;
     }
+    return true;
+}
+
+bool loadCatalogFromAncestors(const std::string& layoutPath,
+                              std::string_view catalogFileName,
+                              std::string_view nestedField,
+                              std::string_view altNestedField,
+                              JsonValue& outCatalog,
+                              std::string& errorOut) {
+    namespace fs = std::filesystem;
+    outCatalog = JsonValue{};
+    outCatalog.type = JsonValue::Type::Object;
+
+    fs::path dir = fs::path(layoutPath).parent_path();
+    std::vector<fs::path> matches{};
+    while (!dir.empty()) {
+        const fs::path catalogPath = dir / std::string(catalogFileName);
+        if (fs::exists(catalogPath)) {
+            matches.push_back(catalogPath);
+        }
+
+        const fs::path parent = dir.parent_path();
+        if (parent == dir) {
+            break;
+        }
+        dir = parent;
+    }
+
+    if (matches.empty()) {
+        return true;
+    }
+
+    if (matches.size() > 1U) {
+        std::ostringstream ss;
+        ss << "duplicate " << catalogFileName << " files found. Keep only one project-level catalog:";
+        for (const fs::path& p : matches) {
+            ss << "\n  - " << p.string();
+        }
+        errorOut = ss.str();
+        return false;
+    }
+
+    const fs::path catalogPath = matches.front();
+    std::ifstream in(catalogPath);
+    if (!in.is_open()) {
+        errorOut = "cannot open " + std::string(catalogFileName) + ": " + catalogPath.string();
+        return false;
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string source = ss.str();
+
+    JsonParser parser(source);
+    JsonValue root{};
+    if (!parser.parse(root, errorOut)) {
+        errorOut = std::string(catalogFileName) + " parse error: " + errorOut;
+        return false;
+    }
+    if (root.type != JsonValue::Type::Object) {
+        errorOut = std::string(catalogFileName) + " root must be object";
+        return false;
+    }
+
+    const JsonValue* nested = nullptr;
+    if (!nestedField.empty()) {
+        nested = findObjectField(root, nestedField);
+    }
+    if (!nested && !altNestedField.empty()) {
+        nested = findObjectField(root, altNestedField);
+    }
+    if (nested) {
+        if (nested->type != JsonValue::Type::Object) {
+            errorOut = std::string(catalogFileName) + ": field '" +
+                       std::string(!nestedField.empty() ? nestedField : altNestedField) +
+                       "' must be object";
+            return false;
+        }
+        outCatalog = *nested;
+    } else {
+        outCatalog = root;
+    }
+
     return true;
 }
 
@@ -895,7 +1588,29 @@ bool UiLayoutJsonLoader::loadFromFile(const std::string& path,
     }
     std::ostringstream ss;
     ss << in.rdbuf();
-    return loadFromString(ss.str(), out, errorOut);
+    const std::string source = ss.str();
+    JsonParser parser(source);
+    JsonValue root{};
+    if (!parser.parse(root, errorOut)) {
+        return false;
+    }
+
+    JsonValue themes{};
+    if (!loadCatalogFromAncestors(path, "themes.json", "themes", "theme", themes, errorOut)) {
+        return false;
+    }
+    JsonValue styles{};
+    if (!loadCatalogFromAncestors(path, "styles.json", "styles", "", styles, errorOut)) {
+        return false;
+    }
+    JsonValue effects{};
+    if (!loadCatalogFromAncestors(path, "effects.json", "effects", "", effects, errorOut)) {
+        return false;
+    }
+    const JsonValue* themesPtr = themes.objectValue.empty() ? nullptr : &themes;
+    const JsonValue* stylesPtr = styles.objectValue.empty() ? nullptr : &styles;
+    const JsonValue* effectsPtr = effects.objectValue.empty() ? nullptr : &effects;
+    return parseTemplate(root, themesPtr, stylesPtr, effectsPtr, out, errorOut);
 }
 
 bool UiLayoutJsonLoader::loadFromString(std::string_view content,
@@ -906,7 +1621,7 @@ bool UiLayoutJsonLoader::loadFromString(std::string_view content,
     if (!parser.parse(root, errorOut)) {
         return false;
     }
-    return parseTemplate(root, out, errorOut);
+    return parseTemplate(root, nullptr, nullptr, nullptr, out, errorOut);
 }
 
 } // namespace avantgarde

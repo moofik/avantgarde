@@ -1,0 +1,202 @@
+{
+  "id": "tracks",
+  "layout": {
+    "type": "column",
+    "style_ref": "@styles.frame.root",
+    "padding": 0,
+    "gap": 0,
+    "width": 60,
+    "height": 24,
+    "children": [
+      {
+        "type": "statusbar",
+        "id": "header_title",
+        "text": "TRACKS",
+        "bind": "status.scene.title",
+        "style_ref": "@styles.header.title.tracks",
+        "height": 2
+      },
+      {
+        "type": "text",
+        "id": "transport_line",
+        "bind": "status.transport",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "text",
+        "id": "active_line",
+        "bind": "status.transport.active",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_top",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "track_view",
+        "id": "track_view",
+        "height": "auto",
+        "width": "100%",
+        "gap": 1,
+        "children": [
+          {
+            "type": "list",
+            "id": "tracks_body",
+            "style_ref": "@styles.text.primary"
+          },
+          {
+            "type": "row",
+            "id": "track_split",
+            "width": "100%",
+            "gap": 1,
+            "wrap": false,
+            "justify": "start",
+            "align": "start",
+            "children": [
+              {
+                "type": "column",
+                "id": "track_controls_col",
+                "width": "54%",
+                "gap": 0,
+                "children": [
+                  {
+                    "type": "row",
+                    "id": "track_ux_row",
+                    "width": "100%",
+                    "gap": 1,
+                    "wrap": false,
+                    "justify": "start",
+                    "align": "start",
+                    "children": [
+                      {
+                        "type": "text",
+                        "id": "icon_loop",
+                        "bind": "track.selected.icon.loop",
+                        "style_ref": "@styles.track.icon",
+                        "width": "19%"
+                      },
+                      {
+                        "type": "text",
+                        "id": "icon_mute",
+                        "bind": "track.selected.icon.mute",
+                        "style_ref": "@styles.track.icon",
+                        "width": "19%"
+                      },
+                      {
+                        "type": "text",
+                        "id": "icon_arm",
+                        "bind": "track.selected.icon.arm",
+                        "style_ref": "@styles.track.icon",
+                        "width": "19%"
+                      },
+                      {
+                        "type": "text",
+                        "id": "icon_play",
+                        "bind": "track.selected.icon.play",
+                        "style_ref": "@styles.track.icon",
+                        "width": "19%"
+                      },
+                      {
+                        "type": "text",
+                        "id": "icon_fx",
+                        "bind": "track.selected.icon.fx",
+                        "style_ref": "@styles.track.icon",
+                        "width": "19%"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "text",
+                    "id": "track_mode_text",
+                    "bind": "track.selected.mode",
+                    "style_ref": "@styles.track.mode",
+                    "width": "100%"
+                  },
+                  {
+                    "type": "row",
+                    "id": "track_icon_panel",
+                    "width": "100%",
+                    "gap": 1,
+                    "wrap": false,
+                    "justify": "start",
+                    "align": "start",
+                    "children": [
+                      {
+                        "type": "icon",
+                        "id": "fx_enabled_icon",
+                        "bind": "track.selected.fx.icon.path",
+                        "path": "images/icon.png",
+                        "width": 5,
+                        "height": 3,
+                        "visible_if": "track.selected.exists",
+                        "active": {
+                          "if": "track.selected.fx.enabled",
+                          "effects": [
+                            { "preset": "@effects.glitch.icons.default" }
+                          ]
+                        },
+                        "inactive": {
+                          "if": "!track.selected.fx.enabled",
+                          "opacity": 0.4,
+                          "effects": [
+                            { "preset": "@effects.color_filter.icon.inactive_gray" }
+                          ]
+                        },
+                        "disabled": {
+                          "if": "!track.selected.exists",
+                          "opacity": 0.18
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "type": "column",
+                "id": "track_visual_col",
+                "width": "46%",
+                "gap": 0,
+                "align": "start",
+                "children": [
+                  {
+                    "type": "anim_slot",
+                    "id": "track_anim",
+                    "bind": "fx.anim.current",
+                    "style_ref": "@styles.track.animslot",
+                    "height": 8,
+                    "width": 16,
+                    "align": "start"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "id": "sep_bottom",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "text",
+        "id": "action_status",
+        "bind": "status.action",
+        "style_ref": "@styles.footer.action"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint_line_1",
+        "bind": "status.keys.1",
+        "style_ref": "@styles.footer.keys"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint_line_2",
+        "bind": "status.keys.2",
+        "style_ref": "@styles.footer.keys"
+      }
+    ]
+  }
+}

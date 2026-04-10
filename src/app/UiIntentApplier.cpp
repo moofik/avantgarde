@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "contracts/FxRegistry.h"
+#include "contracts/ids.h"
 #include "module/SchroederReverbModule.h"
 #include "module/StutterModule.h"
 #include "service/audio/BpmDetectorService.h"
@@ -26,6 +27,36 @@ std::unique_ptr<IAudioModule> createBuiltinFxByCanonicalId(std::string_view cano
     }
     // Остальные профили можно добавить сюда по мере реализации модулей.
     return nullptr;
+}
+
+UiTrackPlaybackProfile profileFromTrackView(const UiTrackStateView& track) noexcept {
+    if (track.playbackMode == UiTrackPlaybackMode::Note) {
+        return track.loop ? UiTrackPlaybackProfile::Pattern : UiTrackPlaybackProfile::PatternOnce;
+    }
+    return track.loop ? UiTrackPlaybackProfile::Loop : UiTrackPlaybackProfile::OneShot;
+}
+
+UiTrackPlaybackProfile profileFromIntentValue(float raw) noexcept {
+    const int v = std::clamp(static_cast<int>(std::lround(raw)), 0, 3);
+    switch (v) {
+        case 0: return UiTrackPlaybackProfile::Pattern;
+        case 1: return UiTrackPlaybackProfile::PatternOnce;
+        case 2: return UiTrackPlaybackProfile::Loop;
+        case 3:
+        default:
+            return UiTrackPlaybackProfile::OneShot;
+    }
+}
+
+TrackPlaybackProfileValue toEngineProfile(UiTrackPlaybackProfile profile) noexcept {
+    switch (profile) {
+        case UiTrackPlaybackProfile::Pattern: return TrackPlaybackProfileValue::Pattern;
+        case UiTrackPlaybackProfile::PatternOnce: return TrackPlaybackProfileValue::PatternOnce;
+        case UiTrackPlaybackProfile::Loop: return TrackPlaybackProfileValue::Loop;
+        case UiTrackPlaybackProfile::OneShot:
+        default:
+            return TrackPlaybackProfileValue::OneShot;
+    }
 }
 
 } // namespace
@@ -118,6 +149,16 @@ bool UiIntentApplier::buildUndoIntent(const UiIntent& forward,
             undoOut.value = (tracks[t].playbackMode == UiTrackPlaybackMode::Looper) ? 1.0f : 0.0f;
             return true;
         }
+        case UiIntentType::SetTrackPlaybackProfile: {
+            if (tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(forward.track, tracks);
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.value = static_cast<float>(static_cast<uint8_t>(profileFromTrackView(tracks[t])));
+            return true;
+        }
         case UiIntentType::SetTrackSpeed: {
             if (tracks.empty()) {
                 return false;
@@ -126,6 +167,36 @@ bool UiIntentApplier::buildUndoIntent(const UiIntent& forward,
             undoOut = forward;
             undoOut.track = t;
             undoOut.value = tracks[t].stretchRatio;
+            return true;
+        }
+        case UiIntentType::SetTrackGain: {
+            if (tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(forward.track, tracks);
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.value = tracks[t].gain01;
+            return true;
+        }
+        case UiIntentType::SetTrackTrimStart: {
+            if (tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(forward.track, tracks);
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.value = tracks[t].trimStart01;
+            return true;
+        }
+        case UiIntentType::SetTrackTrimEnd: {
+            if (tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(forward.track, tracks);
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.value = tracks[t].trimEnd01;
             return true;
         }
         case UiIntentType::SetTransportQuant:
@@ -183,11 +254,10 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             ctx.tracks[t].clipName = clipName;
             ctx.tracks[t].clipPath = intent.path;
             ctx.tracks[t].muted = false;
-            const bool looperEnabled = (ctx.tracks[t].playbackMode == UiTrackPlaybackMode::Looper);
-            // После загрузки клипа повторно применяем текущий mode-preset,
-            // чтобы loop/follow/policy были консистентны с выбранным режимом трека.
-            (void)ctx.engine.setTrackLooperMode(t, looperEnabled);
-            ctx.tracks[t].loop = looperEnabled;
+            const UiTrackPlaybackProfile profile = profileFromTrackView(ctx.tracks[t]);
+            // После загрузки клипа повторно применяем профиль трека,
+            // чтобы mode/loop/policy оставались консистентными.
+            (void)ctx.engine.setTrackPlaybackProfile(t, toEngineProfile(profile));
             refreshTrackViewState_(t, ctx.transport, ctx.tracks);
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;
@@ -207,6 +277,8 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             ctx.tracks[t].clipName.clear();
             ctx.tracks[t].clipPath.clear();
             ctx.tracks[t].loop = false;
+            ctx.tracks[t].trimStart01 = 0.0f;
+            ctx.tracks[t].trimEnd01 = 1.0f;
             refreshTrackViewState_(t, ctx.transport, ctx.tracks);
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;
@@ -264,15 +336,47 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             }
             const uint8_t t = clampTrack_(intent.track, ctx.tracks);
             const bool looperEnabled = (intent.value >= 0.5f);
-            const UiTrackPlaybackMode nextMode = looperEnabled ? UiTrackPlaybackMode::Looper : UiTrackPlaybackMode::Note;
-            if (ctx.tracks[t].playbackMode == nextMode) {
+            const UiTrackPlaybackProfile nextProfile =
+                looperEnabled ? UiTrackPlaybackProfile::Loop : UiTrackPlaybackProfile::PatternOnce;
+            if (profileFromTrackView(ctx.tracks[t]) == nextProfile) {
                 return false;
             }
-            if (!ctx.engine.setTrackLooperMode(t, looperEnabled)) {
+            if (!ctx.engine.setTrackPlaybackProfile(t, toEngineProfile(nextProfile))) {
                 return false;
             }
-            ctx.tracks[t].playbackMode = nextMode;
-            ctx.tracks[t].loop = looperEnabled;
+            ctx.tracks[t].playbackProfile = nextProfile;
+            ctx.tracks[t].playbackMode =
+                (nextProfile == UiTrackPlaybackProfile::Pattern ||
+                 nextProfile == UiTrackPlaybackProfile::PatternOnce)
+                    ? UiTrackPlaybackMode::Note
+                    : UiTrackPlaybackMode::Looper;
+            ctx.tracks[t].loop =
+                (nextProfile == UiTrackPlaybackProfile::Pattern ||
+                 nextProfile == UiTrackPlaybackProfile::Loop);
+            ctx.uiStore.setTrack(t, ctx.tracks[t]);
+            return true;
+        }
+        case UiIntentType::SetTrackPlaybackProfile: {
+            if (ctx.tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(intent.track, ctx.tracks);
+            const UiTrackPlaybackProfile nextProfile = profileFromIntentValue(intent.value);
+            if (profileFromTrackView(ctx.tracks[t]) == nextProfile) {
+                return false;
+            }
+            if (!ctx.engine.setTrackPlaybackProfile(t, toEngineProfile(nextProfile))) {
+                return false;
+            }
+            ctx.tracks[t].playbackProfile = nextProfile;
+            ctx.tracks[t].playbackMode =
+                (nextProfile == UiTrackPlaybackProfile::Pattern ||
+                 nextProfile == UiTrackPlaybackProfile::PatternOnce)
+                    ? UiTrackPlaybackMode::Note
+                    : UiTrackPlaybackMode::Looper;
+            ctx.tracks[t].loop =
+                (nextProfile == UiTrackPlaybackProfile::Pattern ||
+                 nextProfile == UiTrackPlaybackProfile::Loop);
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;
         }
@@ -287,6 +391,54 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             }
             ctx.tracks[t].stretchRatio = next;
             (void)ctx.engine.setTrackSpeed(t, ctx.tracks[t].stretchRatio);
+            ctx.uiStore.setTrack(t, ctx.tracks[t]);
+            return true;
+        }
+        case UiIntentType::SetTrackGain: {
+            if (ctx.tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(intent.track, ctx.tracks);
+            const float next = std::clamp(intent.value, 0.0f, 1.0f);
+            if (std::fabs(ctx.tracks[t].gain01 - next) < 1e-6f) {
+                return false;
+            }
+            ctx.tracks[t].gain01 = next;
+            (void)ctx.engine.setTrackParam(t, toParamIndex(TrackParamId::Gain01), ctx.tracks[t].gain01);
+            ctx.uiStore.setTrack(t, ctx.tracks[t]);
+            return true;
+        }
+        case UiIntentType::SetTrackTrimStart: {
+            if (ctx.tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(intent.track, ctx.tracks);
+            float next = std::clamp(intent.value, 0.0f, 0.99f);
+            if (next >= ctx.tracks[t].trimEnd01 - 0.01f) {
+                next = std::max(0.0f, ctx.tracks[t].trimEnd01 - 0.01f);
+            }
+            if (std::fabs(ctx.tracks[t].trimStart01 - next) < 1e-6f) {
+                return false;
+            }
+            ctx.tracks[t].trimStart01 = next;
+            (void)ctx.engine.setTrackParam(t, toParamIndex(TrackParamId::StartNorm), next);
+            ctx.uiStore.setTrack(t, ctx.tracks[t]);
+            return true;
+        }
+        case UiIntentType::SetTrackTrimEnd: {
+            if (ctx.tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(intent.track, ctx.tracks);
+            float next = std::clamp(intent.value, 0.01f, 1.0f);
+            if (next <= ctx.tracks[t].trimStart01 + 0.01f) {
+                next = std::min(1.0f, ctx.tracks[t].trimStart01 + 0.01f);
+            }
+            if (std::fabs(ctx.tracks[t].trimEnd01 - next) < 1e-6f) {
+                return false;
+            }
+            ctx.tracks[t].trimEnd01 = next;
+            (void)ctx.engine.setTrackParam(t, toParamIndex(TrackParamId::EndNorm), next);
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;
         }
@@ -438,10 +590,63 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;
         }
-        case UiIntentType::OpenScene:
-        case UiIntentType::Back:
+        case UiIntentType::OpenScene: {
+            if (ctx.nav == nullptr) {
+                return false;
+            }
+            ctx.nav->scene = intent.scene;
+            if (intent.resetCursor) {
+                ctx.nav->cursor = 0;
+            }
+            if (intent.resetScroll) {
+                ctx.nav->scroll = 0;
+            }
+            if (intent.resetSceneActionIndex) {
+                ctx.nav->sceneActionIndex = 0;
+            }
+            if (intent.resetSelectedFx) {
+                ctx.nav->selectedFx = 0;
+            }
+            if (intent.closeFxAddPopup) {
+                ctx.nav->fxAddPopupOpen = false;
+            }
+            // Навигационный intent не влияет на undo/redo и model-layer.
+            return false;
+        }
+        case UiIntentType::Back: {
+            if (ctx.nav == nullptr) {
+                return false;
+            }
+            // Новый контракт: Back может нести целевую сцену явно.
+            if (intent.scene != UiScene::Tracks || intent.resetCursor || intent.resetScroll || intent.resetSceneActionIndex) {
+                ctx.nav->scene = intent.scene;
+                if (intent.resetCursor) {
+                    ctx.nav->cursor = 0;
+                }
+                if (intent.resetScroll) {
+                    ctx.nav->scroll = 0;
+                }
+                if (intent.resetSceneActionIndex) {
+                    ctx.nav->sceneActionIndex = 0;
+                }
+                if (intent.resetSelectedFx) {
+                    ctx.nav->selectedFx = 0;
+                }
+                if (intent.closeFxAddPopup) {
+                    ctx.nav->fxAddPopupOpen = false;
+                }
+                return false;
+            }
+            // Legacy fallback: FxEditor -> FxList, иначе -> Tracks.
+            if (ctx.nav->scene == UiScene::FxEditor) {
+                ctx.nav->scene = UiScene::FxList;
+            } else {
+                ctx.nav->scene = UiScene::Tracks;
+            }
+            ctx.nav->sceneActionIndex = 0;
+            return false;
+        }
         case UiIntentType::None:
-        case UiIntentType::OpenFxEditor:
         case UiIntentType::EnginePlayTrack:
         case UiIntentType::EngineStopTrack:
         case UiIntentType::EngineSetQuant:

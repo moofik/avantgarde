@@ -18,6 +18,7 @@ struct UiPreparedParams {
     std::unordered_map<std::string, int32_t> integer{};
     std::unordered_map<std::string, bool> flag{};
     std::unordered_map<std::string, std::vector<std::string>> rows{};
+    std::unordered_map<std::string, std::vector<float>> waves{};
 
     std::optional<std::string> findText(std::string_view key) const {
         auto it = text.find(std::string(key));
@@ -58,7 +59,14 @@ struct UiPreparedParams {
         }
         return it->second;
     }
+
+    std::optional<std::vector<float>> findWave(std::string_view key) const {
+        auto it = waves.find(std::string(key));
+        if (it == waves.end()) {
+            return std::nullopt;
+        }
+        return it->second;
+    }
 };
 
 } // namespace avantgarde
-

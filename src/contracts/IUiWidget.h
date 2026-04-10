@@ -12,16 +12,6 @@
 
 namespace avantgarde {
 
-// Минимальный text-buffer для scene/widget слоя.
-// Сейчас этого достаточно для GB-style строкового UI, позже можно заменить
-// на полноценный canvas без изменения интерфейса IUiWidget.
-struct UiTextBuffer {
-    std::vector<std::string> lines;
-
-    // Полный сброс кадра перед новым render-pass.
-    void clear() noexcept { lines.clear(); }
-};
-
 // Результат обработки жеста внутри конкретного виджета.
 struct WidgetOutput {
     // true = событие обработано локально и не должно всплывать выше.
@@ -41,12 +31,6 @@ struct IUiWidget {
     // Стабильный идентификатор для логирования/диагностики.
     virtual const char* id() const noexcept = 0;
 
-    // Рендер виджета в буфер.
-    // rtState = runtime snapshot, navState = UI-навигация/курсор/выбор.
-    virtual void render(UiTextBuffer& out,
-                        const UiState& rtState,
-                        const UiNavState& navState) = 0;
-
     // Новый контракт (pipeline vNext):
     // виджет подготавливает декларативную модель кадра без отрисовки.
     // По умолчанию возвращает false (еще не реализовано конкретным виджетом).
@@ -57,7 +41,9 @@ struct IUiWidget {
     }
 
     // Обработка одного gesture-события.
-    // navState можно менять напрямую (курсор/selection/scene-local state).
+    // Важно: переходы сцен виджет НЕ делает напрямую через navState.
+    // Виджет возвращает UiIntent(OpenScene/Back), а внешний роутер применяет nav-изменения.
+    // Локальные курсоры/selection разрешено менять напрямую.
     virtual WidgetOutput onGesture(UiGesture action,
                                  const UiState& rtState,
                                  UiNavState& navState) = 0;

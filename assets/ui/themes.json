@@ -1,0 +1,56 @@
+{
+  "themes": {
+    "colors": {
+      "bg": {
+        "main": "#0B0A0C",
+        "panel": "#2A1A24"
+      },
+      "border": {
+        "default": "#C78FA6",
+        "accent": "#2A1A24"
+      },
+      "text": {
+        "primary": "#FFEAF2",
+        "secondary": "#C81C63",
+        "header": "#FFEAF2",
+        "anim": "#2A1A24",
+        "wave": "#FFEAF2"
+      },
+      "fx": {
+        "mode_glow": "#330000",
+        "wave_fill": "#1B1321"
+      }
+    },
+    "fonts": {
+      "display": "gothic-pixel-font.ttf",
+      "gothic": "gothic",
+      "medieval": "MedievalTimes-AL7l6.ttf",
+      "knob": "M.ttf"
+    },
+    "sizes": {
+      "font": {
+        "header": {
+          "base": 24,
+          "default": 18,
+          "tracks": 30,
+          "sample": 24
+        },
+        "track": {
+          "icon": 18,
+          "mode": 22
+        },
+        "sample": {
+          "mode": 20,
+          "knob": 20
+        },
+        "fx": {
+          "knob": 20,
+          "switch": 14
+        }
+      },
+      "knob": {
+        "sample": 1.4
+      }
+    }
+  }
+}

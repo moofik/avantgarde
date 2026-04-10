@@ -1,6 +1,7 @@
 #include <catch2/catch_all.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
 #include <vector>
 
@@ -292,6 +293,38 @@ TEST_CASE("VisualFxProcessor: glow change trigger without value does not fallbac
     REQUIRE_FALSE(fx.resolveTextStyle(req).active);
 }
 
+TEST_CASE("VisualFxProcessor: color_filter desaturates toward configured tint") {
+    VisualFxProcessor fx{};
+    std::vector<uint8_t> px(4U * 4U * 4U, 0U);
+    // Яркий цветной пиксель в центре.
+    const std::size_t idx = (2U * 4U + 2U) * 4U;
+    px[idx + 0U] = 255U;
+    px[idx + 1U] = 96U;
+    px[idx + 2U] = 32U;
+    px[idx + 3U] = 255U;
+
+    VisualFxRgbaView roi{};
+    roi.pixels = px.data();
+    roi.width = 4U;
+    roi.height = 4U;
+    roi.strideBytes = 4U * 4U;
+
+    VisualFxRequest req{};
+    req.effect = "color_filter";
+    req.effectTrigger = "always";
+    req.effectColor = "#808080";
+    req.effectAmount = 1.0f;
+    req.nowMs = 1000U;
+
+    REQUIRE(fx.applyRgba(roi, req));
+    const uint8_t r = px[idx + 0U];
+    const uint8_t g = px[idx + 1U];
+    const uint8_t b = px[idx + 2U];
+    // При полном amount и сером tint каналы должны стать близки по значению.
+    REQUIRE(std::abs(static_cast<int>(r) - static_cast<int>(g)) <= 2);
+    REQUIRE(std::abs(static_cast<int>(g) - static_cast<int>(b)) <= 2);
+}
+
 TEST_CASE("VisualFxProcessor: rejects legacy chained effect id syntax") {
     VisualFxProcessor fx{};
     VisualFxRequest req{};
@@ -348,6 +381,43 @@ TEST_CASE("VisualFxProcessor: applyRgba modifies ROI for glow") {
     const uint32_t sumAfter =
         std::accumulate(px.begin(), px.end(), 0U, [](uint32_t acc, uint8_t v) { return acc + v; });
     REQUIRE(sumAfter > sumBefore);
+}
+
+TEST_CASE("VisualFxProcessor: applyRgba supports glitch for generic blocks (icons/bitmaps)") {
+    VisualFxProcessor fx{};
+    std::vector<uint8_t> px(24U * 24U * 4U, 0U);
+    // Плотный светлый блок по центру, чтобы смещения срезов были заметны.
+    for (uint16_t y = 6U; y < 18U; ++y) {
+        for (uint16_t x = 6U; x < 18U; ++x) {
+            const std::size_t idx = (static_cast<std::size_t>(y) * 24U + x) * 4U;
+            px[idx + 0U] = 230U;
+            px[idx + 1U] = 210U;
+            px[idx + 2U] = 200U;
+            px[idx + 3U] = 255U;
+        }
+    }
+
+    VisualFxRgbaView roi{};
+    roi.pixels = px.data();
+    roi.width = 24U;
+    roi.height = 24U;
+    roi.strideBytes = 24U * 4U;
+
+    VisualFxRequest req{};
+    req.nodeId = "fx_enabled_icon";
+    req.instanceKey = "tracks.fx_enabled_icon";
+    req.effect = "glitch";
+    req.effectTrigger = "time";
+    req.effectIntervalMs = 1U;
+    req.effectAmount = 0.45f;
+    req.effectSpeed = 1.0f;
+
+    const std::vector<uint8_t> before = px;
+    req.nowMs = 1000U;
+    (void)fx.applyRgba(roi, req); // warmup epoch
+    req.nowMs = 1600U;            // после warmup glitch активен
+    REQUIRE(fx.applyRgba(roi, req));
+    REQUIRE(px != before);
 }
 
 TEST_CASE("VisualFxProcessor: typing trigger change starts on value change") {

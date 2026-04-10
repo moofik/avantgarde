@@ -23,7 +23,11 @@ struct UiWidgetFactoryOptions {
     float fxParamStep{0.05f};
     // Каталог(и), где ищем шаблоны `*.json`.
     // Первый найденный валидный шаблон используется.
-    std::vector<std::string> layoutSearchRoots{"assets/ui", "../assets/ui", "../../assets/ui"};
+    std::vector<std::string> layoutSearchRoots{
+        "assets/ui/layouts",
+        "../assets/ui/layouts",
+        "../../assets/ui/layouts"
+    };
     // Базовый layout FX редактора (каркас + слот `fx_body`).
     std::string fxEditorBaseLayout{"fx_editor_base.json"};
     // Явная таблица профилей: fxId -> путь к layout-профилю внутри layoutSearchRoots.

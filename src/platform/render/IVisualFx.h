@@ -9,14 +9,14 @@ namespace avantgarde {
 
 // Универсальный вход для визуальных FX (не привязан к тексту/конкретному backend).
 struct VisualFxRequest {
-    // Стабильный id layout-ноды (из JSON/TOML шаблона).
+    // Стабильный id layout-ноды (из JSON-шаблона).
     std::string nodeId{};
     // Уникальный id инстанса компонента (предпочтительный ключ состояния FX).
     std::string instanceKey{};
     // Текст ноды (используется как fallback seed).
     std::string nodeText{};
 
-    // Канонический id эффекта, например "glitch".
+    // Канонический id эффекта, например "glitch", "glow", "typing", "color_filter".
     std::string effect{};
     // Опциональный tint-цвет эффекта в hex (например "#A86DB5").
     std::string effectColor{};

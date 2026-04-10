@@ -10,12 +10,13 @@
 #include <utility>
 #include <vector>
 
-#include "service/ui/FxEditorWidget.h"
-#include "service/ui/FxListWidget.h"
+#include "service/ui/widgets/FxEditorWidget.h"
+#include "service/ui/widgets/FxListWidget.h"
 #include "service/ui/UiLayoutJsonLoader.h"
-#include "service/ui/ManagerWidget.h"
-#include "service/ui/TrackContextMenuWidget.h"
-#include "service/ui/TracksWidget.h"
+#include "service/ui/widgets/ManagerWidget.h"
+#include "service/ui/widgets/SampleEditWidget.h"
+#include "service/ui/widgets/TrackContextMenuWidget.h"
+#include "service/ui/widgets/TracksWidget.h"
 
 namespace avantgarde {
 namespace {
@@ -76,6 +77,15 @@ std::unique_ptr<IUiWidget> UiWidgetFactory::create(UiScene scene) const {
             return std::make_unique<TrackContextMenuWidget>(
                 options_.frameWidth,
                 loadTemplateOrThrow(options_, "track_menu.json"));
+        case UiScene::SampleEdit:
+            return std::make_unique<SampleEditWidget>(
+                SampleEditWidget::Options{
+                    .frameWidth = options_.frameWidth,
+                    .speedStep = options_.tracksSpeedStep,
+                    .gainStep = 0.05f,
+                    .trimStep = 0.01f,
+                    .layoutTemplate = loadTemplateOrThrow(options_, "sample_edit.json"),
+                });
         case UiScene::Manager:
             // Файловый менеджер использует только ширину рамки.
             return std::make_unique<ManagerWidget>(

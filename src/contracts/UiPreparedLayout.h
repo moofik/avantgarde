@@ -17,7 +17,7 @@ namespace avantgarde {
 struct UiPreparedLayout {
     // Идентификатор сцены/виджета.
     std::string sceneId{};
-    // Ссылка на исходный TOML layout-template.
+    // Ссылка на исходный layout-template.
     const UiLayoutTemplate* layoutTemplate{nullptr};
     // Базовые ограничения кадра.
     uint16_t frameWidth{60};

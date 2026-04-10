@@ -1,0 +1,146 @@
+{
+  "id": "sample_edit",
+  "layout": {
+    "type": "column",
+    "style_ref": "@styles.frame.root",
+    "padding": 0,
+    "gap": 0,
+    "width": 60,
+    "height": 24,
+    "children": [
+      {
+        "type": "statusbar",
+        "id": "header_title",
+        "text": "SAMPLE EDIT",
+        "bind": "status.scene.title",
+        "style_ref": "@styles.header.title.base"
+      },
+      {
+        "type": "text",
+        "id": "track_line",
+        "bind": "status.track",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_top",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "track_view",
+        "id": "sample_edit_view",
+        "width": "100%",
+        "height": "auto",
+        "children": [
+          {
+            "type": "row",
+            "id": "sample_split",
+            "width": "100%",
+            "gap": 1,
+            "wrap": false,
+            "justify": "start",
+            "align": "start",
+            "children": [
+              {
+                "type": "column",
+                "id": "sample_controls_col",
+                "width": "100%",
+                "gap": 0,
+                "children": [
+                  {
+                    "type": "waveform",
+                    "id": "sample_wave",
+                    "bind": "track.selected.waveform",
+                    "style_ref": "@styles.sample.waveform",
+                    "width": "100%",
+                    "height": 6
+                  },
+                  {
+                    "type": "text",
+                    "id": "mode_line",
+                    "bind": "status.mode",
+                    "style_ref": "@styles.track.mode",
+                    "font_size": 20,
+                    "width": "100%"
+                  },
+                  {
+                    "type": "row",
+                    "id": "sample_row_1",
+                    "width": "100%",
+                    "gap": 1,
+                    "wrap": false,
+                    "children": [
+                      {
+                        "type": "knob",
+                        "id": "track_gain",
+                        "label": "GAIN",
+                        "bind": "track.selected.gain",
+                        "target": "param.track.selected.gain",
+                        "style_ref": "@styles.sample.knob",
+                        "width": "33%"
+                      },
+                      {
+                        "type": "knob",
+                        "id": "track_speed",
+                        "label": "SPD",
+                        "bind": "track.selected.speed",
+                        "target": "param.track.selected.speed",
+                        "style_ref": "@styles.sample.knob",
+                        "width": "33%"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "row",
+                    "id": "sample_row_2",
+                    "width": "100%",
+                    "gap": 1,
+                    "wrap": false,
+                    "children": [
+                      {
+                        "type": "knob",
+                        "id": "track_trim_start",
+                        "label": "START",
+                        "bind": "track.selected.start",
+                        "target": "param.track.selected.start",
+                        "style_ref": "@styles.sample.knob",
+                        "width": "33%"
+                      },
+                      {
+                        "type": "knob",
+                        "id": "track_trim_end",
+                        "label": "END",
+                        "bind": "track.selected.end",
+                        "target": "param.track.selected.end",
+                        "style_ref": "@styles.sample.knob",
+                        "width": "33%"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "separator",
+        "id": "sep_bottom",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "text",
+        "id": "action_status",
+        "bind": "status.action",
+        "style_ref": "@styles.footer.action"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint",
+        "text": " keys [F5/F6 select] [F7/F8 adjust] [F1 apply] [esc back] ",
+        "bind": "status.keys",
+        "style_ref": "@styles.footer.keys"
+      }
+    ]
+  }
+}

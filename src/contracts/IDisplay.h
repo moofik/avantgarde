@@ -5,8 +5,7 @@
 
 namespace avantgarde {
 
-// Minimal low-res display abstraction. Concrete adapters can target
-// terminal preview, SPI LCD/OLED on Raspberry Pi, etc.
+// Minimal low-res display abstraction for device backends (SPI LCD/OLED и т.д.).
 struct IDisplay {
     virtual ~IDisplay() = default;
 

@@ -25,6 +25,18 @@ enum class UiTrackPlaybackMode : uint8_t {
     Note = 1
 };
 
+// Профиль пользовательского режима трека (4 понятных пресета):
+// - Pattern       = note + loop on
+// - PatternOnce   = note + loop off
+// - Loop          = looper + loop on
+// - OneShot       = looper + loop off
+enum class UiTrackPlaybackProfile : uint8_t {
+    Pattern = 0,
+    PatternOnce = 1,
+    Loop = 2,
+    OneShot = 3
+};
+
 struct UiTransportState {
     bool playing{false};
     float bpm{120.0f};
@@ -51,7 +63,12 @@ struct UiTrackStateView {
     // - Looper: длинные клипы/лупы, ignore-if-playing, manual-stop.
     // - Note: note-driven playback, retrigger-on-note-on, stop-by-note-off.
     UiTrackPlaybackMode playbackMode{UiTrackPlaybackMode::Looper};
+    // Высокоуровневый UX-профиль режима (4 пресета).
+    UiTrackPlaybackProfile playbackProfile{UiTrackPlaybackProfile::Loop};
     bool loop{false};
+    // Границы playback-региона внутри клипа в нормализованном виде [0..1].
+    float trimStart01{0.0f};
+    float trimEnd01{1.0f};
     uint8_t fxCount{0};
     // Канонические ID FX по слотам (слот 0 -> fxChainIds[0] и т.д.).
     // UI использует это для именования списка FX и подбора профиля параметров в редакторе.

@@ -10,6 +10,7 @@
 #include <cctype>
 #include <filesystem>
 #include <functional>
+#include <unordered_map>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -77,6 +78,192 @@ std::vector<std::string> buildFontPathCandidates(std::string_view specUtf8,
     return out;
 }
 
+std::vector<std::string> buildImagePathCandidates(std::string_view specUtf8,
+                                                  std::string_view cwdUtf8) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> out{};
+    if (specUtf8.empty()) {
+        return out;
+    }
+    auto pushUnique = [&out](const fs::path& p) {
+        const std::string s = p.lexically_normal().string();
+        if (s.empty()) {
+            return;
+        }
+        if (std::find(out.begin(), out.end(), s) == out.end()) {
+            out.push_back(s);
+        }
+    };
+    const fs::path spec(specUtf8);
+    const fs::path cwd(cwdUtf8);
+    if (spec.is_absolute()) {
+        pushUnique(spec);
+    } else {
+        pushUnique(cwd / spec);
+    }
+    // Короткий формат: "images/foo.png" -> "assets/images/foo.png".
+    if (specUtf8.rfind("images/", 0) == 0U) {
+        pushUnique(cwd / "assets" / spec);
+    }
+    // Частый формат: "icons/foo.png" -> "assets/icons/foo.png".
+    if (specUtf8.rfind("icons/", 0) == 0U) {
+        pushUnique(cwd / "assets" / spec);
+    }
+    // Если указали только имя файла, попробуем assets/images/<name>.
+    if (spec.parent_path().empty()) {
+        pushUnique(cwd / "assets" / "images" / spec);
+    }
+    return out;
+}
+
+NSImage* loadIconImageCached(std::string_view specUtf8, std::string_view cwdUtf8) {
+    if (specUtf8.empty()) {
+        return nil;
+    }
+    static std::unordered_map<std::string, NSImage*> cache{};
+    const std::string cacheKey(specUtf8);
+    if (const auto it = cache.find(cacheKey); it != cache.end()) {
+        return it->second;
+    }
+    NSImage* loaded = nil;
+    const std::vector<std::string> candidates = buildImagePathCandidates(specUtf8, cwdUtf8);
+    for (const std::string& candidate : candidates) {
+        NSString* path = [NSString stringWithUTF8String:candidate.c_str()];
+        if (!path) {
+            continue;
+        }
+        NSImage* img = [[NSImage alloc] initWithContentsOfFile:path];
+        if (!img) {
+            continue;
+        }
+        loaded = img; // Храним в статическом cache до конца процесса.
+        break;
+    }
+    cache.emplace(cacheKey, loaded);
+    return loaded;
+}
+
+bool parseHexColorSpec(std::string_view raw, CGFloat& r, CGFloat& g, CGFloat& b, CGFloat& a) {
+    std::string s(raw);
+    if (s.empty()) {
+        return false;
+    }
+    if (s[0] == '#') {
+        s.erase(s.begin());
+    }
+    const auto hexVal = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+        if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+        return -1;
+    };
+    const auto hexByte = [&](char hi, char lo) -> int {
+        const int h = hexVal(hi);
+        const int l = hexVal(lo);
+        if (h < 0 || l < 0) return -1;
+        return (h << 4) | l;
+    };
+
+    int rr = 0, gg = 0, bb = 0, aa = 255;
+    if (s.size() == 3U || s.size() == 4U) {
+        const int r0 = hexVal(s[0]);
+        const int g0 = hexVal(s[1]);
+        const int b0 = hexVal(s[2]);
+        if (r0 < 0 || g0 < 0 || b0 < 0) return false;
+        rr = (r0 << 4) | r0;
+        gg = (g0 << 4) | g0;
+        bb = (b0 << 4) | b0;
+        if (s.size() == 4U) {
+            const int a0 = hexVal(s[3]);
+            if (a0 < 0) return false;
+            aa = (a0 << 4) | a0;
+        }
+    } else if (s.size() == 6U || s.size() == 8U) {
+        rr = hexByte(s[0], s[1]);
+        gg = hexByte(s[2], s[3]);
+        bb = hexByte(s[4], s[5]);
+        if (rr < 0 || gg < 0 || bb < 0) return false;
+        if (s.size() == 8U) {
+            aa = hexByte(s[6], s[7]);
+            if (aa < 0) return false;
+        }
+    } else {
+        return false;
+    }
+
+    r = static_cast<CGFloat>(rr) / 255.0;
+    g = static_cast<CGFloat>(gg) / 255.0;
+    b = static_cast<CGFloat>(bb) / 255.0;
+    a = static_cast<CGFloat>(aa) / 255.0;
+    return true;
+}
+
+NSColor* resolveColorSpec(std::string_view raw, NSColor* fallback) {
+    if (raw.empty()) {
+        return fallback;
+    }
+    CGFloat r = 0.0, g = 0.0, b = 0.0, a = 1.0;
+    if (!parseHexColorSpec(raw, r, g, b, a)) {
+        return fallback;
+    }
+    return [NSColor colorWithSRGBRed:r green:g blue:b alpha:a];
+}
+
+const UiLayoutNode::StateSpec* nodeStateStyle(const UiLayoutNode* node,
+                                              const IUiComponent* component) {
+    if (!node || !component) {
+        return nullptr;
+    }
+    switch (component->visualState()) {
+        case IUiComponent::VisualState::Disabled:
+            return &node->disabled;
+        case IUiComponent::VisualState::Inactive:
+            return &node->inactive;
+        case IUiComponent::VisualState::Active:
+        default:
+            return &node->active;
+    }
+}
+
+NSColor* nodeTextColor(const UiLayoutNode* node,
+                       const IUiComponent* component,
+                       NSColor* fallback) {
+    if (!node) {
+        return fallback;
+    }
+    const UiLayoutNode::StateSpec* st = nodeStateStyle(node, component);
+    if (st && !st->textColor.empty()) {
+        return resolveColorSpec(st->textColor, fallback);
+    }
+    return resolveColorSpec(node->textColor, fallback);
+}
+
+NSColor* nodeBorderColor(const UiLayoutNode* node,
+                         const IUiComponent* component,
+                         NSColor* fallback) {
+    if (!node) {
+        return fallback;
+    }
+    const UiLayoutNode::StateSpec* st = nodeStateStyle(node, component);
+    if (st && !st->borderColor.empty()) {
+        return resolveColorSpec(st->borderColor, fallback);
+    }
+    return resolveColorSpec(node->borderColor, fallback);
+}
+
+NSColor* nodeBackgroundColor(const UiLayoutNode* node,
+                             const IUiComponent* component,
+                             NSColor* fallback) {
+    if (!node) {
+        return fallback;
+    }
+    const UiLayoutNode::StateSpec* st = nodeStateStyle(node, component);
+    if (st && !st->backgroundColor.empty()) {
+        return resolveColorSpec(st->backgroundColor, fallback);
+    }
+    return resolveColorSpec(node->backgroundColor, fallback);
+}
+
 std::string toLowerAscii(std::string_view value) {
     std::string out(value);
     std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
@@ -130,29 +317,39 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
         return CGRectMake(bottomUp.x, bottomUp.y, bottomUp.w, bottomUp.h);
     };
 
-    auto fontForNode = [&](const UiLayoutNode* node, NSFont* fallback) -> NSFont* {
+    auto fontForNode = [&](const UiLayoutNode* node,
+                           const IUiComponent* component,
+                           NSFont* fallback) -> NSFont* {
         if (!node) {
             return fallback;
         }
+        const UiLayoutNode::StateSpec* stateStyle = nodeStateStyle(node, component);
         const CGFloat baseSize = (fallback ? fallback.pointSize : 12.0);
-        const CGFloat size = (node->fontSize > 0.0f)
-                                 ? std::clamp<CGFloat>(node->fontSize, 6.0, 64.0)
+        const float preferredSize = (stateStyle && stateStyle->fontSize > 0.0f)
+                                        ? stateStyle->fontSize
+                                        : node->fontSize;
+        const CGFloat size = (preferredSize > 0.0f)
+                                 ? std::clamp<CGFloat>(preferredSize, 6.0, 64.0)
                                  : baseSize;
-        if (node->font.empty()) {
+        const std::string& preferredFont = (stateStyle && !stateStyle->font.empty())
+                                               ? stateStyle->font
+                                               : node->font;
+        if (preferredFont.empty()) {
             return resizedFont(fallback, size);
         }
-        std::string f = toLowerAscii(node->font);
-        if (f == "default") {
+        const std::string fontSpec = preferredFont;
+        const std::string fontAlias = toLowerAscii(fontSpec);
+        if (fontAlias == "default") {
             return resizedFont(fallback, size);
         }
-        if (f == "gothic") {
+        if (fontAlias == "gothic") {
             return resizedFont(ctx.gothicFont ? ctx.gothicFont : fallback, size);
         }
-        if (f == "body") {
+        if (fontAlias == "body") {
             return resizedFont(ctx.bodyFont ? ctx.bodyFont : fallback, size);
         }
 
-        const std::string cacheKey = f + "|" + std::to_string(static_cast<int>(std::lround(size)));
+        const std::string cacheKey = fontSpec + "|" + std::to_string(static_cast<int>(std::lround(size)));
         if (ctx.dynamicFontCache) {
             if (const auto it = ctx.dynamicFontCache->find(cacheKey); it != ctx.dynamicFontCache->end()) {
                 return it->second ? it->second : fallback;
@@ -160,11 +357,11 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
         }
 
         // 1) Пробуем как PostScript имя.
-        NSFont* loaded = [NSFont fontWithName:[NSString stringWithUTF8String:f.c_str()] size:size];
+        NSFont* loaded = [NSFont fontWithName:[NSString stringWithUTF8String:fontSpec.c_str()] size:size];
 
         // 2) Пробуем как путь к font-файлу.
-        if (!loaded && hasFontExtensionUtf8(f)) {
-            const std::vector<std::string> candidates = buildFontPathCandidates(f, ctx.cwd);
+        if (!loaded && hasFontExtensionUtf8(fontSpec)) {
+            const std::vector<std::string> candidates = buildFontPathCandidates(fontSpec, ctx.cwd);
             for (const std::string& candidate : candidates) {
                 NSURL* url = [NSURL fileURLWithPath:[NSString stringWithUTF8String:candidate.c_str()]];
                 if (!url) {
@@ -213,7 +410,19 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
 
     auto textFxChainForNode = [&](const UiLayoutNode* node, const IUiComponent* component) -> NodeTextFxChain {
         NodeTextFxChain chain{};
-        if (!node || !ctx.visualFx || node->effects.empty()) {
+        if (!node || !ctx.visualFx) {
+            return chain;
+        }
+        const auto selectEffects = [&](const UiLayoutNode& n, const IUiComponent* c)
+            -> const std::vector<UiLayoutNode::EffectSpec>& {
+            const UiLayoutNode::StateSpec* st = nodeStateStyle(&n, c);
+            if (st && !st->effects.empty()) {
+                return st->effects;
+            }
+            return n.effects;
+        };
+        const std::vector<UiLayoutNode::EffectSpec>& effectSpecs = selectEffects(*node, component);
+        if (effectSpecs.empty()) {
             return chain;
         }
 
@@ -244,6 +453,14 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
             if (!anim->label.empty()) {
                 base.nodeText = anim->label;
             }
+        } else if (const auto* icon = dynamic_cast<const UiIconComponent*>(component)) {
+            if (!icon->path.empty()) {
+                // Для trigger=change на иконках считаем source-путь "значением" узла.
+                // Тогда смена иконки (или ее динамического bind-пути) поднимет FX-триггер.
+                base.hasValue01 = true;
+                base.value01 = textHashToValue01(icon->path);
+                base.nodeText = icon->path;
+            }
         } else if (const auto* t = dynamic_cast<const UiTextComponent*>(component)) {
             if (!t->text.empty()) {
                 base.hasValue01 = true;
@@ -262,7 +479,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
             base.nodeText = node->text;
         }
 
-        for (const UiLayoutNode::EffectSpec& spec : node->effects) {
+        for (const UiLayoutNode::EffectSpec& spec : effectSpecs) {
             VisualFxRequest request = base;
             request.effect = spec.type;
             request.effectColor = spec.effectColor;
@@ -279,13 +496,18 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
         return chain;
     };
 
+    const UiLayoutNode* rootNode = &prepared.layoutTemplate->root;
+    NSColor* sceneDefaultTextColor = resolveColorSpec(rootNode ? rootNode->defaultTextColor : "", ctx.text);
+    NSColor* frameBorderColor = nodeBorderColor(rootNode, nullptr, ctx.mid);
+    NSColor* frameBackgroundColor = nodeBackgroundColor(rootNode, nullptr, [NSColor clearColor]);
+
     // Внешняя рамка кадра.
     CGRect frameRectPx = CGRectZero;
     {
         CAShapeLayer* frame = [CAShapeLayer layer];
         frame.frame = root.bounds;
-        frame.fillColor = [NSColor clearColor].CGColor;
-        frame.strokeColor = ctx.mid.CGColor;
+        frame.fillColor = frameBackgroundColor.CGColor;
+        frame.strokeColor = frameBorderColor.CGColor;
         frame.lineWidth = 1.4;
         CGMutablePathRef p = CGPathCreateMutable();
         const CGRect r = pxRectForChars(0, 0, frameWChars, frameHChars);
@@ -323,7 +545,8 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                          NSFont* font,
                          CATextLayerAlignmentMode align,
                          bool wrapText,
-                         const NodeTextFxChain* fxChain) {
+                         const NodeTextFxChain* fxChain,
+                         CGFloat componentOpacity) {
         if (!text || [text length] == 0) {
             return;
         }
@@ -342,7 +565,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
             t.alignmentMode = align;
             t.wrapped = wrapText ? YES : NO;
             t.contentsScale = std::max<CGFloat>(scale, 1.0);
-            t.opacity = static_cast<float>(std::clamp(opacity, 0.0, 1.0));
+            t.opacity = static_cast<float>(std::clamp(opacity * componentOpacity, 0.0, 1.0));
             return t;
         };
         auto pushTextLayer = [&](NSString* drawText,
@@ -502,7 +725,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                             layer.contentsGravity = kCAGravityResize;
                             layer.contents = (__bridge id)processedImage;
                             layer.contentsScale = std::max<CGFloat>(scale, 1.0);
-                            layer.opacity = static_cast<float>(std::clamp(opacity, 0.0, 1.0));
+                            layer.opacity = static_cast<float>(std::clamp(opacity * componentOpacity, 0.0, 1.0));
                             [contentLayer addSublayer:layer];
                         };
                         if (plan.splitPx > 0.01f) {
@@ -561,6 +784,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
             layer.contentsGravity = kCAGravityResize;
             layer.contents = (__bridge id)image;
             layer.contentsScale = std::max<CGFloat>(scale, 1.0);
+            layer.opacity = static_cast<float>(std::clamp(componentOpacity, 0.0, 1.0));
             [contentLayer addSublayer:layer];
             CGImageRelease(image);
         };
@@ -659,6 +883,11 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
         }
         const auto it = byId.find(box.node->id);
         const IUiComponent* component = (it == byId.end()) ? nullptr : it->second;
+        if (component && !component->isVisible()) {
+            continue;
+        }
+        const CGFloat componentOpacity = static_cast<CGFloat>(
+            std::clamp(component ? component->opacity() : 1.0f, 0.0f, 1.0f));
 
         const CGRect rect = pxRectForChars(static_cast<int16_t>(box.rect.x + 1),
                                            static_cast<int16_t>(box.rect.y + 1),
@@ -670,7 +899,8 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
             case UiLayoutNodeType::Text: {
                 const NodeTextFxChain fxChain = textFxChainForNode(box.node, component);
                 NSString* text = nil;
-                NSFont* textFont = fontForNode(box.node, ctx.bodyFont);
+                NSFont* textFont = fontForNode(box.node, component, ctx.bodyFont);
+                NSColor* textColor = nodeTextColor(box.node, component, sceneDefaultTextColor);
                 CGRect textRect = rect;
                 const bool wrapText = box.node->textWrap;
                 if (const auto* s = dynamic_cast<const UiStatusBarComponent*>(component)) {
@@ -679,11 +909,15 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                     const CGRect panelRect = rect;
                     CALayer* panel = [CALayer layer];
                     panel.frame = panelRect;
+                    NSColor* panelBg = nil;
                     if (isHeaderTitle) {
-                        panel.backgroundColor = [ctx.mid colorWithAlphaComponent:0.22].CGColor;
+                        panelBg = [ctx.mid colorWithAlphaComponent:0.22];
                     } else {
-                        panel.backgroundColor = ctx.panel.CGColor;
+                        panelBg = ctx.panel;
                     }
+                    panelBg = nodeBackgroundColor(box.node, component, panelBg);
+                    panel.backgroundColor = panelBg.CGColor;
+                    panel.opacity = static_cast<float>(componentOpacity);
                     [contentLayer addSublayer:panel];
 
                     if (isHeaderTitle) {
@@ -695,7 +929,8 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                         if (gapH > 0.5) {
                             CALayer* topFill = [CALayer layer];
                             topFill.frame = CGRectMake(panelRect.origin.x, gapBottom, panelRect.size.width, gapH);
-                            topFill.backgroundColor = [ctx.mid colorWithAlphaComponent:0.22].CGColor;
+                            topFill.backgroundColor = panelBg.CGColor;
+                            topFill.opacity = static_cast<float>(componentOpacity);
                             [contentLayer addSublayer:topFill];
                         }
                     }
@@ -712,13 +947,15 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 } else if (!box.node->text.empty()) {
                     text = [NSString stringWithUTF8String:box.node->text.c_str()];
                 }
-                textLayer(textRect, text, ctx.text, textFont, kCAAlignmentLeft, wrapText, &fxChain);
+                textLayer(textRect, text, textColor, textFont, kCAAlignmentLeft, wrapText, &fxChain, componentOpacity);
             } break;
 
             case UiLayoutNodeType::Separator: {
                 CALayer* line = [CALayer layer];
-                line.backgroundColor = ctx.mid.CGColor;
+                NSColor* lineColor = nodeBorderColor(box.node, component, ctx.mid);
+                line.backgroundColor = lineColor.CGColor;
                 line.frame = CGRectMake(rect.origin.x, rect.origin.y + rect.size.height * 0.5, rect.size.width, 1.0);
+                line.opacity = static_cast<float>(componentOpacity);
                 [contentLayer addSublayer:line];
             } break;
 
@@ -728,6 +965,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 if (!list) {
                     break;
                 }
+                NSColor* listTextColor = nodeTextColor(box.node, component, sceneDefaultTextColor);
                 const CGFloat rowH = std::max<CGFloat>(cellH - 2.0, 14.0);
                 const std::size_t maxRows = std::min<std::size_t>(
                     list->rows.size(),
@@ -742,7 +980,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                                                  rowTop,
                                                  rect.size.width,
                                                  rowH);
-                    textLayer(rr, rowText, ctx.text, ctx.bodyFont, kCAAlignmentLeft, false, nullptr);
+                    textLayer(rr, rowText, listTextColor, ctx.bodyFont, kCAAlignmentLeft, false, nullptr, componentOpacity);
                 }
             } break;
 
@@ -751,7 +989,9 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 if (!knob) {
                     break;
                 }
-                NSFont* labelFont = fontForNode(box.node, ctx.bodyFont);
+                NSColor* knobTextColor = nodeTextColor(box.node, component, sceneDefaultTextColor);
+                NSColor* knobBorderColor = nodeBorderColor(box.node, component, knobTextColor);
+                NSFont* labelFont = fontForNode(box.node, component, ctx.bodyFont);
                 const CGFloat labelH = knob->label.empty()
                                            ? 0.0
                                            : std::max<CGFloat>(12.0, (labelFont ? labelFont.pointSize * 1.15 : 12.0));
@@ -759,10 +999,14 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 const CGFloat knobAreaH = std::max<CGFloat>(12.0, rect.size.height - labelH - (labelH > 0.0 ? 2.0 : 0.0));
                 const CGFloat maxSide = std::max<CGFloat>(8.0, std::min<CGFloat>(knobAreaH - 1.0, rect.size.width - 6.0));
                 const CGFloat baseSide = std::max<CGFloat>(14.0, std::min<CGFloat>(30.0, maxSide));
-                const CGFloat knobScale = std::clamp<CGFloat>(
-                    (box.node->knobSize > 0.0f) ? static_cast<CGFloat>(box.node->knobSize) : 1.0,
-                    0.2,
-                    4.0);
+                CGFloat knobScaleValue = (box.node->knobSize > 0.0f)
+                                             ? static_cast<CGFloat>(box.node->knobSize)
+                                             : 1.0;
+                if (const UiLayoutNode::StateSpec* st = nodeStateStyle(box.node, component);
+                    st && st->knobSize > 0.0f) {
+                    knobScaleValue = static_cast<CGFloat>(st->knobSize);
+                }
+                const CGFloat knobScale = std::clamp<CGFloat>(knobScaleValue, 0.2, 4.0);
                 const CGFloat sz = std::clamp(baseSide * knobScale, 8.0, maxSide);
                 const CGFloat r = sz * 0.42;
                 CGFloat cx = rect.origin.x + rect.size.width * 0.5;
@@ -783,12 +1027,13 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 CAShapeLayer* ring = [CAShapeLayer layer];
                 ring.frame = contentLayer.bounds;
                 ring.fillColor = [NSColor clearColor].CGColor;
-                ring.strokeColor = ctx.text.CGColor;
+                ring.strokeColor = knobBorderColor.CGColor;
                 ring.lineWidth = 1.7;
                 CGMutablePathRef ringPath = CGPathCreateMutable();
                 CGPathAddEllipseInRect(ringPath, nullptr, CGRectMake(cx - r, cy - r, r * 2.0, r * 2.0));
                 ring.path = ringPath;
                 CGPathRelease(ringPath);
+                ring.opacity = static_cast<float>(componentOpacity);
                 [contentLayer addSublayer:ring];
 
                 const CGFloat v = std::clamp(knob->value01, 0.0f, 1.0f);
@@ -799,13 +1044,14 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 CAShapeLayer* needle = [CAShapeLayer layer];
                 needle.frame = contentLayer.bounds;
                 needle.fillColor = [NSColor clearColor].CGColor;
-                needle.strokeColor = ctx.text.CGColor;
+                needle.strokeColor = knobBorderColor.CGColor;
                 needle.lineWidth = 1.8;
                 CGMutablePathRef nPath = CGPathCreateMutable();
                 CGPathMoveToPoint(nPath, nullptr, cx, cy);
                 CGPathAddLineToPoint(nPath, nullptr, nx, ny);
                 needle.path = nPath;
                 CGPathRelease(nPath);
+                needle.opacity = static_cast<float>(componentOpacity);
                 [contentLayer addSublayer:needle];
 
                 if (!knob->label.empty()) {
@@ -824,7 +1070,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                                                  rect.origin.y + rect.size.height - labelH,
                                                  std::max<CGFloat>(8.0, rect.size.width - 2.0),
                                                  labelH);
-                    textLayer(lr, label, ctx.text, labelFont, alignMode, false, &fxChain);
+                    textLayer(lr, label, knobTextColor, labelFont, alignMode, false, &fxChain, componentOpacity);
                 }
             } break;
 
@@ -833,7 +1079,10 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 if (!sw) {
                     break;
                 }
-                NSFont* labelFont = fontForNode(box.node, ctx.gothicFont);
+                NSColor* switchTextColor = nodeTextColor(box.node, component, sceneDefaultTextColor);
+                NSColor* switchBorderColor = nodeBorderColor(box.node, component, switchTextColor);
+                NSColor* switchBgColor = nodeBackgroundColor(box.node, component, ctx.panel);
+                NSFont* labelFont = fontForNode(box.node, component, ctx.gothicFont);
                 const CGFloat labelH = sw->label.empty()
                                            ? 0.0
                                            : std::max<CGFloat>(14.0, (labelFont ? labelFont.pointSize * 1.2 : 14.0));
@@ -841,7 +1090,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                     const NodeTextFxChain fxChain = textFxChainForNode(box.node, component);
                     NSString* label = [NSString stringWithUTF8String:sw->label.c_str()];
                     const CGRect lr = CGRectMake(rect.origin.x, rect.origin.y, rect.size.width, labelH);
-                    textLayer(lr, label, ctx.text, labelFont, kCAAlignmentLeft, false, &fxChain);
+                    textLayer(lr, label, switchTextColor, labelFont, kCAAlignmentLeft, false, &fxChain, componentOpacity);
                 }
                 const CGFloat bodyAreaY = rect.origin.y + labelH + (labelH > 0.0 ? 2.0 : 0.0);
                 const CGFloat bodyAreaH = std::max<CGFloat>(12.0, rect.size.height - labelH - (labelH > 0.0 ? 2.0 : 0.0));
@@ -853,13 +1102,14 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
 
                 CAShapeLayer* body = [CAShapeLayer layer];
                 body.frame = contentLayer.bounds;
-                body.fillColor = ctx.panel.CGColor;
-                body.strokeColor = ctx.text.CGColor;
+                body.fillColor = switchBgColor.CGColor;
+                body.strokeColor = switchBorderColor.CGColor;
                 body.lineWidth = 1.4;
                 CGMutablePathRef bPath = CGPathCreateMutable();
                 CGPathAddRoundedRect(bPath, nullptr, CGRectMake(x, y, w, h), radius, radius);
                 body.path = bPath;
                 CGPathRelease(bPath);
+                body.opacity = static_cast<float>(componentOpacity);
                 [contentLayer addSublayer:body];
 
                 const uint16_t total = std::max<uint16_t>(2U, static_cast<uint16_t>(sw->options.empty() ? 2U : sw->options.size()));
@@ -871,13 +1121,124 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
 
                 CAShapeLayer* thumb = [CAShapeLayer layer];
                 thumb.frame = contentLayer.bounds;
-                thumb.fillColor = ctx.text.CGColor;
+                thumb.fillColor = switchTextColor.CGColor;
                 CGMutablePathRef tPath = CGPathCreateMutable();
                 CGPathAddEllipseInRect(tPath, nullptr,
                                        CGRectMake(thumbX - thumbR, thumbY - thumbR, thumbR * 2.0, thumbR * 2.0));
                 thumb.path = tPath;
                 CGPathRelease(tPath);
+                thumb.opacity = static_cast<float>(componentOpacity);
                 [contentLayer addSublayer:thumb];
+            } break;
+
+            case UiLayoutNodeType::Icon: {
+                const auto* icon = dynamic_cast<const UiIconComponent*>(component);
+                if (!icon || icon->path.empty()) {
+                    break;
+                }
+                const CGRect drawRect = CGRectInset(rect, 1.0, 1.0);
+                if (drawRect.size.width < 2.0 || drawRect.size.height < 2.0) {
+                    break;
+                }
+                NSImage* img = loadIconImageCached(icon->path, ctx.cwd);
+                if (!img) {
+                    break;
+                }
+                CGImageRef cg = [img CGImageForProposedRect:nullptr context:nil hints:nil];
+                if (!cg) {
+                    break;
+                }
+                const NodeTextFxChain fxChain = textFxChainForNode(box.node, component);
+                if (!fxChain.requests.empty() && ctx.visualFx) {
+                    const std::size_t pixelW =
+                        static_cast<std::size_t>(std::max<CGFloat>(1.0, std::ceil(drawRect.size.width)));
+                    const std::size_t pixelH =
+                        static_cast<std::size_t>(std::max<CGFloat>(1.0, std::ceil(drawRect.size.height)));
+                    const std::size_t stride = pixelW * 4U;
+                    CGColorSpaceRef cs = CGColorSpaceCreateDeviceRGB();
+                    const CGBitmapInfo bitmapInfo =
+                        static_cast<CGBitmapInfo>(kCGImageAlphaPremultipliedLast) | kCGBitmapByteOrder32Big;
+                    CGContextRef bmp = CGBitmapContextCreate(nullptr,
+                                                             static_cast<size_t>(pixelW),
+                                                             static_cast<size_t>(pixelH),
+                                                             8,
+                                                             static_cast<size_t>(stride),
+                                                             cs,
+                                                             bitmapInfo);
+                    CGColorSpaceRelease(cs);
+                    if (bmp) {
+                        CGContextSetInterpolationQuality(bmp, kCGInterpolationNone);
+                        CALayer* source = [CALayer layer];
+                        source.frame = CGRectMake(0.0, 0.0, static_cast<CGFloat>(pixelW), static_cast<CGFloat>(pixelH));
+                        source.contents = (__bridge id)cg;
+                        source.contentsGravity = kCAGravityResizeAspect;
+                        source.minificationFilter = kCAFilterNearest;
+                        source.magnificationFilter = kCAFilterNearest;
+                        source.contentsScale = 1.0;
+                        [source renderInContext:bmp];
+
+                        auto* px = static_cast<uint8_t*>(CGBitmapContextGetData(bmp));
+                        if (px) {
+                            VisualFxRgbaView roi{};
+                            roi.pixels = px;
+                            roi.width = static_cast<uint16_t>(std::min<std::size_t>(pixelW, 65535U));
+                            roi.height = static_cast<uint16_t>(std::min<std::size_t>(pixelH, 65535U));
+                            roi.strideBytes = static_cast<uint32_t>(std::min<std::size_t>(stride, 0xFFFFFFFFU));
+
+                            const std::size_t byteCount = static_cast<std::size_t>(roi.strideBytes) * roi.height;
+                            std::vector<uint8_t> original(byteCount, 0U);
+                            std::copy(roi.pixels, roi.pixels + byteCount, original.begin());
+                            std::vector<int32_t> accum(byteCount, 0);
+                            for (std::size_t i = 0; i < byteCount; ++i) {
+                                accum[i] = static_cast<int32_t>(original[i]);
+                            }
+                            bool anyApplied = false;
+                            for (const VisualFxRequest& req : fxChain.requests) {
+                                std::vector<uint8_t> tmp = original;
+                                VisualFxRgbaView tmpView{};
+                                tmpView.pixels = tmp.data();
+                                tmpView.width = roi.width;
+                                tmpView.height = roi.height;
+                                tmpView.strideBytes = roi.strideBytes;
+                                if (!ctx.visualFx->applyRgba(tmpView, req)) {
+                                    continue;
+                                }
+                                anyApplied = true;
+                                for (std::size_t i = 0; i < byteCount; ++i) {
+                                    accum[i] += static_cast<int32_t>(tmp[i]) - static_cast<int32_t>(original[i]);
+                                }
+                            }
+                            if (anyApplied) {
+                                for (std::size_t i = 0; i < byteCount; ++i) {
+                                    roi.pixels[i] = static_cast<uint8_t>(std::clamp(accum[i], 0, 255));
+                                }
+                                CGImageRef processed = CGBitmapContextCreateImage(bmp);
+                                if (processed) {
+                                    CALayer* imageLayer = [CALayer layer];
+                                    imageLayer.frame = drawRect;
+                                    imageLayer.contents = (__bridge id)processed;
+                                    imageLayer.contentsGravity = kCAGravityResizeAspect;
+                                    imageLayer.minificationFilter = kCAFilterNearest;
+                                    imageLayer.magnificationFilter = kCAFilterNearest;
+                                    imageLayer.opacity = static_cast<float>(componentOpacity);
+                                    [contentLayer addSublayer:imageLayer];
+                                    CGImageRelease(processed);
+                                    CGContextRelease(bmp);
+                                    break;
+                                }
+                            }
+                        }
+                        CGContextRelease(bmp);
+                    }
+                }
+                CALayer* imageLayer = [CALayer layer];
+                imageLayer.frame = drawRect;
+                imageLayer.contents = (__bridge id)cg;
+                imageLayer.contentsGravity = kCAGravityResizeAspect;
+                imageLayer.minificationFilter = kCAFilterNearest;
+                imageLayer.magnificationFilter = kCAFilterNearest;
+                imageLayer.opacity = static_cast<float>(componentOpacity);
+                [contentLayer addSublayer:imageLayer];
             } break;
 
             case UiLayoutNodeType::AnimSlot: {
@@ -885,6 +1246,8 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 if (!anim) {
                     break;
                 }
+                NSColor* animBorderColor = nodeBorderColor(box.node, component, ctx.mid);
+                NSColor* animTextColor = nodeTextColor(box.node, component, sceneDefaultTextColor);
                 // Анимационный слот рисуем квадратом 128x128 (или максимально возможным,
                 // если контейнер меньше) и центрируем внутри выделенной зоны layout.
                 const CGFloat availW = std::max<CGFloat>(0.0, rect.size.width - 8.0);
@@ -910,24 +1273,113 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 CAShapeLayer* frame = [CAShapeLayer layer];
                 frame.frame = contentLayer.bounds;
                 frame.fillColor = [NSColor clearColor].CGColor;
-                frame.strokeColor = ctx.mid.CGColor;
+                frame.strokeColor = animBorderColor.CGColor;
                 frame.lineWidth = 1.1;
                 CGMutablePathRef p = CGPathCreateMutable();
                 CGPathAddRoundedRect(p, nullptr, drawRect, 4.0, 4.0);
                 frame.path = p;
                 CGPathRelease(p);
+                frame.opacity = static_cast<float>(componentOpacity);
                 [contentLayer addSublayer:frame];
 
                 if (!anim->label.empty()) {
                     NSString* title = [NSString stringWithUTF8String:anim->label.c_str()];
                     textLayer(CGRectMake(drawRect.origin.x + 6.0, drawRect.origin.y + 4.0, drawRect.size.width - 8.0, 14.0),
                               title,
-                              ctx.mid,
+                              animTextColor,
                               ctx.bodyFont,
                               kCAAlignmentLeft,
                               false,
-                              nullptr);
+                              nullptr,
+                              componentOpacity);
                 }
+            } break;
+
+            case UiLayoutNodeType::Waveform: {
+                const auto* wave = dynamic_cast<const UiWaveformComponent*>(component);
+                if (!wave) {
+                    break;
+                }
+                NSColor* waveTextColor = nodeTextColor(box.node, component, sceneDefaultTextColor);
+                NSColor* waveBorderColor = nodeBorderColor(box.node, component, ctx.mid);
+                NSColor* waveFillColor =
+                    nodeBackgroundColor(box.node, component, [waveBorderColor colorWithAlphaComponent:0.10]);
+                const CGRect drawRect = CGRectInset(rect, 2.0, 2.0);
+                if (drawRect.size.width < 4.0 || drawRect.size.height < 4.0) {
+                    break;
+                }
+
+                // Подсветка активного trim-региона.
+                const float trimStart = std::clamp(wave->trimStart01, 0.0f, 0.99f);
+                const float trimEnd = std::clamp(wave->trimEnd01, 0.01f, 1.0f);
+                const CGFloat sx = drawRect.origin.x + drawRect.size.width * trimStart;
+                const CGFloat ex = drawRect.origin.x + drawRect.size.width * std::max(trimStart, trimEnd);
+                if (ex > sx + 0.5) {
+                    CALayer* trimRegion = [CALayer layer];
+                    trimRegion.frame = CGRectMake(sx, drawRect.origin.y, ex - sx, drawRect.size.height);
+                    trimRegion.backgroundColor = waveFillColor.CGColor;
+                    trimRegion.opacity = static_cast<float>(componentOpacity);
+                    [contentLayer addSublayer:trimRegion];
+                }
+
+                // Центральная ось.
+                const CGFloat centerY = drawRect.origin.y + drawRect.size.height * 0.5;
+                CAShapeLayer* center = [CAShapeLayer layer];
+                center.frame = contentLayer.bounds;
+                center.fillColor = [NSColor clearColor].CGColor;
+                center.strokeColor = [waveBorderColor colorWithAlphaComponent:0.55].CGColor;
+                center.lineWidth = 1.0;
+                CGMutablePathRef centerPath = CGPathCreateMutable();
+                CGPathMoveToPoint(centerPath, nullptr, drawRect.origin.x, centerY);
+                CGPathAddLineToPoint(centerPath, nullptr, drawRect.origin.x + drawRect.size.width, centerY);
+                center.path = centerPath;
+                CGPathRelease(centerPath);
+                center.opacity = static_cast<float>(componentOpacity);
+                [contentLayer addSublayer:center];
+
+                // Пиковая огибающая (вертикальные столбцы по X).
+                if (!wave->peaks01.empty()) {
+                    const std::size_t cols = std::max<std::size_t>(
+                        1U,
+                        static_cast<std::size_t>(std::floor(drawRect.size.width)));
+                    const CGFloat halfRange = drawRect.size.height * 0.46;
+                    CGMutablePathRef peaksPath = CGPathCreateMutable();
+                    for (std::size_t x = 0; x < cols; ++x) {
+                        const std::size_t idx = (x * wave->peaks01.size()) / cols;
+                        const float v = std::clamp(wave->peaks01[std::min<std::size_t>(idx, wave->peaks01.size() - 1U)],
+                                                   0.0f,
+                                                   1.0f);
+                        const CGFloat hh = std::max<CGFloat>(1.0, halfRange * static_cast<CGFloat>(v));
+                        const CGFloat px = drawRect.origin.x + static_cast<CGFloat>(x) + 0.5;
+                        CGPathMoveToPoint(peaksPath, nullptr, px, centerY - hh);
+                        CGPathAddLineToPoint(peaksPath, nullptr, px, centerY + hh);
+                    }
+                    CAShapeLayer* peaksLayer = [CAShapeLayer layer];
+                    peaksLayer.frame = contentLayer.bounds;
+                    peaksLayer.fillColor = [NSColor clearColor].CGColor;
+                    peaksLayer.strokeColor = [waveTextColor colorWithAlphaComponent:0.92].CGColor;
+                    peaksLayer.lineWidth = 1.0;
+                    peaksLayer.path = peaksPath;
+                    CGPathRelease(peaksPath);
+                    peaksLayer.opacity = static_cast<float>(componentOpacity);
+                    [contentLayer addSublayer:peaksLayer];
+                }
+
+                // Маркеры trim start/end.
+                CAShapeLayer* marks = [CAShapeLayer layer];
+                marks.frame = contentLayer.bounds;
+                marks.fillColor = [NSColor clearColor].CGColor;
+                marks.strokeColor = waveTextColor.CGColor;
+                marks.lineWidth = 1.1;
+                CGMutablePathRef markPath = CGPathCreateMutable();
+                CGPathMoveToPoint(markPath, nullptr, sx, drawRect.origin.y);
+                CGPathAddLineToPoint(markPath, nullptr, sx, drawRect.origin.y + drawRect.size.height);
+                CGPathMoveToPoint(markPath, nullptr, ex, drawRect.origin.y);
+                CGPathAddLineToPoint(markPath, nullptr, ex, drawRect.origin.y + drawRect.size.height);
+                marks.path = markPath;
+                CGPathRelease(markPath);
+                marks.opacity = static_cast<float>(componentOpacity);
+                [contentLayer addSublayer:marks];
             } break;
 
             case UiLayoutNodeType::TrackView:

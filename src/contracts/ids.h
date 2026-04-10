@@ -64,7 +64,13 @@ namespace avantgarde {
         // Политика реакции на новые trigger/note-on во время уже активного проигрывания.
         LaunchPolicy = 7,
         // Политика остановки трека в режиме note-driven playback.
-        StopPolicy = 8
+        StopPolicy = 8,
+        // Нормализованная точка старта playback-региона [0..1].
+        // 0.0 = самое начало файла.
+        StartNorm = 9,
+        // Нормализованная точка конца playback-региона [0..1].
+        // 1.0 = самый конец файла.
+        EndNorm = 10
     };
 
     // Track playback mode:
@@ -89,6 +95,19 @@ namespace avantgarde {
     enum class TrackStopPolicyValue : uint8_t {
         ManualStop = 0,
         ByNoteOff = 1
+    };
+
+    // Пользовательские профили режима трека (4 режима "из коробки").
+    // Это UX-уровень: один профиль разворачивается в набор mode/policy/loop параметров.
+    enum class TrackPlaybackProfileValue : uint8_t {
+        // PATTERN: note-mode + loop on.
+        Pattern = 0,
+        // PATTERN ONCE: note-mode + loop off.
+        PatternOnce = 1,
+        // LOOP: looper-mode + loop on.
+        Loop = 2,
+        // ONESHOT: looper-mode + loop off.
+        OneShot = 3
     };
 
     // Индексы параметров транспорта для IParameterized-поверхности global target:
@@ -149,6 +168,10 @@ namespace avantgarde {
     }
 
     constexpr float toParamValue(TrackStopPolicyValue v) noexcept {
+        return static_cast<float>(static_cast<uint8_t>(v));
+    }
+
+    constexpr float toParamValue(TrackPlaybackProfileValue v) noexcept {
         return static_cast<float>(static_cast<uint8_t>(v));
     }
 

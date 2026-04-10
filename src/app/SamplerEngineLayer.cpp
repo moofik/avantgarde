@@ -61,6 +61,20 @@ uint8_t clampTrack(uint8_t track, uint8_t trackCount) noexcept {
     return (track >= safeCount) ? static_cast<uint8_t>(safeCount - 1) : track;
 }
 
+UiTrackPlaybackProfile uiProfileFromModeLoop(TrackPlaybackModeValue mode, bool loop) noexcept {
+    if (mode == TrackPlaybackModeValue::Note) {
+        return loop ? UiTrackPlaybackProfile::Pattern : UiTrackPlaybackProfile::PatternOnce;
+    }
+    return loop ? UiTrackPlaybackProfile::Loop : UiTrackPlaybackProfile::OneShot;
+}
+
+TrackPlaybackProfileValue profileFromLegacyLooperToggle(bool looperEnabled) noexcept {
+    // Сохраняем legacy-семантику старого toggle:
+    // ON  -> LOOP
+    // OFF -> PATTERN_ONCE
+    return looperEnabled ? TrackPlaybackProfileValue::Loop : TrackPlaybackProfileValue::PatternOnce;
+}
+
 float tempoToNorm(float bpm) noexcept {
     constexpr float kMinTempo = 20.0f;
     constexpr float kMaxTempo = 300.0f;
@@ -158,6 +172,11 @@ PatternState makeDefaultPattern(PatternId id,
         tr.playbackInc = 1.0f;
         tr.bars = 4u;
         tr.clipRefId = 0u;
+        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::LoopEnabled), 1.0f});
+        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::PlaybackMode),
+                                         toParamValue(TrackPlaybackModeValue::Looper)});
+        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::StartNorm), 0.0f});
+        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::EndNorm), 1.0f});
         p.tracks.push_back(std::move(tr));
     }
     return p;
@@ -228,6 +247,10 @@ struct SamplerEngineLayer::Impl {
     std::vector<float> trackPlaybackInc{};
     std::vector<uint32_t> trackBars{};
     std::vector<uint32_t> trackClipRef{};
+    std::vector<TrackPlaybackModeValue> trackPlaybackMode{};
+    std::vector<bool> trackLoopEnabled{};
+    std::vector<float> trackTrimStart01{};
+    std::vector<float> trackTrimEnd01{};
     // Pattern engine: bank + scheduler + snapshots.
     std::unique_ptr<PatternEngine> patternEngine{};
     // Адаптер применения switch-плана к SamplerEngineLayer API.
@@ -286,6 +309,10 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
     impl_->trackPlaybackInc.assign(impl_->trackCount, 1.0f);
     impl_->trackBars.assign(impl_->trackCount, 4u);
     impl_->trackClipRef.assign(impl_->trackCount, 0u);
+    impl_->trackPlaybackMode.assign(impl_->trackCount, TrackPlaybackModeValue::Looper);
+    impl_->trackLoopEnabled.assign(impl_->trackCount, true);
+    impl_->trackTrimStart01.assign(impl_->trackCount, 0.0f);
+    impl_->trackTrimEnd01.assign(impl_->trackCount, 1.0f);
 
     // Создаем пользовательские треки и preview-голос.
     std::vector<std::unique_ptr<IClipTrack>> userTracks(impl_->trackCount);
@@ -419,7 +446,10 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
         track.muted = false;
         track.armed = false;
         track.playbackMode = UiTrackPlaybackMode::Looper;
+        track.playbackProfile = UiTrackPlaybackProfile::Loop;
         track.loop = true;
+        track.trimStart01 = 0.0f;
+        track.trimEnd01 = 1.0f;
         track.fxCount = 0;
         track.fxChainIds.clear();
         track.fxEnabled.clear();
@@ -620,6 +650,11 @@ bool SamplerEngineLayer::setTrackArmed(uint8_t track, bool armed) noexcept {
 }
 
 bool SamplerEngineLayer::setTrackLooperMode(uint8_t track, bool looperEnabled) noexcept {
+    return setTrackPlaybackProfile(track, profileFromLegacyLooperToggle(looperEnabled));
+}
+
+bool SamplerEngineLayer::setTrackPlaybackProfile(uint8_t track,
+                                                 TrackPlaybackProfileValue profile) noexcept {
     if (!impl_ || impl_->clipCtl.empty()) {
         return false;
     }
@@ -628,37 +663,63 @@ bool SamplerEngineLayer::setTrackLooperMode(uint8_t track, bool looperEnabled) n
         return false;
     }
 
-    // Единая "кнопка LOOPER" для UX:
-    // пользователь не крутит три policy отдельно, а включает понятный пресет.
-    //
-    // LOOPER ON:
-    // - mode: Looper
-    // - launch: IgnoreIfPlaying (не ретриггерим уже идущий луп)
-    // - stop: ManualStop (только явный stop/mute)
-    // - transport coupling: follow transport (удобно для глобального play/stop)
-    // - slot loop: on
-    //
-    // LOOPER OFF (Sampler/Note):
-    // - mode: Note
-    // - launch: RetriggerOnNoteOn
-    // - stop: ByNoteOff
-    // - transport coupling: one-shot gate (follow transport off)
-    // - slot loop: off
-    const TrackPlaybackModeValue mode = looperEnabled ? TrackPlaybackModeValue::Looper : TrackPlaybackModeValue::Note;
-    const TrackLaunchPolicyValue launch =
-        looperEnabled ? TrackLaunchPolicyValue::IgnoreIfPlaying : TrackLaunchPolicyValue::RetriggerOnNoteOn;
-    const TrackStopPolicyValue stop =
-        looperEnabled ? TrackStopPolicyValue::ManualStop : TrackStopPolicyValue::ByNoteOff;
+    TrackPlaybackModeValue mode = TrackPlaybackModeValue::Looper;
+    TrackLaunchPolicyValue launch = TrackLaunchPolicyValue::IgnoreIfPlaying;
+    TrackStopPolicyValue stop = TrackStopPolicyValue::ManualStop;
+    bool followTransport = true;
+    bool loopEnabled = true;
+
+    switch (profile) {
+        case TrackPlaybackProfileValue::Pattern:
+            mode = TrackPlaybackModeValue::Note;
+            launch = TrackLaunchPolicyValue::RetriggerOnNoteOn;
+            stop = TrackStopPolicyValue::ByNoteOff;
+            followTransport = false;
+            loopEnabled = true;
+            break;
+        case TrackPlaybackProfileValue::PatternOnce:
+            mode = TrackPlaybackModeValue::Note;
+            launch = TrackLaunchPolicyValue::RetriggerOnNoteOn;
+            stop = TrackStopPolicyValue::ByNoteOff;
+            followTransport = false;
+            loopEnabled = false;
+            break;
+        case TrackPlaybackProfileValue::Loop:
+            mode = TrackPlaybackModeValue::Looper;
+            launch = TrackLaunchPolicyValue::IgnoreIfPlaying;
+            stop = TrackStopPolicyValue::ManualStop;
+            followTransport = true;
+            loopEnabled = true;
+            break;
+        case TrackPlaybackProfileValue::OneShot:
+            mode = TrackPlaybackModeValue::Looper;
+            launch = TrackLaunchPolicyValue::RetriggerOnNoteOn;
+            stop = TrackStopPolicyValue::ManualStop;
+            followTransport = false;
+            loopEnabled = false;
+            break;
+        default:
+            break;
+    }
 
     bool ok = true;
     ok = impl_->controlDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::PlaybackMode, toParamValue(mode)) && ok;
     ok = impl_->controlDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::LaunchPolicy, toParamValue(launch)) && ok;
     ok = impl_->controlDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::StopPolicy, toParamValue(stop)) && ok;
     ok = impl_->controlDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::FollowTransportEnabled,
-                                                    looperEnabled ? kRtValueOn : kRtValueOff) && ok;
+                                                    followTransport ? kRtValueOn : kRtValueOff) && ok;
     ok = impl_->controlDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::LoopEnabled,
-                                                    looperEnabled ? kRtValueOn : kRtValueOff) && ok;
-    return ok;
+                                                    loopEnabled ? kRtValueOn : kRtValueOff) && ok;
+    if (!ok) {
+        return false;
+    }
+    if (t < impl_->trackPlaybackMode.size()) {
+        impl_->trackPlaybackMode[t] = mode;
+    }
+    if (t < impl_->trackLoopEnabled.size()) {
+        impl_->trackLoopEnabled[t] = loopEnabled;
+    }
+    return true;
 }
 
 bool SamplerEngineLayer::setTrackSpeed(uint8_t track, float speed) noexcept {
@@ -703,6 +764,20 @@ bool SamplerEngineLayer::setTrackParam(uint8_t track, uint16_t paramIndex, float
         impl_->trackMuted[t] = (value >= 0.5f);
     } else if (t < impl_->trackArmed.size() && paramIndex == toParamIndex(TrackParamId::ArmEnabled)) {
         impl_->trackArmed[t] = (value >= 0.5f);
+    } else if (t < impl_->trackLoopEnabled.size() && paramIndex == toParamIndex(TrackParamId::LoopEnabled)) {
+        impl_->trackLoopEnabled[t] = (value >= 0.5f);
+    } else if (t < impl_->trackPlaybackMode.size() && paramIndex == toParamIndex(TrackParamId::PlaybackMode)) {
+        impl_->trackPlaybackMode[t] = (value >= 0.5f) ? TrackPlaybackModeValue::Note : TrackPlaybackModeValue::Looper;
+    } else if (t < impl_->trackTrimStart01.size() && paramIndex == toParamIndex(TrackParamId::StartNorm)) {
+        impl_->trackTrimStart01[t] = std::clamp(value, 0.0f, 0.99f);
+        if (t < impl_->trackTrimEnd01.size() && impl_->trackTrimEnd01[t] <= impl_->trackTrimStart01[t] + 0.01f) {
+            impl_->trackTrimEnd01[t] = std::min(1.0f, impl_->trackTrimStart01[t] + 0.01f);
+        }
+    } else if (t < impl_->trackTrimEnd01.size() && paramIndex == toParamIndex(TrackParamId::EndNorm)) {
+        impl_->trackTrimEnd01[t] = std::clamp(value, 0.01f, 1.0f);
+        if (t < impl_->trackTrimStart01.size() && impl_->trackTrimStart01[t] >= impl_->trackTrimEnd01[t] - 0.01f) {
+            impl_->trackTrimStart01[t] = std::max(0.0f, impl_->trackTrimEnd01[t] - 0.01f);
+        }
     }
     return true;
 }
@@ -1003,6 +1078,17 @@ bool SamplerEngineLayer::captureActivePatternSnapshot_() noexcept {
         tr.playbackInc = (t < impl_->trackPlaybackInc.size()) ? impl_->trackPlaybackInc[t] : 1.0f;
         tr.bars = (t < impl_->trackBars.size()) ? impl_->trackBars[t] : 4u;
         tr.clipRefId = (t < impl_->trackClipRef.size()) ? impl_->trackClipRef[t] : 0u;
+        tr.trackParams.clear();
+        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::LoopEnabled),
+                                         (t < impl_->trackLoopEnabled.size() && impl_->trackLoopEnabled[t]) ? 1.0f : 0.0f});
+        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::PlaybackMode),
+                                         toParamValue((t < impl_->trackPlaybackMode.size())
+                                                          ? impl_->trackPlaybackMode[t]
+                                                          : TrackPlaybackModeValue::Looper)});
+        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::StartNorm),
+                                         (t < impl_->trackTrimStart01.size()) ? impl_->trackTrimStart01[t] : 0.0f});
+        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::EndNorm),
+                                         (t < impl_->trackTrimEnd01.size()) ? impl_->trackTrimEnd01[t] : 1.0f});
     }
     return impl_->patternEngine->putPattern(state);
 }
@@ -1087,6 +1173,28 @@ bool SamplerEngineLayer::syncUiCache(UiTransportState& transportInOut,
         }
         if (t < impl_->trackBars.size()) {
             ui.bars = impl_->trackBars[t];
+        }
+        if (t < impl_->trackPlaybackMode.size()) {
+            ui.playbackMode = (impl_->trackPlaybackMode[t] == TrackPlaybackModeValue::Note)
+                                  ? UiTrackPlaybackMode::Note
+                                  : UiTrackPlaybackMode::Looper;
+        }
+        if (t < impl_->trackLoopEnabled.size()) {
+            ui.loop = impl_->trackLoopEnabled[t];
+        }
+        ui.playbackProfile = uiProfileFromModeLoop(
+            (ui.playbackMode == UiTrackPlaybackMode::Note)
+                ? TrackPlaybackModeValue::Note
+                : TrackPlaybackModeValue::Looper,
+            ui.loop);
+        if (t < impl_->trackTrimStart01.size()) {
+            ui.trimStart01 = std::clamp(impl_->trackTrimStart01[t], 0.0f, 0.99f);
+        }
+        if (t < impl_->trackTrimEnd01.size()) {
+            ui.trimEnd01 = std::clamp(impl_->trackTrimEnd01[t], 0.01f, 1.0f);
+        }
+        if (ui.trimEnd01 <= ui.trimStart01 + 0.01f) {
+            ui.trimEnd01 = std::min(1.0f, ui.trimStart01 + 0.01f);
         }
 
         const uint32_t clipRef = (t < impl_->trackClipRef.size()) ? impl_->trackClipRef[t] : 0u;

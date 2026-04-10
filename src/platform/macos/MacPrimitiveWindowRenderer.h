@@ -9,7 +9,7 @@
 namespace avantgarde {
 
 // macOS renderer на процедурной графике.
-// В отличие от ASCII-пайплайна, рендерит UiPreparedLayout примитивами:
+// Рендерит UiPreparedLayout примитивами:
 // линии, прямоугольники, круги, текстовые подписи.
 class MacPrimitiveWindowRenderer final : public IUiRenderer {
 public:

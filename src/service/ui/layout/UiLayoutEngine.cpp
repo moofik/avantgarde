@@ -117,6 +117,8 @@ Size2 defaultLeafMetrics(const UiLayoutNode& node) {
             const uint16_t textRows = textRowsFromFontSize(node.fontSize);
             return Size2{22, std::max<uint16_t>(2U, textRows)};
         }
+        case UiLayoutNodeType::Icon:
+            return Size2{6, 6};
         case UiLayoutNodeType::AnimSlot: {
             uint16_t w = 20;
             uint16_t h = 6;
@@ -128,6 +130,8 @@ Size2 defaultLeafMetrics(const UiLayoutNode& node) {
             }
             return Size2{w, h};
         }
+        case UiLayoutNodeType::Waveform:
+            return Size2{0, 6};
         case UiLayoutNodeType::Spacer:
             return Size2{0, 1};
         case UiLayoutNodeType::Column:
@@ -148,9 +152,13 @@ Size2 measureNode(const UiLayoutNode& node,
         return itCached->second;
     }
 
+    const uint16_t margin = node.margin;
     const uint16_t padding = node.padding;
-    const uint16_t contentAvailW = (availableW > padding * 2U) ? static_cast<uint16_t>(availableW - padding * 2U) : 0U;
-    const uint16_t contentAvailH = (availableH > padding * 2U) ? static_cast<uint16_t>(availableH - padding * 2U) : 0U;
+    const uint16_t outerInset = static_cast<uint16_t>(margin + padding);
+    const uint16_t contentAvailW =
+        (availableW > outerInset * 2U) ? static_cast<uint16_t>(availableW - outerInset * 2U) : 0U;
+    const uint16_t contentAvailH =
+        (availableH > outerInset * 2U) ? static_cast<uint16_t>(availableH - outerInset * 2U) : 0U;
 
     Size2 intrinsic{};
     if (isContainer(node)) {
@@ -231,8 +239,8 @@ Size2 measureNode(const UiLayoutNode& node,
         }
     }
 
-    const uint16_t baseW = static_cast<uint16_t>(intrinsic.w + padding * 2U);
-    const uint16_t baseH = static_cast<uint16_t>(intrinsic.h + padding * 2U);
+    const uint16_t baseW = static_cast<uint16_t>(intrinsic.w + outerInset * 2U);
+    const uint16_t baseH = static_cast<uint16_t>(intrinsic.h + outerInset * 2U);
 
     Size2 result{};
     result.w = resolveSize(node.width, availableW, baseW);
@@ -247,17 +255,29 @@ void arrangeNode(const UiLayoutNode& node,
                  uint16_t depth,
                  const std::unordered_map<const UiLayoutNode*, Size2>& measured,
                  UiLayoutEngine::Result& out) {
-    out.boxes.push_back(UiLayoutBox{.node = &node, .rect = rect, .depth = depth});
+    // margin — внешний отступ ноды: резервируется в родителе и не участвует в отрисовке контента.
+    const uint16_t margin = node.margin;
+    const SceneFrameRect innerRect{
+        .x = static_cast<int16_t>(rect.x + static_cast<int>(margin)),
+        .y = static_cast<int16_t>(rect.y + static_cast<int>(margin)),
+        .width = static_cast<uint16_t>(
+            (rect.width > margin * 2U) ? static_cast<uint16_t>(rect.width - margin * 2U) : static_cast<uint16_t>(0U)),
+        .height = static_cast<uint16_t>(
+            (rect.height > margin * 2U) ? static_cast<uint16_t>(rect.height - margin * 2U) : static_cast<uint16_t>(0U)),
+    };
+    out.boxes.push_back(UiLayoutBox{.node = &node, .rect = innerRect, .depth = depth});
 
     if (!isContainer(node) || node.children.empty()) {
         return;
     }
 
     const uint16_t padding = node.padding;
-    const int contentX = rect.x + static_cast<int>(padding);
-    const int contentY = rect.y + static_cast<int>(padding);
-    const uint16_t contentW = (rect.width > padding * 2U) ? static_cast<uint16_t>(rect.width - padding * 2U) : 0U;
-    const uint16_t contentH = (rect.height > padding * 2U) ? static_cast<uint16_t>(rect.height - padding * 2U) : 0U;
+    const int contentX = innerRect.x + static_cast<int>(padding);
+    const int contentY = innerRect.y + static_cast<int>(padding);
+    const uint16_t contentW =
+        (innerRect.width > padding * 2U) ? static_cast<uint16_t>(innerRect.width - padding * 2U) : 0U;
+    const uint16_t contentH =
+        (innerRect.height > padding * 2U) ? static_cast<uint16_t>(innerRect.height - padding * 2U) : 0U;
 
     if (contentW == 0U || contentH == 0U) {
         return;
@@ -316,6 +336,7 @@ void arrangeNode(const UiLayoutNode& node,
                              child.type == UiLayoutNodeType::FxListView ||
                              child.type == UiLayoutNodeType::FxEditorView ||
                              child.type == UiLayoutNodeType::List ||
+                             child.type == UiLayoutNodeType::Waveform ||
                              child.type == UiLayoutNodeType::Switch ||
                              child.type == UiLayoutNodeType::Separator ||
                              child.type == UiLayoutNodeType::Spacer)) {
@@ -328,6 +349,7 @@ void arrangeNode(const UiLayoutNode& node,
                               child.type == UiLayoutNodeType::FxListView ||
                               child.type == UiLayoutNodeType::FxEditorView ||
                               child.type == UiLayoutNodeType::List ||
+                              child.type == UiLayoutNodeType::Waveform ||
                               child.type == UiLayoutNodeType::Switch ||
                               child.type == UiLayoutNodeType::Separator ||
                               child.type == UiLayoutNodeType::Spacer)) {

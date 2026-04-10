@@ -37,8 +37,6 @@ struct SamplerAppConfig {
     SamplerIoConfig io{};
     // Стартовые загрузки клипов (произвольный список пар track/path).
     std::vector<StartupClipLoad> startupClipLoads{};
-    // Базовая текстовая ширина GB-кадра.
-    uint16_t gbTextWidth{60};
 };
 
 // Оркестратор приложения.
@@ -98,8 +96,6 @@ private:
     std::atomic<bool> stopUi_{false};
     // Поток обработки input/actions.
     std::thread controlThread_{};
-    // Поток периодического рендера для non-window режимов.
-    std::thread uiThread_{};
 };
 
 } // namespace avantgarde

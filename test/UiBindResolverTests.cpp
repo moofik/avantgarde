@@ -4,18 +4,18 @@
 
 using namespace avantgarde;
 
-TEST_CASE("UiBindResolver: FxEditor knob bind resolves from UiAction-like key") {
+TEST_CASE("UiBindResolver: FxEditor knob bind resolves from canonical fx.selected.param key") {
     const UiBindResolution r0 = UiBindResolver::resolve(UiScene::FxEditor, UiLayoutNodeType::Knob,
-                                                        "Scene.SceneFxParamValue.0");
+                                                        "fx.selected.param.0");
     REQUIRE(r0.ok);
-    REQUIRE(r0.canonical == "action.scene.fx.param.value.0");
+    REQUIRE(r0.canonical == "fx.selected.param.0");
     REQUIRE(r0.actionId == UiAction::Id::SceneFxParamValue);
     REQUIRE(r0.paramIndex == 0);
 
     const UiBindResolution r2 = UiBindResolver::resolve(UiScene::FxEditor, UiLayoutNodeType::Knob,
-                                                        "scene.fx.param.value.2");
+                                                        "fx.selected.param.2");
     REQUIRE(r2.ok);
-    REQUIRE(r2.canonical == "action.scene.fx.param.value.2");
+    REQUIRE(r2.canonical == "fx.selected.param.2");
     REQUIRE(r2.actionId == UiAction::Id::SceneFxParamValue);
     REQUIRE(r2.paramIndex == 2);
 }
@@ -23,7 +23,7 @@ TEST_CASE("UiBindResolver: FxEditor knob bind resolves from UiAction-like key") 
 TEST_CASE("UiBindResolver: FxEditor defaults for empty bind are predictable") {
     const UiBindResolution knobDefault = UiBindResolver::resolve(UiScene::FxEditor, UiLayoutNodeType::Knob, "");
     REQUIRE(knobDefault.ok);
-    REQUIRE(knobDefault.canonical == "action.scene.fx.param.value.selected");
+    REQUIRE(knobDefault.canonical == "fx.selected.param.selected");
     REQUIRE(knobDefault.actionId == UiAction::Id::SceneFxParamValue);
     REQUIRE(knobDefault.paramIndex == -1);
 
@@ -32,12 +32,10 @@ TEST_CASE("UiBindResolver: FxEditor defaults for empty bind are predictable") {
     REQUIRE(animDefault.canonical == "fx.anim.current");
 }
 
-TEST_CASE("UiBindResolver: legacy fx.param.<index> is normalized for migration") {
+TEST_CASE("UiBindResolver: legacy fx bind forms are rejected") {
     const UiBindResolution legacy = UiBindResolver::resolve(UiScene::FxEditor, UiLayoutNodeType::Knob, "fx.param.3");
-    REQUIRE(legacy.ok);
-    REQUIRE(legacy.canonical == "action.scene.fx.param.value.3");
-    REQUIRE(legacy.actionId == UiAction::Id::SceneFxParamValue);
-    REQUIRE(legacy.paramIndex == 3);
+    REQUIRE_FALSE(legacy.ok);
+    REQUIRE_FALSE(legacy.error.empty());
 }
 
 TEST_CASE("UiBindResolver: FxEditor anim aliases map to canonical keys") {
