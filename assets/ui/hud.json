@@ -1,0 +1,146 @@
+{
+  "default": {
+    "position": "top_center",
+    "style_ref": "@styles.hud.base",
+    "lifetime_ms": 1350,
+    "hold_ms": 920,
+    "enter": "fade_in",
+    "exit": "fade_out"
+  },
+  "styles": {
+    "hud.base": {
+      "width": 30,
+      "height": 5,
+      "padding": 1,
+      "position": "top_center",
+      "font": "gothic",
+      "background_color": "#130D16D8",
+      "border_color": "#8F6E95",
+      "text_color": "#E3D4E8",
+      "font_size": 20,
+      "align": "center",
+      "justify": "center",
+      "text_wrap": true,
+      "text_animations": [
+        "@text_animations.hud.glow.soft"
+      ]
+    },
+    "hud.accent": {
+      "width": 32,
+      "height": 5,
+      "padding": 1,
+      "position": "top_center",
+      "font": "gothic",
+      "font_size": 28,
+      "background_color": "#160F1AD8",
+      "border_color": "#C081B8",
+      "text_color": "#F4DEF1",
+      "align": "center",
+      "justify": "center",
+      "text_wrap": true,
+      "text_animations": [
+        "@text_animations.hud.typing.soft"
+      ]
+    },
+    "hud.critical": {
+      "width": 34,
+      "height": 6,
+      "padding": 1,
+      "position": "center",
+      "font": "gothic",
+      "font_size": 32,
+      "background_color": "#1C0A12E0",
+      "border_color": "#C81C63",
+      "text_color": "#FFD8E5",
+      "align": "center",
+      "justify": "center",
+      "text_wrap": true,
+      "text_animations": [
+        "@text_animations.hud.typing.fast"
+      ]
+    }
+  },
+  "animations": {
+    "fade_in": {
+      "type": "fade_scale_glow",
+      "duration_ms": 190,
+      "from_opacity": 0.0,
+      "to_opacity": 1.0,
+      "from_scale": 0.95,
+      "to_scale": 1.0,
+      "from_glow": 0.36,
+      "to_glow": 0.12
+    },
+    "fade_out": {
+      "type": "fade_glitch",
+      "duration_ms": 260,
+      "from_opacity": 1.0,
+      "to_opacity": 0.0,
+      "from_scale": 1.0,
+      "to_scale": 1.0,
+      "from_glow": 0.12,
+      "to_glow": 0.0,
+      "glitch_to": 0.95
+    }
+  },
+  "text_animations": {
+    "hud.glow.soft": {
+      "type": "glow",
+      "effect_trigger": "change",
+      "effect_transition": "fade",
+      "effect_trigger_out": "250ms",
+      "effect_amount": 0.1,
+      "effect_speed": 0.3,
+      "effect_color": "#C892BA"
+    },
+    "hud.typing.soft": {
+      "type": "typing",
+      "effect_trigger": "change",
+      "effect_transition": "instant",
+      "effect_trigger_out": "1500ms",
+      "effect_amount": 1.0,
+      "effect_speed": 1.2
+    },
+    "hud.typing.fast": {
+      "type": "typing",
+      "effect_trigger": "change",
+      "effect_transition": "instant",
+      "effect_trigger_out": "650ms",
+      "effect_amount": 1.0,
+      "effect_speed": 1.25
+    }
+  },
+  "types": {
+    "info": {
+      "style_ref": "@styles.hud.base",
+      "enter": "fade_in",
+      "exit": "fade_out",
+      "lifetime_ms": 1550,
+      "hold_ms": 1000
+    },
+    "action": {
+      "style_ref": "@styles.hud.accent",
+      "enter": "fade_in",
+      "exit": "fade_out",
+      "lifetime_ms": 1850,
+      "hold_ms": 1200
+    },
+    "critical": {
+      "style_ref": "@styles.hud.critical",
+      "enter": "fade_in",
+      "exit": "fade_out",
+      "lifetime_ms": 2100,
+      "hold_ms": 1400
+    }
+  },
+  "events": {
+    "snapshot.captured": {
+      "type": "info",
+      "text": "SNAPSHOT {slot} CAPTURED"
+    },
+    "snapshot.applied": {
+      "type": "action",
+      "text": "SNAPSHOT {slot} APPLIED"
+    }
+  }
+}

@@ -3,15 +3,18 @@
 #include <algorithm>
 #include <cstddef>
 #include <cmath>
+#include <cstdio>
 #include <memory>
 #include <string>
 #include <string_view>
 
 #include "contracts/FxRegistry.h"
 #include "contracts/ids.h"
+#include "module/BufferFxModule.h"
 #include "module/SchroederReverbModule.h"
 #include "module/StutterModule.h"
 #include "service/audio/BpmDetectorService.h"
+#include "service/ui/hud/HudNotificationsLayer.h"
 
 namespace avantgarde {
 namespace {
@@ -24,6 +27,9 @@ std::unique_ptr<IAudioModule> createBuiltinFxByCanonicalId(std::string_view cano
     }
     if (canonicalId == FxRegistry::kStutterId) {
         return std::make_unique<StutterModule>();
+    }
+    if (canonicalId == FxRegistry::kBufferFxId) {
+        return std::make_unique<BufferFxModule>();
     }
     // Остальные профили можно добавить сюда по мере реализации модулей.
     return nullptr;
@@ -169,6 +175,16 @@ bool UiIntentApplier::buildUndoIntent(const UiIntent& forward,
             undoOut.value = tracks[t].stretchRatio;
             return true;
         }
+        case UiIntentType::SetTrackTempoSync: {
+            if (tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(forward.track, tracks);
+            undoOut = forward;
+            undoOut.track = t;
+            undoOut.value = tracks[t].tempoSync ? 1.0f : 0.0f;
+            return true;
+        }
         case UiIntentType::SetTrackGain: {
             if (tracks.empty()) {
                 return false;
@@ -235,6 +251,12 @@ bool UiIntentApplier::buildUndoIntent(const UiIntent& forward,
             return true;
         }
         case UiIntentType::ClearTrackSample:
+        case UiIntentType::SnapshotTriggerSlot:
+        case UiIntentType::SnapshotCaptureSlot:
+        case UiIntentType::SnapshotRecallSlot:
+        case UiIntentType::SnapshotCaptured:
+        case UiIntentType::SnapshotApplied:
+        case UiIntentType::HudNotify:
         default:
             return false;
     }
@@ -284,10 +306,23 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             return true;
         }
         case UiIntentType::PreviewRequest:
-            ctx.engine.previewRequest(intent.path);
+            // Preview и global transport разделены:
+            // preview-запрос не переключает transport-состояние.
+            ctx.engine.previewRequest(intent.path,
+                                      intent.previewSpeed,
+                                      intent.previewStart01,
+                                      intent.previewEnd01,
+                                      intent.previewGain);
+            if (ctx.nav) {
+                ctx.nav->previewPlaying = !intent.path.empty();
+                ctx.nav->previewTrack = intent.track;
+            }
             return true;
         case UiIntentType::PreviewStop:
             ctx.engine.previewStop();
+            if (ctx.nav) {
+                ctx.nav->previewPlaying = false;
+            }
             return true;
         case UiIntentType::SetActiveTrack: {
             if (ctx.tracks.empty()) {
@@ -391,6 +426,41 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             }
             ctx.tracks[t].stretchRatio = next;
             (void)ctx.engine.setTrackSpeed(t, ctx.tracks[t].stretchRatio);
+            // Ручной speed отключает tempo-sync по контракту.
+            ctx.tracks[t].tempoSync = false;
+            ctx.uiStore.setTrack(t, ctx.tracks[t]);
+            return true;
+        }
+        case UiIntentType::SetTrackTempoSync: {
+            if (ctx.tracks.empty()) {
+                return false;
+            }
+            const uint8_t t = clampTrack_(intent.track, ctx.tracks);
+            const bool enabled = (intent.value >= 0.5f);
+            if (ctx.tracks[t].tempoSync == enabled) {
+                return false;
+            }
+            if (enabled) {
+                if (!ctx.engine.setTrackTempoSync(t, true)) {
+                    return false;
+                }
+                ctx.tracks[t].tempoSync = true;
+                if (ctx.hud) {
+                    ctx.hud->notifyText("SYNC ON -> SPEED AUTO", HudNotificationLevel::Action);
+                }
+            } else {
+                // UX-политика:
+                // SYNC OFF не просто отключает привязку к BPM, но и сбрасывает SPEED в 1.00,
+                // чтобы получить предсказуемое "нейтральное" поведение.
+                if (!ctx.engine.setTrackSpeed(t, 1.0f)) {
+                    return false;
+                }
+                ctx.tracks[t].tempoSync = false;
+                ctx.tracks[t].stretchRatio = 1.0f;
+                if (ctx.hud) {
+                    ctx.hud->notifyText("SYNC OFF -> SPEED 1.00", HudNotificationLevel::Action);
+                }
+            }
             ctx.uiStore.setTrack(t, ctx.tracks[t]);
             return true;
         }
@@ -473,44 +543,50 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             return true;
         }
         case UiIntentType::DetectProjectBpmFromTrack: {
-            if (ctx.tracks.empty()) {
+            if (ctx.hud == nullptr) {
                 return false;
+            }
+            if (ctx.tracks.empty()) {
+                ctx.hud->notifyText("can't detect", HudNotificationLevel::Action);
+                return true;
             }
             const uint8_t t = clampTrack_(intent.track, ctx.tracks);
             if (ctx.tracks[t].clipPath.empty()) {
-                return false;
+                ctx.hud->notifyText("can't detect", HudNotificationLevel::Action);
+                return true;
+            }
+
+            // Важно: берем speed не из UI-кэша, а из актуального engine snapshot.
+            // Это гарантирует, что BPM detect учитывает текущий pitch/speed трека
+            // даже сразу после tempo-sync пересчета.
+            float effectiveTrackSpeed = ctx.tracks[t].stretchRatio;
+            {
+                UiTransportState transportSnapshot = ctx.transport;
+                std::vector<UiTrackStateView> tracksSnapshot = ctx.tracks;
+                if (ctx.engine.syncUiCache(transportSnapshot, tracksSnapshot) &&
+                    t < tracksSnapshot.size()) {
+                    effectiveTrackSpeed = tracksSnapshot[t].stretchRatio;
+                }
             }
 
             BpmDetectorService detector{};
             const BpmDetectionResult det = detector.detectFromFile(
                 ctx.tracks[t].clipPath,
-                ctx.tracks[t].stretchRatio);
+                effectiveTrackSpeed);
             if (!det.ok) {
-                return false;
+                ctx.hud->notifyText("can't detect", HudNotificationLevel::Action);
+                return true;
             }
 
-            bool changed = false;
-            if (ctx.transport.playing) {
-                ctx.transport.playing = false;
-                ctx.engine.setTransportPlaying(false);
-                for (std::size_t i = 0; i < ctx.tracks.size(); ++i) {
-                    refreshTrackViewState_(static_cast<uint8_t>(i), ctx.transport, ctx.tracks);
-                    ctx.uiStore.setTrack(i, ctx.tracks[i]);
-                }
-                changed = true;
-            }
-
-            const float next = std::clamp(det.effectiveBpm, 20.0f, 300.0f);
-            if (std::fabs(ctx.transport.bpm - next) >= 1e-6f) {
-                ctx.transport.bpm = next;
-                ctx.engine.setTempo(ctx.transport.bpm);
-                changed = true;
-            }
-
-            if (changed) {
-                ctx.uiStore.setTransport(ctx.transport);
-            }
-            return changed;
+            const float detected = std::clamp(
+                (det.effectiveBpm > 0.0f) ? det.effectiveBpm : det.sourceBpm,
+                20.0f,
+                300.0f);
+            char msg[32]{};
+            std::snprintf(msg, sizeof(msg), "BPM: %.1f", detected);
+            ctx.hud->notifyText(msg, HudNotificationLevel::Action);
+            // Важно: больше не меняем transport/tempo и не останавливаем play.
+            return true;
         }
         case UiIntentType::SetTransportPlaying: {
             const bool playing = (intent.value >= 0.5f);
@@ -646,7 +722,76 @@ bool UiIntentApplier::apply(const UiIntent& intent, Context& ctx) const {
             ctx.nav->sceneActionIndex = 0;
             return false;
         }
+        case UiIntentType::HudNotify: {
+            if (ctx.hud == nullptr) {
+                return false;
+            }
+            if (intent.hudEvent != UiHudIntentEvent::None) {
+                switch (intent.hudEvent) {
+                    case UiHudIntentEvent::SnapshotCaptured:
+                        ctx.hud->notify(
+                            HudEventId::SnapshotCaptured,
+                            HudEventPayload{
+                                .slot = static_cast<int>(intent.hudSlot),
+                                .text = {}
+                            });
+                        return true;
+                    case UiHudIntentEvent::SnapshotApplied:
+                        ctx.hud->notify(
+                            HudEventId::SnapshotApplied,
+                            HudEventPayload{
+                                .slot = static_cast<int>(intent.hudSlot),
+                                .text = {}
+                            });
+                        return true;
+                    case UiHudIntentEvent::None:
+                    default:
+                        break;
+                }
+            }
+            if (intent.hudText.empty()) {
+                return false;
+            }
+            HudNotificationLevel level = HudNotificationLevel::Info;
+            switch (intent.hudLevel) {
+                case UiHudIntentLevel::Action: level = HudNotificationLevel::Action; break;
+                case UiHudIntentLevel::Critical: level = HudNotificationLevel::Critical; break;
+                case UiHudIntentLevel::Info:
+                default:
+                    level = HudNotificationLevel::Info;
+                    break;
+            }
+            ctx.hud->notifyText(intent.hudText, level);
+            return true;
+        }
+        case UiIntentType::SnapshotCaptured: {
+            if (ctx.hud == nullptr) {
+                return false;
+            }
+            ctx.hud->notify(
+                HudEventId::SnapshotCaptured,
+                HudEventPayload{
+                    .slot = static_cast<int>(intent.snapshotSlot + 1U),
+                    .text = {}
+                });
+            return true;
+        }
+        case UiIntentType::SnapshotApplied: {
+            if (ctx.hud == nullptr) {
+                return false;
+            }
+            ctx.hud->notify(
+                HudEventId::SnapshotApplied,
+                HudEventPayload{
+                    .slot = static_cast<int>(intent.snapshotSlot + 1U),
+                    .text = {}
+                });
+            return true;
+        }
         case UiIntentType::None:
+        case UiIntentType::SnapshotTriggerSlot:
+        case UiIntentType::SnapshotCaptureSlot:
+        case UiIntentType::SnapshotRecallSlot:
         case UiIntentType::EnginePlayTrack:
         case UiIntentType::EngineStopTrack:
         case UiIntentType::EngineSetQuant:

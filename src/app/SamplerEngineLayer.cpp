@@ -2,15 +2,17 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "contracts/IAudioEngine.h"
-#include "contracts/IClipTrack.h"
 #include "contracts/IParameterized.h"
 #include "contracts/IPlatform.h"
+#include "contracts/ISnapshotable.h"
+#include "contracts/ISamplePreviewEngine.h"
 #include "contracts/types.h"
 #include "contracts/ids.h"
 #include "contracts/IPattern.h"
@@ -23,6 +25,9 @@
 #include "service/pattern/ClipBufferPool.h"
 #include "service/pattern/PatternEngine.h"
 #include "service/pattern/PatternSwitchPlanApplier.h"
+#include "service/pattern/PatternSnapshotOrchestrator.h"
+#include "service/track/TrackFeatureResolver.h"
+#include "service/audio/BpmDetectorService.h"
 
 // Concrete runtime impls are compiled into this TU intentionally.
 #include "runtime/AudioEngine.cpp"
@@ -107,6 +112,32 @@ float quantToNorm(QuantizeMode q) noexcept {
     }
 }
 
+PatternTransportSnapshot readPatternTransportSnapshot(const TransportBridgeDualBuffer& transport) noexcept {
+    SnapshotRecord snapshot{};
+    if (transport.getSnapshot(snapshot) && snapshot.domain == SnapshotDomain::Transport) {
+        PatternTransportSnapshot out{};
+        out.bpm = snapshot.transport.bpm;
+        out.tsNum = snapshot.transport.tsNum;
+        out.tsDen = snapshot.transport.tsDen;
+        out.quant = snapshot.transport.quant;
+        out.swing01 = snapshot.transport.swing01;
+        return out;
+    }
+    PatternTransportSnapshot out{};
+    return out;
+}
+
+TrackSnapshot readTrackSnapshot(const ITrack* track) noexcept {
+    if (!track) {
+        return {};
+    }
+    SnapshotRecord snapshot{};
+    if (!track->getSnapshot(snapshot) || snapshot.domain != SnapshotDomain::Track) {
+        return {};
+    }
+    return snapshot.track;
+}
+
 IParameterized* resolveParamTarget(Target target) noexcept {
     // Global transport surface:
     // Target{trackId = -1, slotId = -1} -> ITransportBridge(IParameterized)
@@ -147,45 +178,54 @@ std::string clipNameFromPath(const std::string& path) {
     return path;
 }
 
-PatternState makeDefaultPattern(PatternId id,
-                                uint8_t trackCount,
-                                float bpm,
-                                uint8_t tsNum,
-                                uint8_t tsDen,
-                                QuantizeMode quant) {
-    PatternState p{};
-    p.id = id;
-    p.transport.bpm = bpm;
-    p.transport.tsNum = tsNum;
-    p.transport.tsDen = tsDen;
-    p.transport.quant = quant;
-    p.transport.swing01 = 0.0f;
-    p.lengthInSteps = 64;
-    p.stepsPerBeat = 4;
-    p.tracks.reserve(trackCount);
-    for (uint8_t t = 0; t < trackCount; ++t) {
-        PatternTrackSnapshot tr{};
-        tr.trackId = t;
-        tr.muted = false;
-        tr.armed = false;
-        tr.gain01 = 1.0f;
-        tr.playbackInc = 1.0f;
-        tr.bars = 4u;
-        tr.clipRefId = 0u;
-        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::LoopEnabled), 1.0f});
-        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::PlaybackMode),
-                                         toParamValue(TrackPlaybackModeValue::Looper)});
-        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::StartNorm), 0.0f});
-        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::EndNorm), 1.0f});
-        p.tracks.push_back(std::move(tr));
+uint32_t inferBarsFromClipDuration(const SharedClipBuffer& clip,
+                                   float bpm,
+                                   uint8_t tsNum,
+                                   uint8_t tsDen) noexcept {
+    if (!clip.valid()) {
+        return 4u;
     }
-    return p;
+    const float safeBpm = std::clamp(bpm, 20.0f, 300.0f);
+    const uint8_t safeNum = static_cast<uint8_t>(std::clamp<int>(static_cast<int>(tsNum), 1, 32));
+    uint8_t safeDen = tsDen;
+    if (!(safeDen == 1 || safeDen == 2 || safeDen == 4 || safeDen == 8 || safeDen == 16 || safeDen == 32)) {
+        safeDen = 4;
+    }
+
+    const double seconds = static_cast<double>(clip.frames) / static_cast<double>(clip.sampleRate);
+    const double beatsPerBar = static_cast<double>(safeNum) * 4.0 / static_cast<double>(safeDen);
+    const double secondsPerBar = beatsPerBar * (60.0 / static_cast<double>(safeBpm));
+    if (!(secondsPerBar > 1e-6) || !std::isfinite(seconds)) {
+        return 4u;
+    }
+
+    const double rawBars = seconds / secondsPerBar;
+    if (!std::isfinite(rawBars)) {
+        return 4u;
+    }
+    const uint32_t rounded = static_cast<uint32_t>(std::llround(std::max(1.0, rawBars)));
+    return std::clamp<uint32_t>(rounded, 1u, 512u);
 }
 
+struct EngineRenderUser {
+    IAudioEngine* engine{nullptr};
+    ISamplePreviewEngine* preview{nullptr};
+};
+
 void renderThunk(AudioProcessContext& ctx, void* user) noexcept {
-    // Колбэк аудиохоста -> в processBlock движка.
-    auto* engine = static_cast<IAudioEngine*>(user);
-    engine->processBlock(ctx);
+    // Колбэк аудиохоста:
+    // Логика маршрутизации:
+    // - если preview активен, блок целиком обслуживает preview-движок;
+    // - иначе блок обслуживает основной engine-граф.
+    auto* ru = static_cast<EngineRenderUser*>(user);
+    if (!ru || !ru->engine) {
+        return;
+    }
+    if (ru->preview && ru->preview->isActive()) {
+        ru->preview->process(ctx);
+        return;
+    }
+    ru->engine->processBlock(ctx);
 }
 
 } // namespace
@@ -201,6 +241,10 @@ struct SamplerEngineLayer::Impl {
     ParamBridgeDualBuffer pb{10};
     // Основной аудиодвижок.
     AudioEngine engine{&qRt, &pb};
+    // Preview-движок: отдельный слой, не Track и не Transport.
+    std::unique_ptr<ISamplePreviewEngine> preview{};
+    // User-data для stream callback.
+    EngineRenderUser renderUser{};
     // Транспорт с двойной буферизацией.
     TransportBridgeDualBuffer transport{};
     // RT extension для квантизации команд.
@@ -215,12 +259,12 @@ struct SamplerEngineLayer::Impl {
     ControlCommandDispatcher immediateDispatcher{&qRt};
     // Количество пользовательских треков.
     uint8_t trackCount{0};
-    // ID скрытого preview-трека внутри AudioEngine.
-    int16_t previewTrackId{-1};
-    // Сырые указатели на track instances (для non-RT операций загрузки).
-    std::vector<IClipTrack*> clipCtl{};
-    // Указатель на preview-голос.
-    IClipTrack* previewClip{nullptr};
+    // Сырые указатели на track instances (core pool в терминах ITrack).
+    std::vector<ITrack*> tracks{};
+    // Единый список snapshot-источников (transport + tracks).
+    std::vector<ISnapshotable*> snapshotables{};
+    // Resolver optional capabilities (IClipTrack, будущие I...Track extensions).
+    TrackFeatureResolver trackFeatures{};
     // Активный аудиострим.
     std::unique_ptr<IAudioStream> stream{};
     // Параметры открытия стрима.
@@ -231,28 +275,15 @@ struct SamplerEngineLayer::Impl {
     std::unordered_map<std::string, uint32_t> clipPathToRef{};
     // Обратный индекс clipRefId -> оригинальный path.
     std::unordered_map<uint32_t, std::string> clipRefToPath{};
+    // Кэш детекта исходного BPM сэмпла (source BPM, без speed/pitch трека).
+    std::unordered_map<std::string, float> clipPathToSourceBpm{};
     // Генератор clipRefId для runtime-сессии.
     uint32_t nextClipRef{1};
-    // Теневая control-копия transport state для snapshot capture.
-    float tempoBpm{120.0f};
-    uint8_t tsNum{4};
-    uint8_t tsDen{4};
-    QuantizeMode quant{kDefaultTransportQuantize};
-    float swing01{0.0f};
     bool metronomeEnabled{false};
-    // Теневая control-копия track state для snapshot capture.
-    std::vector<bool> trackMuted{};
-    std::vector<bool> trackArmed{};
-    std::vector<float> trackGain{};
-    std::vector<float> trackPlaybackInc{};
-    std::vector<uint32_t> trackBars{};
-    std::vector<uint32_t> trackClipRef{};
-    std::vector<TrackPlaybackModeValue> trackPlaybackMode{};
-    std::vector<bool> trackLoopEnabled{};
-    std::vector<float> trackTrimStart01{};
-    std::vector<float> trackTrimEnd01{};
-    // Pattern engine: bank + scheduler + snapshots.
+    // Pattern engine: bank + schedя uler + snapshots.
     std::unique_ptr<PatternEngine> patternEngine{};
+    // Оркестратор capture default/live pattern snapshot-ов.
+    std::unique_ptr<PatternSnapshotOrchestrator> patternSnapshotOrchestrator{};
     // Адаптер применения switch-плана к SamplerEngineLayer API.
     std::unique_ptr<SamplerEnginePatternApplyTarget> patternApplyTarget{};
     // Канонический порядок pattern id для relative switch (prev/next).
@@ -264,6 +295,13 @@ struct SamplerEngineLayer::Impl {
     // Guard-флаги жизненного цикла.
     bool initialized{false};
     bool running{false};
+
+    ITrack* trackAt(uint8_t trackId) const noexcept {
+        return trackFeatures.track(trackId);
+    }
+    IClipTrack* clipAt(uint8_t trackId) const noexcept {
+        return trackFeatures.clipTrack(trackId);
+    }
 };
 
 SamplerEngineLayer::SamplerEngineLayer()
@@ -296,51 +334,36 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
 
     impl_->engine.setSampleRate(config.sampleRate);
     impl_->trackCount = sanitizeTrackCount(config.trackCount);
-    impl_->previewTrackId = static_cast<int16_t>(impl_->trackCount);
-    impl_->tempoBpm = 120.0f;
-    impl_->tsNum = 4;
-    impl_->tsDen = 4;
-    impl_->quant = kDefaultTransportQuantize;
-    impl_->swing01 = 0.0f;
+    impl_->preview = MakeSamplePreviewEngine();
     impl_->metronomeEnabled = false;
-    impl_->trackMuted.assign(impl_->trackCount, false);
-    impl_->trackArmed.assign(impl_->trackCount, false);
-    impl_->trackGain.assign(impl_->trackCount, 1.0f);
-    impl_->trackPlaybackInc.assign(impl_->trackCount, 1.0f);
-    impl_->trackBars.assign(impl_->trackCount, 4u);
-    impl_->trackClipRef.assign(impl_->trackCount, 0u);
-    impl_->trackPlaybackMode.assign(impl_->trackCount, TrackPlaybackModeValue::Looper);
-    impl_->trackLoopEnabled.assign(impl_->trackCount, true);
-    impl_->trackTrimStart01.assign(impl_->trackCount, 0.0f);
-    impl_->trackTrimEnd01.assign(impl_->trackCount, 1.0f);
 
-    // Создаем пользовательские треки и preview-голос.
-    std::vector<std::unique_ptr<IClipTrack>> userTracks(impl_->trackCount);
-    std::vector<IClipTrack*> userTrackPtrs(impl_->trackCount, nullptr);
+    // Создаем пользовательские треки.
+    std::vector<std::unique_ptr<ITrack>> userTracks(impl_->trackCount);
+    std::vector<ITrack*> userTrackPtrs(impl_->trackCount, nullptr);
     for (uint8_t t = 0; t < impl_->trackCount; ++t) {
-        userTracks[t] = std::make_unique<ClipTrackImpl>(config.sampleRate);
+        userTracks[t] = std::make_unique<ClipTrackImpl>(config.sampleRate, t);
         userTrackPtrs[t] = userTracks[t].get();
     }
-    auto previewClip = std::make_unique<ClipTrackImpl>(config.sampleRate);
-    IClipTrack* previewClipPtr = previewClip.get();
 
     // Публикуем треки для resolver'а параметров.
-    impl_->clipCtl.assign(impl_->trackCount, nullptr);
-    gParamTracks.assign(static_cast<std::size_t>(impl_->trackCount) + 1u, nullptr);
+    impl_->tracks.assign(impl_->trackCount, nullptr);
+    impl_->snapshotables.clear();
+    impl_->snapshotables.reserve(static_cast<std::size_t>(impl_->trackCount) + 1u);
+    impl_->snapshotables.push_back(&impl_->transport);
+    gParamTracks.assign(static_cast<std::size_t>(impl_->trackCount), nullptr);
     for (uint8_t t = 0; t < impl_->trackCount; ++t) {
-        impl_->clipCtl[t] = userTrackPtrs[t];
+        impl_->tracks[t] = userTrackPtrs[t];
+        impl_->snapshotables.push_back(userTrackPtrs[t]);
         gParamTracks[t] = userTrackPtrs[t];
     }
-    gParamTracks[impl_->trackCount] = previewClipPtr;
-    impl_->previewClip = previewClipPtr;
+    impl_->trackFeatures.bind(&impl_->tracks);
     gParamGlobalTransport = &impl_->transport;
     impl_->pb.setResolver(&resolveParamTarget);
 
-    // Регистрируем треки в engine (порядок важен: [T1..Tn, Preview]).
+    // Регистрируем пользовательские треки в engine.
     for (uint8_t t = 0; t < impl_->trackCount; ++t) {
         impl_->engine.registerTrack(std::move(userTracks[t]));
     }
-    impl_->engine.registerTrack(std::move(previewClip));
 
     // Включаем транспорт и scheduler extension.
     impl_->engine.setTransportBridge(&impl_->transport);
@@ -353,6 +376,7 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
     // - RT extension только прокидывает transport time и публикует ready switch id;
     // - apply-план строится/применяется в control-thread.
     impl_->patternEngine = std::make_unique<PatternEngine>(config.sampleRate);
+    impl_->patternSnapshotOrchestrator = std::make_unique<PatternSnapshotOrchestrator>(*impl_->patternEngine);
     impl_->patternRtExt = std::make_unique<PatternSchedulerRtExtension>(
         &impl_->patternEngine->scheduler(),
         &impl_->transport);
@@ -363,14 +387,15 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
     impl_->engine.addRtExtension(impl_->metronomeRtExt.get());
     impl_->patternApplyTarget = std::make_unique<SamplerEnginePatternApplyTarget>(*this);
     impl_->patternOrder.clear();
+    const PatternTransportSnapshot bootstrapPatternTransport{
+        .bpm = 120.0f,
+        .tsNum = 4,
+        .tsDen = 4,
+        .quant = kDefaultTransportQuantize,
+        .swing01 = 0.0f};
     for (PatternId id = 1; id <= 4; ++id) {
-        PatternState p = makeDefaultPattern(id,
-                                            impl_->trackCount,
-                                            120.0f,
-                                            4,
-                                            4,
-                                            kDefaultTransportQuantize);
-        if (impl_->patternEngine->putPattern(p)) {
+        if (impl_->patternSnapshotOrchestrator &&
+            impl_->patternSnapshotOrchestrator->putDefaultPattern(id, bootstrapPatternTransport, impl_->trackCount)) {
             impl_->patternOrder.push_back(id);
         }
     }
@@ -382,12 +407,15 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
 
     // Инициализируем стартовое состояние транспорта.
     bootstrapOut.transport.playing = false;
+    bootstrapOut.transport.recordEnabled = false;
     bootstrapOut.transport.bpm = 120.0f;
     bootstrapOut.transport.tsNum = 4;
     bootstrapOut.transport.tsDen = 4;
     bootstrapOut.transport.quant = kDefaultTransportQuantize;
     bootstrapOut.transport.metronomeEnabled = false;
     bootstrapOut.transport.activeTrack = 0;
+    bootstrapOut.transport.previewPlaying = false;
+    bootstrapOut.transport.previewPlayhead01 = 0.0f;
     bootstrapOut.pattern.activeId = impl_->patternEngine
                                         ? impl_->patternEngine->activePatternId()
                                         : kInvalidPatternId;
@@ -419,19 +447,6 @@ bool SamplerEngineLayer::init(const SamplerEngineConfig& config,
         impl_->immediateDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::MuteEnabled, kRtValueOff);
         impl_->immediateDispatcher.sendTrackParamSet(static_cast<int16_t>(t), TrackParamId::ArmEnabled, kRtValueOff);
     }
-
-    // Preview-голос: отдельный one-shot режим (не следует global transport).
-    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::Gain01, 0.25f);
-    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::LoopEnabled, kRtValueOff);
-    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::FollowTransportEnabled, kRtValueOff);
-    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::PlaybackMode,
-                                                 toParamValue(TrackPlaybackModeValue::Note));
-    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::LaunchPolicy,
-                                                 toParamValue(TrackLaunchPolicyValue::RetriggerOnNoteOn));
-    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::StopPolicy,
-                                                 toParamValue(TrackStopPolicyValue::ManualStop));
-    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::MuteEnabled, kRtValueOn);
-    impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::ArmEnabled, kRtValueOff);
 
     // Готовим стартовый UI state треков (без автозагрузки файлов).
     bootstrapOut.tracks.clear();
@@ -491,7 +506,9 @@ bool SamplerEngineLayer::start(std::string& errorOut) {
         return false;
     }
     impl_->engine.setNumOutput(static_cast<uint32_t>(impl_->stream->numOutput()));
-    if (!impl_->stream->start(&renderThunk, &impl_->engine)) {
+    impl_->renderUser.engine = &impl_->engine;
+    impl_->renderUser.preview = impl_->preview.get();
+    if (!impl_->stream->start(&renderThunk, &impl_->renderUser)) {
         errorOut = "stream->start failed";
         impl_->stream.reset();
         return false;
@@ -554,7 +571,6 @@ void SamplerEngineLayer::setTempo(float bpm) noexcept {
     // Обновляем и queue-команду, и control-копию транспорта.
     (void)impl_->controlDispatcher.setTempoBpm(bpm);
     impl_->transport.setParam(toParamIndex(TransportParamId::TempoNorm), tempoToNorm(bpm));
-    impl_->tempoBpm = std::clamp(bpm, 20.0f, 300.0f);
 }
 
 void SamplerEngineLayer::setQuantize(QuantizeMode q) noexcept {
@@ -563,7 +579,6 @@ void SamplerEngineLayer::setQuantize(QuantizeMode q) noexcept {
     }
     (void)impl_->controlDispatcher.setQuantizeMode(q);
     impl_->transport.setParam(toParamIndex(TransportParamId::QuantizeNorm), quantToNorm(q));
-    impl_->quant = q;
 }
 
 void SamplerEngineLayer::setTimeSignature(uint8_t num, uint8_t den) noexcept {
@@ -573,20 +588,6 @@ void SamplerEngineLayer::setTimeSignature(uint8_t num, uint8_t den) noexcept {
     (void)impl_->controlDispatcher.setTimeSignature(num, den);
     impl_->transport.setParam(toParamIndex(TransportParamId::TimeSigNumNorm), tsNumToNorm(num));
     impl_->transport.setParam(toParamIndex(TransportParamId::TimeSigDenNorm), tsDenToNorm(den));
-    impl_->tsNum = static_cast<uint8_t>(std::clamp<int>(num, 1, 32));
-    switch (den) {
-        case 1:
-        case 2:
-        case 4:
-        case 8:
-        case 16:
-        case 32:
-            impl_->tsDen = den;
-            break;
-        default:
-            impl_->tsDen = 4;
-            break;
-    }
 }
 
 void SamplerEngineLayer::setSwing(float swing01) noexcept {
@@ -600,7 +601,6 @@ void SamplerEngineLayer::setSwing(float swing01) noexcept {
         toParamIndex(TransportParamId::Swing01),
         v);
     impl_->transport.setParam(toParamIndex(TransportParamId::Swing01), v);
-    impl_->swing01 = v;
 }
 
 void SamplerEngineLayer::setMetronomeEnabled(bool enabled) noexcept {
@@ -614,37 +614,45 @@ void SamplerEngineLayer::setMetronomeEnabled(bool enabled) noexcept {
 }
 
 bool SamplerEngineLayer::setTrackMuted(uint8_t track, bool muted) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
         return false;
     }
     const bool ok = impl_->controlDispatcher.sendTrackParamSet(
         static_cast<int16_t>(t),
         TrackParamId::MuteEnabled,
         muted ? kRtValueOn : kRtValueOff);
-    if (ok && t < impl_->trackMuted.size()) {
-        impl_->trackMuted[t] = muted;
+    if (ok) {
+        // Control fast-path для мгновенного UI snapshot до ближайшего RT-блока.
+        if (IClipTrack* clip = impl_->clipAt(t)) {
+            clip->mirrorParamForSnapshot(toParamIndex(TrackParamId::MuteEnabled), muted ? kRtValueOn : kRtValueOff);
+        }
     }
     return ok;
 }
 
 bool SamplerEngineLayer::setTrackArmed(uint8_t track, bool armed) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
         return false;
     }
     const bool ok = impl_->controlDispatcher.sendTrackParamSet(
         static_cast<int16_t>(t),
         TrackParamId::ArmEnabled,
         armed ? kRtValueOn : kRtValueOff);
-    if (ok && t < impl_->trackArmed.size()) {
-        impl_->trackArmed[t] = armed;
+    if (ok) {
+        // Control fast-path для мгновенного UI snapshot до ближайшего RT-блока.
+        if (IClipTrack* clip = impl_->clipAt(t)) {
+            clip->mirrorParamForSnapshot(toParamIndex(TrackParamId::ArmEnabled), armed ? kRtValueOn : kRtValueOff);
+        }
     }
     return ok;
 }
@@ -655,11 +663,12 @@ bool SamplerEngineLayer::setTrackLooperMode(uint8_t track, bool looperEnabled) n
 
 bool SamplerEngineLayer::setTrackPlaybackProfile(uint8_t track,
                                                  TrackPlaybackProfileValue profile) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
         return false;
     }
 
@@ -713,39 +722,90 @@ bool SamplerEngineLayer::setTrackPlaybackProfile(uint8_t track,
     if (!ok) {
         return false;
     }
-    if (t < impl_->trackPlaybackMode.size()) {
-        impl_->trackPlaybackMode[t] = mode;
-    }
-    if (t < impl_->trackLoopEnabled.size()) {
-        impl_->trackLoopEnabled[t] = loopEnabled;
+    // Control fast-path: сразу обновляем параметризацию трека для snapshot/UI.
+    if (IClipTrack* clip = impl_->clipAt(t)) {
+        clip->mirrorParamForSnapshot(toParamIndex(TrackParamId::PlaybackMode), toParamValue(mode));
+        clip->mirrorParamForSnapshot(toParamIndex(TrackParamId::LoopEnabled),
+                                     loopEnabled ? kRtValueOn : kRtValueOff);
     }
     return true;
 }
 
 bool SamplerEngineLayer::setTrackSpeed(uint8_t track, float speed) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
         return false;
     }
     const bool ok = impl_->controlDispatcher.sendTrackParamSet(
         static_cast<int16_t>(t),
         TrackParamId::PlaybackInc,
         speed);
-    if (ok && t < impl_->trackPlaybackInc.size()) {
-        impl_->trackPlaybackInc[t] = speed;
+    if (ok) {
+        // Control fast-path: сразу обновляем playbackInc/sync в snapshot трека.
+        if (IClipTrack* clip = impl_->clipAt(t)) {
+            clip->mirrorParamForSnapshot(toParamIndex(TrackParamId::PlaybackInc), speed);
+        }
     }
     return ok;
 }
 
-bool SamplerEngineLayer::setTrackParam(uint8_t track, uint16_t paramIndex, float value) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+bool SamplerEngineLayer::setTrackTempoSync(uint8_t track, bool enabled) noexcept {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
+        return false;
+    }
+    const bool ok = impl_->controlDispatcher.sendTrackParamSet(
+        static_cast<int16_t>(t),
+        TrackParamId::TempoSyncEnabled,
+        enabled ? kRtValueOn : kRtValueOff);
+    if (ok) {
+        // Control fast-path для мгновенного UI snapshot до ближайшего RT-блока.
+        if (IClipTrack* clip = impl_->clipAt(t)) {
+            clip->mirrorParamForSnapshot(toParamIndex(TrackParamId::TempoSyncEnabled), enabled ? kRtValueOn : kRtValueOff);
+        }
+    }
+    return ok;
+}
+
+bool SamplerEngineLayer::triggerTrackNoteOn(uint8_t track, uint8_t note, float velocity01) noexcept {
+    if (!impl_ || impl_->tracks.empty()) {
+        return false;
+    }
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
+        return false;
+    }
+    return impl_->controlDispatcher.sendNoteOn(static_cast<int16_t>(t), note, velocity01);
+}
+
+bool SamplerEngineLayer::triggerTrackNoteOff(uint8_t track, uint8_t note) noexcept {
+    if (!impl_ || impl_->tracks.empty()) {
+        return false;
+    }
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
+        return false;
+    }
+    return impl_->controlDispatcher.sendNoteOff(static_cast<int16_t>(t), note);
+}
+
+bool SamplerEngineLayer::setTrackParam(uint8_t track, uint16_t paramIndex, float value) noexcept {
+    if (!impl_ || impl_->tracks.empty()) {
+        return false;
+    }
+    const uint8_t t = clampTrack(track, impl_->trackCount);
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
         return false;
     }
     const bool ok = impl_->controlDispatcher.sendParamSet(
@@ -756,89 +816,82 @@ bool SamplerEngineLayer::setTrackParam(uint8_t track, uint16_t paramIndex, float
     if (!ok) {
         return false;
     }
-    if (t < impl_->trackGain.size() && paramIndex == toParamIndex(TrackParamId::Gain01)) {
-        impl_->trackGain[t] = std::clamp(value, 0.0f, 1.0f);
-    } else if (t < impl_->trackPlaybackInc.size() && paramIndex == toParamIndex(TrackParamId::PlaybackInc)) {
-        impl_->trackPlaybackInc[t] = std::clamp(value, 0.25f, 4.0f);
-    } else if (t < impl_->trackMuted.size() && paramIndex == toParamIndex(TrackParamId::MuteEnabled)) {
-        impl_->trackMuted[t] = (value >= 0.5f);
-    } else if (t < impl_->trackArmed.size() && paramIndex == toParamIndex(TrackParamId::ArmEnabled)) {
-        impl_->trackArmed[t] = (value >= 0.5f);
-    } else if (t < impl_->trackLoopEnabled.size() && paramIndex == toParamIndex(TrackParamId::LoopEnabled)) {
-        impl_->trackLoopEnabled[t] = (value >= 0.5f);
-    } else if (t < impl_->trackPlaybackMode.size() && paramIndex == toParamIndex(TrackParamId::PlaybackMode)) {
-        impl_->trackPlaybackMode[t] = (value >= 0.5f) ? TrackPlaybackModeValue::Note : TrackPlaybackModeValue::Looper;
-    } else if (t < impl_->trackTrimStart01.size() && paramIndex == toParamIndex(TrackParamId::StartNorm)) {
-        impl_->trackTrimStart01[t] = std::clamp(value, 0.0f, 0.99f);
-        if (t < impl_->trackTrimEnd01.size() && impl_->trackTrimEnd01[t] <= impl_->trackTrimStart01[t] + 0.01f) {
-            impl_->trackTrimEnd01[t] = std::min(1.0f, impl_->trackTrimStart01[t] + 0.01f);
-        }
-    } else if (t < impl_->trackTrimEnd01.size() && paramIndex == toParamIndex(TrackParamId::EndNorm)) {
-        impl_->trackTrimEnd01[t] = std::clamp(value, 0.01f, 1.0f);
-        if (t < impl_->trackTrimStart01.size() && impl_->trackTrimStart01[t] >= impl_->trackTrimEnd01[t] - 0.01f) {
-            impl_->trackTrimStart01[t] = std::max(0.0f, impl_->trackTrimEnd01[t] - 0.01f);
-        }
+    // Control fast-path для мгновенного UI snapshot до ближайшего RT-блока.
+    if (IClipTrack* clip = impl_->clipAt(t)) {
+        clip->mirrorParamForSnapshot(paramIndex, value);
     }
     return true;
 }
 
 bool SamplerEngineLayer::setTrackBars(uint8_t track, uint32_t bars) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    IClipTrack* clip = impl_->clipAt(t);
+    if (!clip || !clip->healthcheck()) {
         return false;
     }
     const uint32_t safeBars = std::max<uint32_t>(1u, bars);
-    const bool ok = impl_->clipCtl[t]->setSlotLengthInBars(0u, safeBars);
-    if (ok && t < impl_->trackBars.size()) {
-        impl_->trackBars[t] = safeBars;
+    const bool ok = clip->setSlotLengthInBars(0u, safeBars);
+    if (ok) {
+        // setSlotLengthInBars в ClipTrack включает stretch mode.
+        // Если у трека tempo-sync был выключен, немедленно возвращаем OFF.
+        const bool tempoSync = clip->getParam(toParamIndex(TrackParamId::TempoSyncEnabled)) >= 0.5f;
+        if (!tempoSync) {
+            (void)impl_->controlDispatcher.sendTrackParamSet(
+                static_cast<int16_t>(t),
+                TrackParamId::TempoSyncEnabled,
+                kRtValueOff);
+        }
     }
     return ok;
 }
 
 bool SamplerEngineLayer::addFxToTrack(uint8_t track, std::unique_ptr<IAudioModule> module) noexcept {
-    if (!impl_ || !module || impl_->clipCtl.empty()) {
+    if (!impl_ || !module || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
         return false;
     }
     // addModule вызывается строго вне RT.
-    impl_->clipCtl[t]->addModule(std::move(module));
+    tr->addModule(std::move(module));
     return true;
 }
 
 bool SamplerEngineLayer::removeFxFromTrack(uint8_t track, uint8_t fxSlot) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    IClipTrack* clip = impl_->clipAt(t);
+    if (!clip || !clip->healthcheck()) {
         return false;
     }
     // Защита от невалидного слота до удаления.
-    if (!impl_->clipCtl[t]->getModule(static_cast<std::size_t>(fxSlot))) {
+    if (!clip->getModule(static_cast<std::size_t>(fxSlot))) {
         return false;
     }
     // removeModuleAt вызывается только вне RT.
-    return impl_->clipCtl[t]->removeModuleAt(static_cast<std::size_t>(fxSlot));
+    return clip->removeModuleAt(static_cast<std::size_t>(fxSlot));
 }
 
 bool SamplerEngineLayer::setFxParam(uint8_t track,
                                     uint8_t fxSlot,
                                     uint16_t paramIndex,
                                     float normalizedValue) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
         return false;
     }
-    if (!impl_->clipCtl[t]->getModule(static_cast<std::size_t>(fxSlot))) {
+    if (!tr->getModule(static_cast<std::size_t>(fxSlot))) {
         return false;
     }
     return impl_->controlDispatcher.sendParamSet(
@@ -849,14 +902,15 @@ bool SamplerEngineLayer::setFxParam(uint8_t track,
 }
 
 bool SamplerEngineLayer::setFxEnabled(uint8_t track, uint8_t fxSlot, bool enabled) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    ITrack* tr = impl_->trackAt(t);
+    if (!tr || !tr->healthcheck()) {
         return false;
     }
-    if (!impl_->clipCtl[t]->getModule(static_cast<std::size_t>(fxSlot))) {
+    if (!tr->getModule(static_cast<std::size_t>(fxSlot))) {
         return false;
     }
     return impl_->controlDispatcher.sendParamSet(
@@ -872,11 +926,12 @@ bool SamplerEngineLayer::loadSampleToTrack(uint8_t track,
     if (!impl_ || path.empty()) {
         return false;
     }
-    if (impl_->clipCtl.empty()) {
+    if (impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    IClipTrack* clip = impl_->clipAt(t);
+    if (!clip || !clip->healthcheck()) {
         return false;
     }
 
@@ -896,15 +951,51 @@ bool SamplerEngineLayer::loadSampleToTrack(uint8_t track,
     }
 
     // 2) Назначаем preloaded буфер треку без повторного декодирования.
-    if (!impl_->clipPool.bindClipToTrack(*impl_->clipCtl[t], 0, clipRefId)) {
+    if (!impl_->clipPool.bindClipToTrack(*clip, 0, clipRefId)) {
         return false;
     }
-    if (t < impl_->trackClipRef.size()) {
-        impl_->trackClipRef[t] = clipRefId;
-    }
+    clip->setClipRefId(clipRefId);
 
     // 3) Поведение по умолчанию для пользовательской загрузки: loop ON.
-    (void)impl_->clipCtl[t]->setSlotLooping(0, true);
+    (void)clip->setSlotLooping(0, true);
+    // 4) Автоподбор bars по длине загруженного клипа и текущему transport.
+    // Это убирает фиксированное "4 bars" при пользовательской загрузке.
+    //
+    // ВАЖНО:
+    // Чтобы tempo-sync был музыкально консистентным на клипах любой длины,
+    // bars вычисляем по source BPM сэмпла (если удалось детектнуть), а не по BPM проекта.
+    // Иначе на длинных клипах (например 32+ bars) rounding "под BPM проекта"
+    // дает playbackInc близкий к 1.0, и sync визуально "не работает".
+    SharedClipBuffer loaded{};
+    if (impl_->clipPool.get(clipRefId, loaded)) {
+        const PatternTransportSnapshot transportSnap = readPatternTransportSnapshot(impl_->transport);
+        float barsTempoBpm = transportSnap.bpm;
+        if (!path.empty()) {
+            const auto itBpm = impl_->clipPathToSourceBpm.find(path);
+            if (itBpm != impl_->clipPathToSourceBpm.end()) {
+                barsTempoBpm = std::clamp(itBpm->second, 20.0f, 300.0f);
+            } else {
+                BpmDetectorService detector{};
+                const BpmDetectionResult det = detector.detectFromFile(path, 1.0f);
+                if (det.ok && std::isfinite(det.sourceBpm) && det.sourceBpm > 0.0f) {
+                    barsTempoBpm = std::clamp(det.sourceBpm, 20.0f, 300.0f);
+                    impl_->clipPathToSourceBpm[path] = barsTempoBpm;
+                }
+            }
+        }
+        const uint32_t inferredBars =
+            inferBarsFromClipDuration(loaded, barsTempoBpm, transportSnap.tsNum, transportSnap.tsDen);
+        (void)clip->setSlotLengthInBars(0u, inferredBars);
+        const bool tempoSync = clip->getParam(toParamIndex(TrackParamId::TempoSyncEnabled)) >= 0.5f;
+        if (!tempoSync) {
+            // Аналогично setTrackBars: загрузка сэмпла не должна неявно
+            // включать sync у трека, если пользователь его выключил.
+            (void)impl_->controlDispatcher.sendTrackParamSet(
+                static_cast<int16_t>(t),
+                TrackParamId::TempoSyncEnabled,
+                kRtValueOff);
+        }
+    }
     clipNameOut = clipNameFromPath(path);
     return true;
 }
@@ -936,68 +1027,107 @@ bool SamplerEngineLayer::preloadClipToPool(uint32_t clipRefId,
 }
 
 bool SamplerEngineLayer::setTrackClipRef(uint8_t track, uint32_t clipRefId) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     if (clipRefId == 0u) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    IClipTrack* clip = impl_->clipAt(t);
+    if (!clip || !clip->healthcheck()) {
         return false;
     }
-    const bool ok = impl_->clipPool.bindClipToTrack(*impl_->clipCtl[t], 0, clipRefId);
-    if (ok && t < impl_->trackClipRef.size()) {
-        impl_->trackClipRef[t] = clipRefId;
+    const bool ok = impl_->clipPool.bindClipToTrack(*clip, 0, clipRefId);
+    if (ok) {
+        clip->setClipRefId(clipRefId);
     }
     return ok;
 }
 
 bool SamplerEngineLayer::clearTrackSample(uint8_t track) noexcept {
-    if (!impl_ || impl_->clipCtl.empty()) {
+    if (!impl_ || impl_->tracks.empty()) {
         return false;
     }
     const uint8_t t = clampTrack(track, impl_->trackCount);
-    if (!impl_->clipCtl[t] || !impl_->clipCtl[t]->healthcheck()) {
+    IClipTrack* clip = impl_->clipAt(t);
+    if (!clip || !clip->healthcheck()) {
         return false;
     }
-    const bool ok = impl_->clipCtl[t]->clearSlot(0);
-    if (ok && t < impl_->trackClipRef.size()) {
-        impl_->trackClipRef[t] = 0u;
+    const bool ok = clip->clearSlot(0);
+    if (ok) {
+        clip->setClipRefId(0u);
     }
     return ok;
 }
 
-void SamplerEngineLayer::previewRequest(const std::string& path) noexcept {
+void SamplerEngineLayer::previewRequest(const std::string& path,
+                                        float speed,
+                                        float start01,
+                                        float end01,
+                                        float gain01) noexcept {
     if (!impl_) {
         return;
     }
-    // Любой новый preview начинается с мгновенного stop предыдущего.
-    if (impl_->previewTrackId < 0) {
+    if (!impl_->preview) {
         return;
     }
-    (void)impl_->immediateDispatcher.sendStop(impl_->previewTrackId, kRtClipSlot0);
-    (void)impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::MuteEnabled, kRtValueOn);
-    if (path.empty() || !impl_->previewClip || !impl_->previewClip->healthcheck()) {
+    if (path.empty()) {
+        impl_->preview->stop();
         return;
     }
-    if (!impl_->previewClip->loadSlotFromFile(0, path.c_str())) {
+
+    uint32_t clipRefId = 0u;
+    const auto it = impl_->clipPathToRef.find(path);
+    if (it != impl_->clipPathToRef.end()) {
+        clipRefId = it->second;
+    } else {
+        clipRefId = impl_->nextClipRef++;
+        std::string err{};
+        if (!impl_->clipPool.loadFromFile(clipRefId, path, &err)) {
+            return;
+        }
+        impl_->clipPathToRef[path] = clipRefId;
+        impl_->clipRefToPath[clipRefId] = path;
+    }
+
+    SharedClipBuffer sample{};
+    if (!impl_->clipPool.get(clipRefId, sample) || !sample.valid()) {
+        impl_->preview->stop();
         return;
     }
-    (void)impl_->previewClip->setSlotLooping(0, false);
-    (void)impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::MuteEnabled, kRtValueOff);
-    (void)impl_->immediateDispatcher.sendPlay(impl_->previewTrackId, kRtClipSlot0);
+
+    const float safeStart01 = std::clamp(start01, 0.0f, 1.0f);
+    const float safeEnd01 = std::clamp(std::max(end01, safeStart01 + 0.01f), 0.0f, 1.0f);
+    const int32_t frames = static_cast<int32_t>(sample.frames);
+    SampleRegion region{};
+    region.startFrame = std::clamp<int32_t>(
+        static_cast<int32_t>(std::floor(static_cast<double>(safeStart01) * frames)),
+        0,
+        std::max(0, frames - 1));
+    region.endFrame = std::clamp<int32_t>(
+        static_cast<int32_t>(std::ceil(static_cast<double>(safeEnd01) * frames)),
+        region.startFrame + 1,
+        std::max(1, frames));
+
+    PreviewOptions options{};
+    options.gain = std::clamp(gain01, 0.0f, 1.0f);
+    options.speed = 1.0f;
+    impl_->preview->play(sample,
+                         region,
+                         std::clamp(speed, 0.25f, 4.0f),
+                         SamplePreviewLoopMode::Off,
+                         options);
 }
 
 void SamplerEngineLayer::previewStop() noexcept {
     if (!impl_) {
         return;
     }
-    if (impl_->previewTrackId < 0) {
+    if (!impl_->preview) {
         return;
     }
-    (void)impl_->immediateDispatcher.sendStop(impl_->previewTrackId, kRtClipSlot0);
-    (void)impl_->immediateDispatcher.sendTrackParamSet(impl_->previewTrackId, TrackParamId::MuteEnabled, kRtValueOn);
+    impl_->preview->stop();
 }
 
 bool SamplerEngineLayer::requestPatternSwitchRelative(int delta) noexcept {
@@ -1055,42 +1185,11 @@ bool SamplerEngineLayer::requestPatternSwitchTo(PatternId target) noexcept {
 }
 
 bool SamplerEngineLayer::captureActivePatternSnapshot_() noexcept {
-    if (!impl_ || !impl_->patternEngine) {
+    if (!impl_ || !impl_->patternEngine || !impl_->patternSnapshotOrchestrator) {
         return false;
     }
-    const PatternId active = impl_->patternEngine->activePatternId();
-    if (active == kInvalidPatternId) {
-        return false;
-    }
-
-    PatternState state = makeDefaultPattern(active,
-                                            impl_->trackCount,
-                                            impl_->tempoBpm,
-                                            impl_->tsNum,
-                                            impl_->tsDen,
-                                            impl_->quant);
-    state.transport.swing01 = impl_->swing01;
-    for (uint8_t t = 0; t < impl_->trackCount; ++t) {
-        PatternTrackSnapshot& tr = state.tracks[t];
-        tr.muted = (t < impl_->trackMuted.size()) ? impl_->trackMuted[t] : false;
-        tr.armed = (t < impl_->trackArmed.size()) ? impl_->trackArmed[t] : false;
-        tr.gain01 = (t < impl_->trackGain.size()) ? impl_->trackGain[t] : 1.0f;
-        tr.playbackInc = (t < impl_->trackPlaybackInc.size()) ? impl_->trackPlaybackInc[t] : 1.0f;
-        tr.bars = (t < impl_->trackBars.size()) ? impl_->trackBars[t] : 4u;
-        tr.clipRefId = (t < impl_->trackClipRef.size()) ? impl_->trackClipRef[t] : 0u;
-        tr.trackParams.clear();
-        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::LoopEnabled),
-                                         (t < impl_->trackLoopEnabled.size() && impl_->trackLoopEnabled[t]) ? 1.0f : 0.0f});
-        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::PlaybackMode),
-                                         toParamValue((t < impl_->trackPlaybackMode.size())
-                                                          ? impl_->trackPlaybackMode[t]
-                                                          : TrackPlaybackModeValue::Looper)});
-        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::StartNorm),
-                                         (t < impl_->trackTrimStart01.size()) ? impl_->trackTrimStart01[t] : 0.0f});
-        tr.trackParams.push_back(ParamKV{toParamIndex(TrackParamId::EndNorm),
-                                         (t < impl_->trackTrimEnd01.size()) ? impl_->trackTrimEnd01[t] : 1.0f});
-    }
-    return impl_->patternEngine->putPattern(state);
+    return impl_->patternSnapshotOrchestrator->captureActivePattern(
+        std::span<ISnapshotable* const>(impl_->snapshotables.data(), impl_->snapshotables.size()));
 }
 
 bool SamplerEngineLayer::processPendingPatternSwitches() noexcept {
@@ -1146,12 +1245,20 @@ bool SamplerEngineLayer::syncUiCache(UiTransportState& transportInOut,
     // между блоками аудио (это и вызывало необходимость двойного нажатия).
     transportInOut.playing =
         (impl_->transport.getParam(toParamIndex(TransportParamId::Playing)) >= 0.5f);
-    transportInOut.bpm = impl_->tempoBpm;
-    transportInOut.tsNum = impl_->tsNum;
-    transportInOut.tsDen = impl_->tsDen;
-    transportInOut.quant = impl_->quant;
+    const PatternTransportSnapshot transportSnap = readPatternTransportSnapshot(impl_->transport);
+    transportInOut.bpm = transportSnap.bpm;
+    transportInOut.tsNum = transportSnap.tsNum;
+    transportInOut.tsDen = transportSnap.tsDen;
+    transportInOut.quant = transportSnap.quant;
     transportInOut.metronomeEnabled = impl_->metronomeEnabled;
     transportInOut.sampleTime = rt.sampleTime;
+    transportInOut.previewPlaying = false;
+    transportInOut.previewPlayhead01 = 0.0f;
+    if (impl_->preview) {
+        const SamplePreviewState pv = impl_->preview->state();
+        transportInOut.previewPlaying = pv.playing;
+        transportInOut.previewPlayhead01 = std::clamp(pv.playhead01, 0.0f, 1.0f);
+    }
 
     if (tracksInOut.size() < impl_->trackCount) {
         tracksInOut.resize(impl_->trackCount);
@@ -1159,45 +1266,40 @@ bool SamplerEngineLayer::syncUiCache(UiTransportState& transportInOut,
     for (uint8_t t = 0; t < impl_->trackCount; ++t) {
         UiTrackStateView& ui = tracksInOut[t];
         ui.id = t;
-        if (t < impl_->trackMuted.size()) {
-            ui.muted = impl_->trackMuted[t];
-        }
-        if (t < impl_->trackArmed.size()) {
-            ui.armed = impl_->trackArmed[t];
-        }
-        if (t < impl_->trackGain.size()) {
-            ui.gain01 = impl_->trackGain[t];
-        }
-        if (t < impl_->trackPlaybackInc.size()) {
-            ui.stretchRatio = impl_->trackPlaybackInc[t];
-        }
-        if (t < impl_->trackBars.size()) {
-            ui.bars = impl_->trackBars[t];
-        }
-        if (t < impl_->trackPlaybackMode.size()) {
-            ui.playbackMode = (impl_->trackPlaybackMode[t] == TrackPlaybackModeValue::Note)
-                                  ? UiTrackPlaybackMode::Note
-                                  : UiTrackPlaybackMode::Looper;
-        }
-        if (t < impl_->trackLoopEnabled.size()) {
-            ui.loop = impl_->trackLoopEnabled[t];
-        }
+        ITrack* track = impl_->trackAt(t);
+        const TrackSnapshot sh = readTrackSnapshot(track);
+        ui.muted = sh.muted;
+        ui.armed = sh.armed;
+        ui.gain01 = sh.gain01;
+        ui.stretchRatio = sh.playbackInc;
+        ui.bars = sh.bars;
+        ui.playbackMode = (sh.playbackMode == TrackPlaybackModeValue::Note)
+                              ? UiTrackPlaybackMode::Note
+                              : UiTrackPlaybackMode::Looper;
+        ui.loop = sh.loopEnabled;
+        ui.tempoSync = sh.tempoSync;
         ui.playbackProfile = uiProfileFromModeLoop(
             (ui.playbackMode == UiTrackPlaybackMode::Note)
                 ? TrackPlaybackModeValue::Note
                 : TrackPlaybackModeValue::Looper,
             ui.loop);
-        if (t < impl_->trackTrimStart01.size()) {
-            ui.trimStart01 = std::clamp(impl_->trackTrimStart01[t], 0.0f, 0.99f);
-        }
-        if (t < impl_->trackTrimEnd01.size()) {
-            ui.trimEnd01 = std::clamp(impl_->trackTrimEnd01[t], 0.01f, 1.0f);
-        }
+        ui.trimStart01 = std::clamp(sh.trimStart01, 0.0f, 0.99f);
+        ui.trimEnd01 = std::clamp(sh.trimEnd01, 0.01f, 1.0f);
         if (ui.trimEnd01 <= ui.trimStart01 + 0.01f) {
             ui.trimEnd01 = std::min(1.0f, ui.trimStart01 + 0.01f);
         }
+        if (track) {
+            // Playhead читаем из RT-слоя трека (это чистая runtime-телеметрия),
+            // остальные поля (mute/speed/mode/trim) приходят из track snapshot.
+            ui.playhead01 = std::clamp(
+                track->getParam(toParamIndex(TrackParamId::PlayheadNorm)),
+                0.0f,
+                1.0f);
+        } else {
+            ui.playhead01 = 0.0f;
+        }
 
-        const uint32_t clipRef = (t < impl_->trackClipRef.size()) ? impl_->trackClipRef[t] : 0u;
+        const uint32_t clipRef = sh.clipRefId;
         if (clipRef == 0u) {
             ui.clipPath.clear();
             ui.clipName.clear();

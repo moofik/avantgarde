@@ -1,0 +1,74 @@
+{
+  "id": "sequencer_lane",
+  "layout": {
+    "type": "column",
+    "style_ref": "@styles.frame.root",
+    "padding": 0,
+    "gap": 0,
+    "width": 60,
+    "height": 24,
+    "children": [
+      {
+        "type": "statusbar",
+        "id": "header_title",
+        "text": "SEQUENCER LANE",
+        "bind": "status.scene.title",
+        "style_ref": "@styles.header.title.base",
+        "height": 2
+      },
+      {
+        "type": "text",
+        "id": "sequencer_meta",
+        "bind": "status.sequencer.meta",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "text",
+        "id": "lane_title",
+        "bind": "status.sequencer.lane_title",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "text",
+        "id": "sequencer_mode",
+        "bind": "status.sequencer.mode",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_top",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "waveform",
+        "id": "lane_curve",
+        "bind": "lane_curve",
+        "style_ref": "@styles.sequencer.waveform",
+        "height": 12
+      },
+      {
+        "type": "text",
+        "id": "lane_timeline",
+        "bind": "lane_timeline",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_bottom",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "text",
+        "id": "action_status",
+        "bind": "status.action",
+        "style_ref": "@styles.footer.action"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint",
+        "bind": "status.keys",
+        "style_ref": "@styles.footer.keys"
+      }
+    ]
+  }
+}

@@ -161,6 +161,14 @@ namespace avantgarde {
          * @return true, если модуль существовал и был удален
          */
         virtual bool removeModuleAt(std::size_t index) = 0;
+
+        // Project-level clipRef (stable id для snapshot/pattern switch).
+        // Это metadata-уровень, не DSP audio data.
+        virtual void setClipRefId(uint32_t clipRefId) noexcept = 0;
+
+        // Control-only mirror параметров для snapshot/UI.
+        // Не должен менять RT playback-state напрямую.
+        virtual void mirrorParamForSnapshot(uint16_t paramIndex, float value) noexcept = 0;
     };
 
 } // namespace avantgarde

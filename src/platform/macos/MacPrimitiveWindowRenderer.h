@@ -24,7 +24,8 @@ public:
     void renderPreparedLayout(const UiPreparedLayout& prepared);
 
     // Pump событий окна (должен вызываться из main thread).
-    void pumpEvents() noexcept;
+    // @return true, если за вызов был обработан хотя бы один NS-событийный пакет.
+    bool pumpEvents() noexcept;
 
 private:
     struct Impl;

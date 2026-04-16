@@ -1,0 +1,67 @@
+{
+  "id": "pattern_edit",
+  "layout": {
+    "type": "column",
+    "style_ref": "@styles.frame.root",
+    "padding": 0,
+    "gap": 0,
+    "width": 60,
+    "height": 24,
+    "children": [
+      {
+        "type": "statusbar",
+        "id": "header_title",
+        "text": "PATTERN EDIT",
+        "bind": "status.scene.title",
+        "style_ref": "@styles.header.title.base",
+        "height": 2
+      },
+      {
+        "type": "text",
+        "id": "pattern_meta",
+        "bind": "pattern.meta",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_top",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "text",
+        "id": "pattern_length",
+        "bind": "pattern.length",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "text",
+        "id": "pattern_quant",
+        "bind": "pattern.quant",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "text",
+        "id": "pattern_loop_mode",
+        "bind": "pattern.loop_mode",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_bottom",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "text",
+        "id": "action_status",
+        "bind": "status.action",
+        "style_ref": "@styles.footer.action"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint",
+        "bind": "status.keys",
+        "style_ref": "@styles.footer.keys"
+      }
+    ]
+  }
+}

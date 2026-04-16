@@ -288,6 +288,30 @@ std::unique_ptr<IUiComponent> buildNodeComponent(UiScene scene,
             }
             UiTextBuilder b(node.id);
             b.text(std::move(*value));
+            // Выравнивание текста внутри выделенного layout-rect:
+            // - для совместимости поддерживаем both:
+            //   1) "align" (предпочтительный ключ),
+            //   2) "justify" на text-ноде (если его явно задали).
+            UiTextComponent::Align textAlign = UiTextComponent::Align::Left;
+            if (node.justify == UiLayoutJustify::Center) {
+                textAlign = UiTextComponent::Align::Center;
+            } else if (node.justify == UiLayoutJustify::End) {
+                textAlign = UiTextComponent::Align::Right;
+            } else {
+                switch (node.align) {
+                    case UiLayoutAlign::Center:
+                        textAlign = UiTextComponent::Align::Center;
+                        break;
+                    case UiLayoutAlign::End:
+                        textAlign = UiTextComponent::Align::Right;
+                        break;
+                    case UiLayoutAlign::Start:
+                    default:
+                        textAlign = UiTextComponent::Align::Left;
+                        break;
+                }
+            }
+            b.align(textAlign);
             auto component = std::move(b).build();
             applyNodePresentationState(scene, node, state, nav, params, *component);
             return component;
@@ -454,8 +478,16 @@ std::unique_ptr<IUiComponent> buildNodeComponent(UiScene scene,
             const std::string label = findTextByKeys(params, labelKeys)
                                           .value_or(!node.label.empty() ? node.label : key);
             const std::string animKey = findTextByKeys(params, animKeyKeys).value_or(key);
+            const UiAnimSlotComponent::PlaybackMode mode =
+                (node.animMode == "scrub") ? UiAnimSlotComponent::PlaybackMode::Scrub
+                                           : UiAnimSlotComponent::PlaybackMode::Loop;
             UiAnimSlotBuilder b(node.id);
-            b.label(label).animKey(animKey).intensity01(intensity01);
+            b.label(label)
+                .animKey(animKey)
+                .intensity01(intensity01)
+                .playbackMode(mode)
+                .fps(node.animFps)
+                .frames(node.animFrames);
             auto component = std::move(b).build();
             applyNodePresentationState(scene, node, state, nav, params, *component);
             return component;
@@ -474,8 +506,41 @@ std::unique_ptr<IUiComponent> buildNodeComponent(UiScene scene,
             const float trimStart01 = std::clamp(findNumberByKeys(params, trimStartKeys).value_or(0.0f), 0.0f, 0.99f);
             const float trimEnd01 = std::clamp(findNumberByKeys(params, trimEndKeys).value_or(1.0f), 0.01f, 1.0f);
 
+            std::vector<std::string> markerXKeys{};
+            std::vector<std::string> markerYKeys{};
+            std::vector<std::string> playheadKeys{};
+            std::vector<std::string> selectedKeys{};
+            std::vector<std::string> curveModeKeys{};
+            for (const std::string& k : keys) {
+                markerXKeys.push_back(k + ".markers.x");
+                markerYKeys.push_back(k + ".markers.y");
+                playheadKeys.push_back(k + ".playhead");
+                selectedKeys.push_back(k + ".selected");
+                curveModeKeys.push_back(k + ".curve_mode");
+            }
+            const std::vector<float> markerXs = findWaveByKeys(params, markerXKeys).value_or(std::vector<float>{});
+            const std::vector<float> markerYs = findWaveByKeys(params, markerYKeys).value_or(std::vector<float>{});
+            const std::size_t markerCount = std::min(markerXs.size(), markerYs.size());
+            std::vector<UiWaveformComponent::Marker> markers{};
+            markers.reserve(markerCount);
+            for (std::size_t i = 0; i < markerCount; ++i) {
+                markers.push_back(UiWaveformComponent::Marker{
+                    .x01 = std::clamp(markerXs[i], 0.0f, 1.0f),
+                    .y01 = std::clamp(markerYs[i], 0.0f, 1.0f),
+                });
+            }
+            const float playhead01 = std::clamp(findNumberByKeys(params, playheadKeys).value_or(0.0f), 0.0f, 1.0f);
+            const int32_t selectedMarker = findIntegerByKeys(params, selectedKeys).value_or(-1);
+            const bool curveMode = findFlagByKeys(params, curveModeKeys).value_or(false);
+
             UiWaveformBuilder b(node.id);
-            b.peaks01(peaks).trimStart01(trimStart01).trimEnd01(trimEnd01);
+            b.peaks01(peaks)
+                .trimStart01(trimStart01)
+                .trimEnd01(trimEnd01)
+                .playhead01(playhead01)
+                .markers(std::move(markers))
+                .selectedMarker(selectedMarker)
+                .curveMode(curveMode);
             auto component = std::move(b).build();
             applyNodePresentationState(scene, node, state, nav, params, *component);
             return component;

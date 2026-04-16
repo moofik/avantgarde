@@ -9,13 +9,14 @@
 #include <vector>
 #include "IAudioModule.h"
 #include "IParameterized.h"
+#include "ISnapshotable.h"
+#include "ids.h"
 
 
 namespace avantgarde {
 
-
 // Трек владеет модулями и последовательно прогоняет через них сигнал.
-    struct ITrack : IParameterized {
+    struct ITrack : IParameterized, ISnapshotable {
         virtual ~ITrack() = default;
         // Проверка базовой готовности трека к работе.
         // Используется control-слоем как легкий guard перед non-RT операциями.
@@ -31,6 +32,9 @@ namespace avantgarde {
         std::size_t getParamCount() const override { return 0; }
         float getParam(std::size_t) const override { return 0.0f; }
         void setParam(std::size_t, float) override {}
+        // Единый snapshot-контракт: любой трек обязан отдать свой TrackSnapshot
+        // через общий API ISnapshotable.
+        virtual bool getSnapshot(SnapshotRecord& out) const noexcept override = 0;
         const ParamMeta& getParamMeta(std::size_t) const override {
             static const ParamMeta kNoMeta{};
             return kNoMeta;

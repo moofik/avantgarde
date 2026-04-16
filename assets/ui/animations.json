@@ -1,0 +1,17 @@
+{
+  "animations": {
+    "track": {
+      "bottle": {
+        "demo": {
+          "mode": "scrub",
+          "fps": 8,
+          "frames": [
+            "sprites/bottle/1.png",
+            "sprites/bottle/2.png",
+            "sprites/bottle/3.png"
+          ]
+        }
+      }
+    }
+  }
+}

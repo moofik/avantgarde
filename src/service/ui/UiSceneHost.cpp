@@ -249,9 +249,10 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
                 return out;
             }
             // Интент работает как toggle на основании актуального transport-state.
+            const bool nextPlaying = !rtState.transport.playing;
             UiIntent it{};
             it.type = UiIntentType::SetTransportPlaying;
-            it.value = rtState.transport.playing ? 0.0f : 1.0f;
+            it.value = nextPlaying ? 1.0f : 0.0f;
             out.intents.push_back(std::move(it));
             return out;
         }
@@ -264,6 +265,15 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
                 UiIntent it{};
                 it.type = UiIntentType::Back;
                 it.scene = UiScene::FxList;
+                it.resetSceneActionIndex = true;
+                out.intents.push_back(std::move(it));
+                return out;
+            }
+            // Pattern View (SequencerLane) -> Tracks.
+            if (nav_.scene == UiScene::SequencerLane) {
+                UiIntent it{};
+                it.type = UiIntentType::Back;
+                it.scene = UiScene::Tracks;
                 it.resetSceneActionIndex = true;
                 out.intents.push_back(std::move(it));
                 return out;
@@ -335,6 +345,11 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
         case UiAction::Id::SceneTrackMenuClear:
         case UiAction::Id::SceneTrackMenuFxList:
         case UiAction::Id::SceneTrackMenuSampleEdit:
+        case UiAction::Id::SceneTrackMenuSequencer:
+        case UiAction::Id::SceneTrackMenuPatternEdit:
+        case UiAction::Id::SceneSampleMenuPreview:
+        case UiAction::Id::SceneSampleMenuLoadSample:
+        case UiAction::Id::SceneSampleMenuDetectBpm:
         case UiAction::Id::SceneFxTypeSelect:
         case UiAction::Id::SceneFxSlotSelect:
         case UiAction::Id::SceneFxEnabled:
@@ -343,6 +358,19 @@ WidgetOutput UiSceneHost::onGlobalAction_(UiAction& action, const UiState& rtSta
         case UiAction::Id::SceneFxParamSelect:
         case UiAction::Id::SceneFxParamValue:
         case UiAction::Id::SceneFxBack:
+        case UiAction::Id::SceneSequencerLaneSelect:
+        case UiAction::Id::SceneSequencerLaneFocus:
+        case UiAction::Id::SceneSequencerScrub:
+        case UiAction::Id::SceneSequencerObjectSelect:
+        case UiAction::Id::SceneSequencerMoveObject:
+        case UiAction::Id::SceneSequencerValue:
+        case UiAction::Id::SceneSequencerLoopMode:
+        case UiAction::Id::SceneSequencerPatternLength:
+        case UiAction::Id::SceneSequencerQuant:
+        case UiAction::Id::SceneSequencerZoom:
+        case UiAction::Id::SceneSequencerTool:
+        case UiAction::Id::SceneSequencerAddObject:
+        case UiAction::Id::SceneSequencerDeleteObject:
         default:
             // Не-global id: передаем управление scene-слою.
             out.handled = false;
@@ -430,6 +458,30 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         }
         return {};
     }
+    if (action == UiGesture::OpenSequencer) {
+        if (widgets_[sceneIndex_(UiScene::Sequencer)]) {
+            UiIntent openIntent{};
+            openIntent.type = UiIntentType::OpenScene;
+            openIntent.scene = UiScene::Sequencer;
+            openIntent.resetCursor = true;
+            openIntent.resetScroll = true;
+            openIntent.resetSceneActionIndex = true;
+            return WidgetOutput{true, {openIntent}};
+        }
+        return {};
+    }
+    if (action == UiGesture::OpenPatternEdit) {
+        if (widgets_[sceneIndex_(UiScene::PatternEdit)]) {
+            UiIntent openIntent{};
+            openIntent.type = UiIntentType::OpenScene;
+            openIntent.scene = UiScene::PatternEdit;
+            openIntent.resetCursor = true;
+            openIntent.resetScroll = true;
+            openIntent.resetSceneActionIndex = true;
+            return WidgetOutput{true, {openIntent}};
+        }
+        return {};
+    }
     if (action == UiGesture::BackScene) {
         // Специальный случай: если в FxList открыт popup выбора эффекта,
         // сначала закрываем popup жестом самого виджета, а не выходим из сцены.
@@ -442,6 +494,13 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
             UiIntent backIntent{};
             backIntent.type = UiIntentType::Back;
             backIntent.scene = UiScene::FxList;
+            backIntent.resetSceneActionIndex = true;
+            return WidgetOutput{true, {backIntent}};
+        }
+        if (nav_.scene == UiScene::SequencerLane) {
+            UiIntent backIntent{};
+            backIntent.type = UiIntentType::Back;
+            backIntent.scene = UiScene::Tracks;
             backIntent.resetSceneActionIndex = true;
             return WidgetOutput{true, {backIntent}};
         }
@@ -458,12 +517,20 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
     // Глобальные transport/track hotkeys больше не обрабатываются в Application legacy-switch.
     // Все команды заворачиваются в intents прямо здесь.
     if (action == UiGesture::PlayActiveTrack || action == UiGesture::StopActiveTrack) {
+        // В SampleEdit/SampleContextMenu Play/Stop не используются:
+        // preview там управляется только F1 (tap).
+        if (nav_.scene == UiScene::SampleEdit ||
+            nav_.scene == UiScene::SampleContextMenu) {
+            return WidgetOutput{true, {}};
+        }
         // С исторических причин жест называется *ActiveTrack, но семантика
         // теперь глобальная: запускаем/останавливаем транспорт целиком.
+        std::vector<UiIntent> intents{};
         UiIntent it{};
         it.type = UiIntentType::SetTransportPlaying;
         it.value = (action == UiGesture::PlayActiveTrack) ? 1.0f : 0.0f;
-        return WidgetOutput{true, {it}};
+        intents.push_back(std::move(it));
+        return WidgetOutput{true, std::move(intents)};
     }
     if (action == UiGesture::QuantNone ||
         action == UiGesture::QuantBeat ||
@@ -541,6 +608,36 @@ WidgetOutput UiSceneHost::handleGesture(UiGesture action, const UiState& rtState
         // Если для активной сцены виджет не зарегистрирован,
         // возвращаем "не обработано" без генерации интентов.
         return {};
+    }
+
+    // Быстрое удаление в секвенсоре:
+    // - Sequencer (list): удаляем lane целиком;
+    // - SequencerLane: удаляем выбранный объект.
+    // D/Del всегда работают независимо от выбранного action.
+    if ((nav_.scene == UiScene::Sequencer || nav_.scene == UiScene::SequencerLane) &&
+        action == UiGesture::DeleteObject) {
+        UiIntent delIntent{};
+        delIntent.type = (nav_.scene == UiScene::Sequencer)
+                             ? UiIntentType::SequencerDeleteSelectedLane
+                             : UiIntentType::SequencerDeleteSelectedObject;
+        return WidgetOutput{true, {delIntent}};
+    }
+    if ((nav_.scene == UiScene::Sequencer || nav_.scene == UiScene::SequencerLane) &&
+        action == UiGesture::ActionApply) {
+        const UiActionCatalog sceneCatalog = widget->queryAvailableActions(rtState, nav_);
+        if (!sceneCatalog.actions.empty()) {
+            const uint16_t idx = std::min<uint16_t>(
+                nav_.sceneActionIndex,
+                static_cast<uint16_t>(sceneCatalog.actions.size() - 1U));
+            const UiAction& active = sceneCatalog.actions[idx];
+            if (active.def.id == UiAction::Id::SceneSequencerDeleteObject && active.state.enabled) {
+                UiIntent delIntent{};
+                delIntent.type = (nav_.scene == UiScene::Sequencer)
+                                     ? UiIntentType::SequencerDeleteSelectedLane
+                                     : UiIntentType::SequencerDeleteSelectedObject;
+                return WidgetOutput{true, {delIntent}};
+            }
+        }
     }
 
     // Быстрый хоткей детекта BPM на основном экране.

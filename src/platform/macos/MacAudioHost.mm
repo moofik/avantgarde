@@ -159,6 +159,7 @@ namespace avantgarde {
             AudioProcessContext ctx{};
             ctx.in      = self->inPtrs_.empty() ? nullptr : self->inPtrs_.data();
             ctx.out     = self->outPtrs_.data();
+            ctx.numOut  = static_cast<uint32_t>(ioData ? ioData->mNumberBuffers : 0U);
             ctx.nframes = (std::size_t)inNumberFrames;
 
             // 4) Передаем сформированный контекст в движок.

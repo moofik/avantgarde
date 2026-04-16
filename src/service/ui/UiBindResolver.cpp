@@ -104,7 +104,7 @@ UiBindResolution resolveFxEditorAnimBind(std::string_view key, const UiBindRegis
         return out;
     }
 
-    out.error = "Unknown FX anim bind. Expected aliases like current/reverb/hpf.";
+    out.error = "Unknown FX anim bind. Expected aliases like current/reverb/hpf/buffer.";
     return out;
 }
 

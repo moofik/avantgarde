@@ -99,6 +99,9 @@ struct UiLayoutNode {
     std::string borderColor{};
     // Цвет фоновой заливки ноды в hex-формате.
     std::string backgroundColor{};
+    // Цвет линии playhead для компонента waveform (hex-формат).
+    // Может задаваться на самой waveform-ноде или на родительском контейнере.
+    std::string playheadColor{};
     // Дефолтный цвет текста для дочерних элементов (обычно для root-контейнера).
     std::string defaultTextColor{};
     // Роль/источник шрифта для рендереров, которые поддерживают типографику.
@@ -129,6 +132,7 @@ struct UiLayoutNode {
         std::string textColor{};
         std::string borderColor{};
         std::string backgroundColor{};
+        std::string playheadColor{};
         std::string font{};
         float fontSize{0.0f};
         float knobSize{0.0f};
@@ -161,6 +165,21 @@ struct UiLayoutNode {
     // 1.0 = дефолтный размер, <1 уменьшает, >1 увеличивает.
     // Рендерер дополнительно ограничивает размер рамками layout-ячейки.
     float knobSize{1.0f};
+    // Настройки кадровой анимации для type="anim_slot".
+    // mode:
+    // - "loop"  -> кадры листаются по времени с частотой animFps.
+    // - "scrub" -> кадр выбирается по intensity01 из bind (0..1).
+    std::string animMode{"loop"};
+    // Частота проигрывания кадров для loop-режима.
+    float animFps{8.0f};
+    // Список кадров анимации (пути до PNG/изображений).
+    std::vector<std::string> animFrames{};
+    // Рисовать рамку вокруг anim-slot.
+    bool animShowFrame{true};
+    // Толщина рамки anim-slot.
+    float animFrameWidth{1.1f};
+    // Радиус скругления рамки anim-slot.
+    float animFrameRadius{4.0f};
     // Для нод типа switch: список дискретных значений (порядок важен).
     std::vector<std::string> options{};
     UiLayoutSize width{};

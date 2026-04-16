@@ -11,20 +11,20 @@ namespace avantgarde::macos {
 
 struct MacPrimitiveWindowInput::Impl {
     std::mutex inputMutex{};
-    std::deque<UiGestureEvent> inputQueue{};
+    std::deque<PrimitiveInputEvent> inputQueue{};
     id keyMonitor{nil};
 };
 
 MacPrimitiveWindowInput::MacPrimitiveWindowInput()
     : impl_(std::make_unique<Impl>()) {
     __block Impl* weakImpl = impl_.get();
-    impl_->keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown
+    impl_->keyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskKeyDown | NSEventMaskKeyUp)
                                                                handler:^NSEvent* _Nullable(NSEvent* _Nonnull event) {
         if (!weakImpl) {
             return event;
         }
-        const UiGestureEvent ev = mapPrimitiveWindowEvent(event);
-        if (ev.action == UiGesture::None) {
+        const PrimitiveInputEvent ev = mapPrimitiveWindowEvent(event);
+        if (ev.control == PrimitiveControl::None) {
             return event;
         }
         std::lock_guard<std::mutex> lock(weakImpl->inputMutex);
@@ -43,9 +43,8 @@ MacPrimitiveWindowInput::~MacPrimitiveWindowInput() {
     }
 }
 
-bool MacPrimitiveWindowInput::readNextInputEvent(UiGestureEvent& out) noexcept {
-    out.action = UiGesture::None;
-    out.value = 0;
+bool MacPrimitiveWindowInput::readNextInputEvent(PrimitiveInputEvent& out) noexcept {
+    out = PrimitiveInputEvent{};
     if (!impl_) {
         return false;
     }

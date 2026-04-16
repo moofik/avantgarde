@@ -20,6 +20,7 @@ public:
     void swapBuffers() noexcept override;
     const TransportRtSnapshot& rt() const noexcept override;
     void advanceSampleTime(uint64_t frames) noexcept override;
+    bool getSnapshot(SnapshotRecord& out) const noexcept override;
 
     // IParameterized (global transport surface).
     std::size_t getParamCount() const override;

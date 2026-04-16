@@ -1,5 +1,6 @@
 #include <catch2/catch_all.hpp>
 #include <algorithm>
+#include <string>
 
 #include "service/ui/UiWidgetFactory.h"
 #include "service/ui/widgets/TracksWidget.h"
@@ -174,4 +175,89 @@ TEST_CASE("TracksWidget: FX icon visibility follows selected track FX enabled st
     CHECK(iconOff->isVisible());
     CHECK_FALSE(iconOff->isActive());
     CHECK(iconOff->opacity() < icon->opacity());
+}
+
+TEST_CASE("TracksWidget: transport line shows global REC flag") {
+    UiWidgetFactory factory{};
+    auto widget = factory.create(UiScene::Tracks);
+    REQUIRE(widget != nullptr);
+
+    UiState state{};
+    state.tracks.resize(1);
+    state.tracks[0].id = 0;
+    state.transport.recordEnabled = true;
+
+    UiNavState nav{};
+    nav.scene = UiScene::Tracks;
+    nav.selectedTrack = 0;
+
+    UiPreparedLayout prepared{};
+    REQUIRE(widget->buildPreparedLayout(prepared, state, nav));
+    auto index = render::buildComponentIndex(prepared);
+    auto it = index.find("transport_line");
+    REQUIRE(it != index.end());
+    const auto* text = dynamic_cast<const UiTextComponent*>(it->second);
+    REQUIRE(text != nullptr);
+    CHECK(text->text.find("REC:Y") != std::string::npos);
+}
+
+TEST_CASE("TracksWidget: track anim playhead bind uses selected track playhead (not sequencer)") {
+    UiWidgetFactory factory{};
+    auto widget = factory.create(UiScene::Tracks);
+    REQUIRE(widget != nullptr);
+
+    UiState state{};
+    state.transport.tsNum = 4;
+    state.transport.tsDen = 4;
+    state.sequencer.playheadTick = 0; // намеренно 0, чтобы проверить источник именно из track.playhead01
+    state.tracks.resize(1);
+    state.tracks[0].id = 0;
+    state.tracks[0].playhead01 = 0.73f;
+
+    UiNavState nav{};
+    nav.scene = UiScene::Tracks;
+    nav.selectedTrack = 0;
+
+    UiPreparedLayout prepared{};
+    REQUIRE(widget->buildPreparedLayout(prepared, state, nav));
+    auto index = render::buildComponentIndex(prepared);
+    auto it = index.find("track_anim");
+    REQUIRE(it != index.end());
+    const auto* anim = dynamic_cast<const UiAnimSlotComponent*>(it->second);
+    REQUIRE(anim != nullptr);
+    CHECK(anim->intensity01 == Catch::Approx(0.73f));
+}
+
+TEST_CASE("TracksWidget: bars row contains current bar derived from track playhead") {
+    UiWidgetFactory factory{};
+    auto widget = factory.create(UiScene::Tracks);
+    REQUIRE(widget != nullptr);
+
+    UiState state{};
+    state.tracks.resize(1);
+    state.tracks[0].id = 0;
+    state.tracks[0].clipName = "loop.wav";
+    state.tracks[0].bars = 4;
+    state.tracks[0].playhead01 = 0.73f; // bar 3 из 4
+
+    UiNavState nav{};
+    nav.scene = UiScene::Tracks;
+    nav.selectedTrack = 0;
+
+    UiPreparedLayout prepared{};
+    REQUIRE(widget->buildPreparedLayout(prepared, state, nav));
+    auto index = render::buildComponentIndex(prepared);
+    auto it = index.find("tracks_body");
+    REQUIRE(it != index.end());
+    const auto* list = dynamic_cast<const UiListComponent*>(it->second);
+    REQUIRE(list != nullptr);
+
+    bool found = false;
+    for (const std::string& row : list->rows) {
+        if (row.find("bars:4 current bar:3") != std::string::npos) {
+            found = true;
+            break;
+        }
+    }
+    CHECK(found);
 }

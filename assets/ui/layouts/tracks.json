@@ -64,45 +64,64 @@
                     "type": "row",
                     "id": "track_ux_row",
                     "width": "100%",
-                    "gap": 1,
+                    "gap": 0,
                     "wrap": false,
                     "justify": "start",
                     "align": "start",
                     "children": [
                       {
                         "type": "text",
+                        "id": "icon_arm",
+                        "bind": "track.selected.icon.arm",
+                        "style_ref": "@styles.track.icon",
+                        "width": "20%",
+                        "active": {
+                          "if": "track.selected.recording.armed",
+                          "text_color": "@theme.colors.text.record_active"
+                        },
+                        "inactive": {
+                          "if": "track.selected.arm.enabled",
+                          "text_color": "@theme.colors.text.arm_on",
+                          "opacity": 1
+                        },
+                        "disabled": {
+                          "if": "!track.selected.arm.enabled",
+                          "text_color": "@theme.colors.text.arm_off",
+                          "opacity": 0.9
+                        },
+                        "justify": "center"
+                      },
+                      {
+                        "type": "text",
                         "id": "icon_loop",
                         "bind": "track.selected.icon.loop",
                         "style_ref": "@styles.track.icon",
-                        "width": "19%"
+                        "width": "20%",
+                        "justify": "center"
                       },
                       {
                         "type": "text",
                         "id": "icon_mute",
                         "bind": "track.selected.icon.mute",
                         "style_ref": "@styles.track.icon",
-                        "width": "19%"
-                      },
-                      {
-                        "type": "text",
-                        "id": "icon_arm",
-                        "bind": "track.selected.icon.arm",
-                        "style_ref": "@styles.track.icon",
-                        "width": "19%"
+                        "width": "20%",
+                        "justify": "center"
                       },
                       {
                         "type": "text",
                         "id": "icon_play",
                         "bind": "track.selected.icon.play",
                         "style_ref": "@styles.track.icon",
-                        "width": "19%"
+                        "width": "20%",
+                        "justify": "center"
                       },
                       {
                         "type": "text",
                         "id": "icon_fx",
                         "bind": "track.selected.icon.fx",
                         "style_ref": "@styles.track.icon",
-                        "width": "19%"
+                        "width": "20%",
+                        "justify": "center"
                       }
                     ]
                   },
@@ -162,8 +181,10 @@
                   {
                     "type": "anim_slot",
                     "id": "track_anim",
-                    "bind": "fx.anim.current",
+                    "bind": "track.selected.playhead",
+                    "anim_ref": "@animations.track.bottle.demo",
                     "style_ref": "@styles.track.animslot",
+                    "anim_show_frame": false,
                     "height": 8,
                     "width": 16,
                     "align": "start"

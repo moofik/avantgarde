@@ -44,6 +44,7 @@ public:
     static constexpr std::string_view kReverbSchroederId = "fx.reverb.schroeder";
     static constexpr std::string_view kHpfOnePoleId = "fx.filter.hpf.onepole";
     static constexpr std::string_view kStutterId = "fx.stutter.sync";
+    static constexpr std::string_view kBufferFxId = "fx.buffer.superglitch";
 
     // Резолв ID/алиаса в descriptor. Возвращает nullptr, если профиль неизвестен.
     static const FxDescriptor* find(std::string_view id) noexcept {
@@ -55,6 +56,9 @@ public:
         }
         if (id == kStutterId || id == "stutter.sync" || id == "stutter") {
             return &stutter_;
+        }
+        if (id == kBufferFxId || id == "buffer" || id == "bufferfx" || id == "superglitch" || id == "glitch") {
+            return &bufferFx_;
         }
         return nullptr;
     }
@@ -86,6 +90,17 @@ private:
         {toParamIndex(StutterParamId::Retrigger), "retrig", "Retrig", 0.0f, 1.0f, 0.00f},
     }};
 
+    static inline constexpr std::array<FxParamDescriptor, 8> bufferFxParams_{{
+        {toParamIndex(BufferFxParamId::Mix), "mix", "Mix", 0.0f, 1.0f, 0.70f},
+        {toParamIndex(BufferFxParamId::SliceSize), "slice", "Slice", 0.0f, 1.0f, 0.50f},
+        {toParamIndex(BufferFxParamId::Repeat), "repeat", "Repeat", 0.0f, 1.0f, 0.15f},
+        {toParamIndex(BufferFxParamId::Speed), "speed", "Speed", 0.0f, 1.0f, 0.50f},
+        {toParamIndex(BufferFxParamId::Jitter), "jitter", "Jitter", 0.0f, 1.0f, 0.00f},
+        {toParamIndex(BufferFxParamId::BufferSize), "buffer", "Buffer", 0.0f, 1.0f, 0.30f},
+        {toParamIndex(BufferFxParamId::Retrig), "retrig", "Retrig", 0.0f, 1.0f, 0.30f},
+        {toParamIndex(BufferFxParamId::Reverse), "reverse", "Reverse", 0.0f, 1.0f, 0.00f},
+    }};
+
     static inline constexpr FxDescriptor reverb_{
         kReverbSchroederId,
         "Schroeder Reverb",
@@ -105,6 +120,13 @@ private:
         "Sync Stutter",
         stutterParams_.data(),
         stutterParams_.size(),
+    };
+
+    static inline constexpr FxDescriptor bufferFx_{
+        kBufferFxId,
+        "Buffer FX",
+        bufferFxParams_.data(),
+        bufferFxParams_.size(),
     };
 };
 

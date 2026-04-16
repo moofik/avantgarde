@@ -1,4 +1,5 @@
 #include "service/ui/UiLayoutJsonLoader.h"
+#include "service/ui/UiTokenResolver.h"
 
 #include <algorithm>
 #include <cctype>
@@ -539,8 +540,10 @@ struct ParseContext {
     const JsonValue* stylesRoot{nullptr};
     const JsonValue* themeRoot{nullptr};
     const JsonValue* effectsRoot{nullptr};
+    const JsonValue* animationsRoot{nullptr};
     std::vector<std::string> styleStack{};
     std::vector<std::string> effectPresetStack{};
+    std::vector<std::string> animationPresetStack{};
 };
 
 std::string normalizeStyleRef(std::string_view raw) {
@@ -554,26 +557,6 @@ std::string normalizeStyleRef(std::string_view raw) {
     return ref;
 }
 
-std::string normalizeThemeRef(std::string_view raw) {
-    std::string ref = toLowerAscii(std::string(raw));
-    if (ref.size() > 3U && ref.front() == '{' && ref.back() == '}') {
-        ref = ref.substr(1U, ref.size() - 2U);
-    }
-    if (ref.rfind("@theme.", 0) == 0U) {
-        return ref.substr(std::string("@theme.").size());
-    }
-    if (ref.rfind("@themes.", 0) == 0U) {
-        return ref.substr(std::string("@themes.").size());
-    }
-    if (ref.rfind("theme.", 0) == 0U) {
-        return ref.substr(std::string("theme.").size());
-    }
-    if (ref.rfind("themes.", 0) == 0U) {
-        return ref.substr(std::string("themes.").size());
-    }
-    return ref;
-}
-
 std::string normalizeEffectPresetRef(std::string_view raw) {
     std::string ref = toLowerAscii(std::string(raw));
     if (ref.rfind("@effects.", 0) == 0U) {
@@ -581,6 +564,17 @@ std::string normalizeEffectPresetRef(std::string_view raw) {
     }
     if (ref.rfind("effects.", 0) == 0U) {
         return ref.substr(std::string("effects.").size());
+    }
+    return ref;
+}
+
+std::string normalizeAnimationPresetRef(std::string_view raw) {
+    std::string ref = toLowerAscii(std::string(raw));
+    if (ref.rfind("@animations.", 0) == 0U) {
+        return ref.substr(std::string("@animations.").size());
+    }
+    if (ref.rfind("animations.", 0) == 0U) {
+        return ref.substr(std::string("animations.").size());
     }
     return ref;
 }
@@ -629,14 +623,11 @@ const JsonValue* resolveThemeToken(const ParseContext* context, std::string_view
     if (!context || !context->themeRoot) {
         return nullptr;
     }
-    const std::string lowered = toLowerAscii(std::string(raw));
-    const bool startsWithRef = lowered.rfind("@theme.", 0) == 0U || lowered.rfind("@themes.", 0) == 0U ||
-                               lowered.rfind("{@theme.", 0) == 0U || lowered.rfind("{@themes.", 0) == 0U ||
-                               lowered.rfind("theme.", 0) == 0U || lowered.rfind("themes.", 0) == 0U;
-    if (!startsWithRef) {
+    const auto keyOpt = UiTokenResolver::normalizeThemeRef(raw);
+    if (!keyOpt) {
         return nullptr;
     }
-    const std::string key = normalizeThemeRef(raw);
+    const std::string& key = *keyOpt;
     if (key.empty()) {
         return nullptr;
     }
@@ -644,10 +635,7 @@ const JsonValue* resolveThemeToken(const ParseContext* context, std::string_view
 }
 
 bool looksLikeThemeToken(std::string_view raw) {
-    const std::string lowered = toLowerAscii(std::string(raw));
-    return lowered.rfind("@theme.", 0) == 0U || lowered.rfind("@themes.", 0) == 0U ||
-           lowered.rfind("{@theme.", 0) == 0U || lowered.rfind("{@themes.", 0) == 0U ||
-           lowered.rfind("theme.", 0) == 0U || lowered.rfind("themes.", 0) == 0U;
+    return UiTokenResolver::normalizeThemeRef(raw).has_value();
 }
 
 const JsonValue* findStyleNode(const JsonValue& stylesRoot, std::string_view rawRef) {
@@ -675,6 +663,17 @@ const JsonValue* findEffectPresetNode(const JsonValue& effectsRoot, std::string_
         return nullptr;
     }
     return findDottedNode(effectsRoot, key);
+}
+
+const JsonValue* findAnimationPresetNode(const JsonValue& animationsRoot, std::string_view rawRef) {
+    if (animationsRoot.type != JsonValue::Type::Object) {
+        return nullptr;
+    }
+    const std::string key = normalizeAnimationPresetRef(rawRef);
+    if (key.empty()) {
+        return nullptr;
+    }
+    return findDottedNode(animationsRoot, key);
 }
 
 void mergeStyleObjectMap(JsonValue& dstStyles, const JsonValue& srcStyles) {
@@ -878,6 +877,117 @@ bool applyEffectSpecObject(const JsonValue& effectObject,
     return true;
 }
 
+bool applyAnimationSpecObject(const JsonValue& animObject,
+                              UiLayoutNode& outNode,
+                              ParseContext* context,
+                              const std::string& path,
+                              std::string& errorOut) {
+    if (animObject.type != JsonValue::Type::Object) {
+        errorOut = path + " must be object";
+        return false;
+    }
+
+    if (const JsonValue* preset = findObjectField(animObject, "preset")) {
+        if (preset->type != JsonValue::Type::String || preset->stringValue.empty()) {
+            errorOut = path + ".preset expects non-empty string";
+            return false;
+        }
+        if (!context || !context->animationsRoot) {
+            errorOut = path + ".preset requires animations catalog";
+            return false;
+        }
+        const std::string presetKey = normalizeAnimationPresetRef(preset->stringValue);
+        if (presetKey.empty()) {
+            errorOut = path + ".preset contains empty reference";
+            return false;
+        }
+        if (std::find(context->animationPresetStack.begin(), context->animationPresetStack.end(), presetKey) !=
+            context->animationPresetStack.end()) {
+            errorOut = path + ".preset cyclic reference: " + presetKey;
+            return false;
+        }
+        const JsonValue* presetNode = findAnimationPresetNode(*context->animationsRoot, preset->stringValue);
+        if (!presetNode) {
+            errorOut = path + ".preset unresolved: " + preset->stringValue;
+            return false;
+        }
+        context->animationPresetStack.push_back(presetKey);
+        const bool ok = applyAnimationSpecObject(*presetNode,
+                                                 outNode,
+                                                 context,
+                                                 path + ".preset(" + preset->stringValue + ")",
+                                                 errorOut);
+        context->animationPresetStack.pop_back();
+        if (!ok) {
+            return false;
+        }
+    }
+
+    for (const auto& [animKey, rawAnimVal] : animObject.objectValue) {
+        if (animKey == "preset") {
+            continue;
+        }
+        const JsonValue* animValPtr = &rawAnimVal;
+        if (rawAnimVal.type == JsonValue::Type::String) {
+            if (const JsonValue* themed = resolveThemeToken(context, rawAnimVal.stringValue)) {
+                animValPtr = themed;
+            } else if (looksLikeThemeToken(rawAnimVal.stringValue)) {
+                errorOut = path + "." + animKey + " unresolved theme token: " + rawAnimVal.stringValue;
+                return false;
+            }
+        }
+        const JsonValue& animVal = *animValPtr;
+
+        if (animKey == "mode") {
+            if (animVal.type != JsonValue::Type::String || animVal.stringValue.empty()) {
+                errorOut = path + ".mode expects non-empty string";
+                return false;
+            }
+            const std::string mode = toLowerAscii(animVal.stringValue);
+            if (mode != "loop" && mode != "scrub") {
+                errorOut = path + ".mode expects loop|scrub";
+                return false;
+            }
+            outNode.animMode = mode;
+            continue;
+        }
+        if (animKey == "fps") {
+            float fps = 0.0f;
+            if (!parseFloatNumber(animVal, fps)) {
+                errorOut = path + ".fps expects number";
+                return false;
+            }
+            if (!std::isfinite(fps) || fps <= 0.0f) {
+                errorOut = path + ".fps must be > 0";
+                return false;
+            }
+            outNode.animFps = fps;
+            continue;
+        }
+        if (animKey == "frames") {
+            if (animVal.type != JsonValue::Type::Array) {
+                errorOut = path + ".frames expects array";
+                return false;
+            }
+            outNode.animFrames.clear();
+            outNode.animFrames.reserve(animVal.arrayValue.size());
+            for (std::size_t i = 0; i < animVal.arrayValue.size(); ++i) {
+                const JsonValue& frame = animVal.arrayValue[i];
+                if (frame.type != JsonValue::Type::String || frame.stringValue.empty()) {
+                    errorOut = path + ".frames[" + std::to_string(i) + "] expects non-empty string";
+                    return false;
+                }
+                outNode.animFrames.push_back(frame.stringValue);
+            }
+            continue;
+        }
+        errorOut = path + ": unsupported key '" + animKey + "'";
+        return false;
+    }
+
+    return true;
+}
+
 bool parseNode(const JsonValue& nodeValue,
                UiLayoutNode& out,
                std::string& errorOut,
@@ -945,6 +1055,44 @@ bool parseNode(const JsonValue& nodeValue,
             if (!ok) {
                 return false;
             }
+        }
+    }
+
+    // anim_ref разворачиваем в поля animMode/animFps/animFrames до локальных
+    // override полей ноды. Приоритет у локальных anim_* ключей ниже.
+    if (const JsonValue* animRef = findObjectField(nodeValue, "anim_ref")) {
+        if (!context || !context->animationsRoot) {
+            errorOut = path + ".anim_ref requires animations catalog";
+            return false;
+        }
+        if (animRef->type != JsonValue::Type::String || animRef->stringValue.empty()) {
+            errorOut = path + ".anim_ref expects non-empty string";
+            return false;
+        }
+        const std::string key = normalizeAnimationPresetRef(animRef->stringValue);
+        if (key.empty()) {
+            errorOut = path + ".anim_ref contains empty reference";
+            return false;
+        }
+        if (std::find(context->animationPresetStack.begin(), context->animationPresetStack.end(), key) !=
+            context->animationPresetStack.end()) {
+            errorOut = path + ".anim_ref cyclic reference: " + key;
+            return false;
+        }
+        const JsonValue* animNode = findAnimationPresetNode(*context->animationsRoot, animRef->stringValue);
+        if (!animNode) {
+            errorOut = path + ".anim_ref unresolved: " + animRef->stringValue;
+            return false;
+        }
+        context->animationPresetStack.push_back(key);
+        const bool ok = applyAnimationSpecObject(*animNode,
+                                                 out,
+                                                 context,
+                                                 path + ".anim_ref(" + animRef->stringValue + ")",
+                                                 errorOut);
+        context->animationPresetStack.pop_back();
+        if (!ok) {
+            return false;
         }
     }
 
@@ -1054,6 +1202,14 @@ bool parseNode(const JsonValue& nodeValue,
                 outState.backgroundColor = value.stringValue;
                 continue;
             }
+            if (key == "playhead_color") {
+                if (value.type != JsonValue::Type::String) {
+                    errorOut = statePath + ".playhead_color expects string";
+                    return false;
+                }
+                outState.playheadColor = value.stringValue;
+                continue;
+            }
             if (key == "font") {
                 if (value.type != JsonValue::Type::String) {
                     errorOut = statePath + ".font expects string";
@@ -1091,6 +1247,9 @@ bool parseNode(const JsonValue& nodeValue,
             continue;
         }
         if (key == "style_ref") {
+            continue;
+        }
+        if (key == "anim_ref") {
             continue;
         }
         const JsonValue* valuePtr = &rawValue;
@@ -1171,6 +1330,14 @@ bool parseNode(const JsonValue& nodeValue,
             out.backgroundColor = value.stringValue;
             continue;
         }
+        if (key == "playhead_color") {
+            if (value.type != JsonValue::Type::String) {
+                errorOut = path + ".playhead_color expects string";
+                return false;
+            }
+            out.playheadColor = value.stringValue;
+            continue;
+        }
         if (key == "default_text_color") {
             if (value.type != JsonValue::Type::String) {
                 errorOut = path + ".default_text_color expects string";
@@ -1200,6 +1367,82 @@ bool parseNode(const JsonValue& nodeValue,
             if (!parseEffectsArrayForNode(value, "effects", out.effects)) {
                 return false;
             }
+            continue;
+        }
+        if (key == "anim") {
+            if (!applyAnimationSpecObject(value, out, context, path + ".anim", errorOut)) {
+                return false;
+            }
+            continue;
+        }
+        if (key == "anim_mode") {
+            if (value.type != JsonValue::Type::String || value.stringValue.empty()) {
+                errorOut = path + ".anim_mode expects non-empty string";
+                return false;
+            }
+            const std::string mode = toLowerAscii(value.stringValue);
+            if (mode != "loop" && mode != "scrub") {
+                errorOut = path + ".anim_mode expects loop|scrub";
+                return false;
+            }
+            out.animMode = mode;
+            continue;
+        }
+        if (key == "anim_fps") {
+            float fps = 0.0f;
+            if (!parseFloatNumber(value, fps)) {
+                errorOut = path + ".anim_fps expects number";
+                return false;
+            }
+            if (!std::isfinite(fps) || fps <= 0.0f) {
+                errorOut = path + ".anim_fps must be > 0";
+                return false;
+            }
+            out.animFps = fps;
+            continue;
+        }
+        if (key == "anim_frames") {
+            if (value.type != JsonValue::Type::Array) {
+                errorOut = path + ".anim_frames expects array";
+                return false;
+            }
+            out.animFrames.clear();
+            out.animFrames.reserve(value.arrayValue.size());
+            for (std::size_t i = 0; i < value.arrayValue.size(); ++i) {
+                const JsonValue& frame = value.arrayValue[i];
+                if (frame.type != JsonValue::Type::String || frame.stringValue.empty()) {
+                    errorOut = path + ".anim_frames[" + std::to_string(i) + "] expects non-empty string";
+                    return false;
+                }
+                out.animFrames.push_back(frame.stringValue);
+            }
+            continue;
+        }
+        if (key == "anim_show_frame") {
+            bool v = false;
+            if (!parseBool(value, v)) {
+                errorOut = path + ".anim_show_frame expects bool";
+                return false;
+            }
+            out.animShowFrame = v;
+            continue;
+        }
+        if (key == "anim_frame_width") {
+            float v = 0.0f;
+            if (!parseFloatNumber(value, v)) {
+                errorOut = path + ".anim_frame_width expects number";
+                return false;
+            }
+            out.animFrameWidth = std::clamp(v, 0.0f, 16.0f);
+            continue;
+        }
+        if (key == "anim_frame_radius") {
+            float v = 0.0f;
+            if (!parseFloatNumber(value, v)) {
+                errorOut = path + ".anim_frame_radius expects number";
+                return false;
+            }
+            out.animFrameRadius = std::clamp(v, 0.0f, 64.0f);
             continue;
         }
         if (key == "active") {
@@ -1407,6 +1650,7 @@ bool parseTemplate(const JsonValue& root,
                    const JsonValue* externalThemes,
                    const JsonValue* externalStyles,
                    const JsonValue* externalEffects,
+                   const JsonValue* externalAnimations,
                    UiLayoutTemplate& out,
                    std::string& errorOut) {
     if (root.type != JsonValue::Type::Object) {
@@ -1478,10 +1722,24 @@ bool parseTemplate(const JsonValue& root,
         mergeStyleObjectMap(mergedEffects, *inlineEffects);
     }
 
+    JsonValue mergedAnimations{};
+    mergedAnimations.type = JsonValue::Type::Object;
+    if (externalAnimations && externalAnimations->type == JsonValue::Type::Object) {
+        mergedAnimations = *externalAnimations;
+    }
+    if (const JsonValue* inlineAnimations = findObjectField(root, "animations")) {
+        if (inlineAnimations->type != JsonValue::Type::Object) {
+            errorOut = "top-level animations must be object";
+            return false;
+        }
+        mergeStyleObjectMap(mergedAnimations, *inlineAnimations);
+    }
+
     ParseContext context{};
     context.stylesRoot = mergedStyles.objectValue.empty() ? nullptr : &mergedStyles;
     context.themeRoot = mergedThemes.objectValue.empty() ? nullptr : &mergedThemes;
     context.effectsRoot = mergedEffects.objectValue.empty() ? nullptr : &mergedEffects;
+    context.animationsRoot = mergedAnimations.objectValue.empty() ? nullptr : &mergedAnimations;
 
     out = UiLayoutTemplate{};
     out.widgetId = id->stringValue;
@@ -1607,10 +1865,15 @@ bool UiLayoutJsonLoader::loadFromFile(const std::string& path,
     if (!loadCatalogFromAncestors(path, "effects.json", "effects", "", effects, errorOut)) {
         return false;
     }
+    JsonValue animations{};
+    if (!loadCatalogFromAncestors(path, "animations.json", "animations", "", animations, errorOut)) {
+        return false;
+    }
     const JsonValue* themesPtr = themes.objectValue.empty() ? nullptr : &themes;
     const JsonValue* stylesPtr = styles.objectValue.empty() ? nullptr : &styles;
     const JsonValue* effectsPtr = effects.objectValue.empty() ? nullptr : &effects;
-    return parseTemplate(root, themesPtr, stylesPtr, effectsPtr, out, errorOut);
+    const JsonValue* animationsPtr = animations.objectValue.empty() ? nullptr : &animations;
+    return parseTemplate(root, themesPtr, stylesPtr, effectsPtr, animationsPtr, out, errorOut);
 }
 
 bool UiLayoutJsonLoader::loadFromString(std::string_view content,
@@ -1621,7 +1884,7 @@ bool UiLayoutJsonLoader::loadFromString(std::string_view content,
     if (!parser.parse(root, errorOut)) {
         return false;
     }
-    return parseTemplate(root, nullptr, nullptr, nullptr, out, errorOut);
+    return parseTemplate(root, nullptr, nullptr, nullptr, nullptr, out, errorOut);
 }
 
 } // namespace avantgarde

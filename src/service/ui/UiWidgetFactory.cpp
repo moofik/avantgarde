@@ -14,7 +14,10 @@
 #include "service/ui/widgets/FxListWidget.h"
 #include "service/ui/UiLayoutJsonLoader.h"
 #include "service/ui/widgets/ManagerWidget.h"
+#include "service/ui/widgets/PatternEditWidget.h"
 #include "service/ui/widgets/SampleEditWidget.h"
+#include "service/ui/widgets/SampleWidgetContextMenuWidget.h"
+#include "service/ui/widgets/SequencerWidget.h"
 #include "service/ui/widgets/TrackContextMenuWidget.h"
 #include "service/ui/widgets/TracksWidget.h"
 
@@ -86,6 +89,10 @@ std::unique_ptr<IUiWidget> UiWidgetFactory::create(UiScene scene) const {
                     .trimStep = 0.01f,
                     .layoutTemplate = loadTemplateOrThrow(options_, "sample_edit.json"),
                 });
+        case UiScene::SampleContextMenu:
+            return std::make_unique<SampleWidgetContextMenuWidget>(
+                options_.frameWidth,
+                loadTemplateOrThrow(options_, "sample_menu.json"));
         case UiScene::Manager:
             // Файловый менеджер использует только ширину рамки.
             return std::make_unique<ManagerWidget>(
@@ -112,6 +119,26 @@ std::unique_ptr<IUiWidget> UiWidgetFactory::create(UiScene scene) const {
                 std::move(baseLayout),
                 std::move(profileLayouts));
         }
+        case UiScene::Sequencer:
+            return std::make_unique<SequencerWidget>(
+                SequencerWidget::Options{
+                    .frameWidth = options_.frameWidth,
+                    .mode = SequencerWidget::Mode::List,
+                    .layoutTemplate = loadTemplateOrThrow(options_, "sequencer.json"),
+                });
+        case UiScene::SequencerLane:
+            return std::make_unique<SequencerWidget>(
+                SequencerWidget::Options{
+                    .frameWidth = options_.frameWidth,
+                    .mode = SequencerWidget::Mode::Lane,
+                    .layoutTemplate = loadTemplateOrThrow(options_, "sequencer_lane.json"),
+                });
+        case UiScene::PatternEdit:
+            return std::make_unique<PatternEditWidget>(
+                PatternEditWidget::Options{
+                    .frameWidth = options_.frameWidth,
+                    .layoutTemplate = loadTemplateOrThrow(options_, "pattern_edit.json"),
+                });
         case UiScene::Count:
         default:
             return nullptr;

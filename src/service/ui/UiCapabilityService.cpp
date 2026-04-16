@@ -107,6 +107,8 @@ bool UiCapabilityService::isTargetSupported(std::string_view targetCanonical, st
             field == "playback_profile" ||
             field == "start" ||
             field == "end" ||
+            field == "tempo_sync" ||
+            field == "tempo.sync" ||
             field == "looper_mode" ||
             field == "looper.mode" ||
             field == "mute" ||

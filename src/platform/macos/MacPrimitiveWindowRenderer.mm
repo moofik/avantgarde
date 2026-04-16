@@ -14,6 +14,34 @@
 namespace avantgarde {
 namespace {
 
+#if __has_feature(objc_arc)
+template <typename T>
+T* retainObj(T* obj) {
+    return obj;
+}
+
+template <typename T>
+void releaseObj(T*& obj) {
+    obj = nil;
+}
+#else
+template <typename T>
+T* retainObj(T* obj) {
+    if (obj) {
+        [obj retain];
+    }
+    return obj;
+}
+
+template <typename T>
+void releaseObj(T*& obj) {
+    if (obj) {
+        [obj release];
+        obj = nil;
+    }
+}
+#endif
+
 NSColor* colorFromRgb(uint8_t r, uint8_t g, uint8_t b) {
     return [NSColor colorWithSRGBRed:static_cast<CGFloat>(r) / 255.0
                                green:static_cast<CGFloat>(g) / 255.0
@@ -143,25 +171,25 @@ MacPrimitiveWindowRenderer::MacPrimitiveWindowRenderer(UiTheme theme)
     [impl_->canvas setWantsLayer:YES];
 
     const UiThemePalette palette = uiThemePalette(theme);
-    impl_->bg = colorFromRgb(palette.bg.r, palette.bg.g, palette.bg.b);
-    impl_->panel = colorFromRgb(palette.panel.r, palette.panel.g, palette.panel.b);
-    impl_->mid = colorFromRgb(palette.mid.r, palette.mid.g, palette.mid.b);
-    impl_->text = colorFromRgb(palette.text.r, palette.text.g, palette.text.b);
+    impl_->bg = retainObj(colorFromRgb(palette.bg.r, palette.bg.g, palette.bg.b));
+    impl_->panel = retainObj(colorFromRgb(palette.panel.r, palette.panel.g, palette.panel.b));
+    impl_->mid = retainObj(colorFromRgb(palette.mid.r, palette.mid.g, palette.mid.b));
+    impl_->text = retainObj(colorFromRgb(palette.text.r, palette.text.g, palette.text.b));
 
     [[impl_->canvas layer] setBackgroundColor:impl_->bg.CGColor];
     [[impl_->window contentView] addSubview:impl_->canvas];
 
     NSArray<NSString*>* assetFonts = discoverAssetFontPostScriptNames();
-    impl_->bodyFont = pickFirstFont(
+    impl_->bodyFont = retainObj(pickFirstFont(
         @[ @"PressStart2P-Regular", @"Press Start 2P", @"Silkscreen-Regular", @"Menlo" ],
         11.0,
-        [NSFont monospacedSystemFontOfSize:11.0 weight:NSFontWeightRegular]);
-    impl_->gothicFont = pickFirstFont(
+        [NSFont monospacedSystemFontOfSize:11.0 weight:NSFontWeightRegular]));
+    impl_->gothicFont = retainObj(pickFirstFont(
         assetFonts,
         12.0,
         pickFirstFont(@[ @"UnifrakturCook-Bold", @"UnifrakturCook-Regular", @"Old English Text MT" ],
                       12.0,
-                      [NSFont boldSystemFontOfSize:12.0]));
+                      [NSFont boldSystemFontOfSize:12.0])));
 
 }
 
@@ -174,6 +202,18 @@ MacPrimitiveWindowRenderer::~MacPrimitiveWindowRenderer() {
         [impl_->window close];
         impl_->window = nil;
     }
+    for (auto& it : impl_->dynamicFontCache) {
+        NSFont* f = it.second;
+        releaseObj(f);
+        it.second = nil;
+    }
+    impl_->dynamicFontCache.clear();
+    releaseObj(impl_->bodyFont);
+    releaseObj(impl_->gothicFont);
+    releaseObj(impl_->bg);
+    releaseObj(impl_->panel);
+    releaseObj(impl_->mid);
+    releaseObj(impl_->text);
     impl_->canvas = nil;
     delete impl_;
     impl_ = nullptr;
@@ -187,34 +227,43 @@ void MacPrimitiveWindowRenderer::renderPreparedLayout(const UiPreparedLayout& pr
     if (!impl_) {
         return;
     }
-    macos::MacPrimitiveScenePaintContext ctx{};
-    ctx.canvas = impl_->canvas;
-    ctx.bodyFont = impl_->bodyFont;
-    ctx.gothicFont = impl_->gothicFont;
-    ctx.panel = impl_->panel;
-    ctx.mid = impl_->mid;
-    ctx.text = impl_->text;
-    ctx.cellW = impl_->cellW;
-    ctx.cellH = impl_->cellH;
-    ctx.margin = impl_->margin;
-    ctx.cwd = impl_->cwd;
-    ctx.dynamicFontCache = &impl_->dynamicFontCache;
-    ctx.visualFx = &impl_->visualFx;
-    macos::renderPreparedLayoutScene(ctx, prepared);
+    @autoreleasepool {
+        macos::MacPrimitiveScenePaintContext ctx{};
+        ctx.canvas = impl_->canvas;
+        ctx.bodyFont = impl_->bodyFont;
+        ctx.gothicFont = impl_->gothicFont;
+        ctx.panel = impl_->panel;
+        ctx.mid = impl_->mid;
+        ctx.text = impl_->text;
+        ctx.cellW = impl_->cellW;
+        ctx.cellH = impl_->cellH;
+        ctx.margin = impl_->margin;
+        ctx.cwd = impl_->cwd;
+        ctx.dynamicFontCache = &impl_->dynamicFontCache;
+        ctx.visualFx = &impl_->visualFx;
+        macos::renderPreparedLayoutScene(ctx, prepared);
+    }
 }
 
-void MacPrimitiveWindowRenderer::pumpEvents() noexcept {
-    for (;;) {
-        NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
-                                            untilDate:[NSDate dateWithTimeIntervalSinceNow:0.0]
-                                               inMode:NSDefaultRunLoopMode
-                                              dequeue:YES];
-        if (!event) {
-            break;
+bool MacPrimitiveWindowRenderer::pumpEvents() noexcept {
+    @autoreleasepool {
+        bool hadEvents = false;
+        for (;;) {
+            NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
+                                                untilDate:[NSDate dateWithTimeIntervalSinceNow:0.0]
+                                                   inMode:NSDefaultRunLoopMode
+                                                  dequeue:YES];
+            if (!event) {
+                break;
+            }
+            hadEvents = true;
+            [NSApp sendEvent:event];
         }
-        [NSApp sendEvent:event];
+        if (hadEvents) {
+            [NSApp updateWindows];
+        }
+        return hadEvents;
     }
-    [NSApp updateWindows];
 }
 
 } // namespace avantgarde

@@ -23,6 +23,7 @@ struct UiTargetResolution {
         TrackPlaybackProfile,
         TrackTrimStart,
         TrackTrimEnd,
+        TrackTempoSync,
         TrackLooperMode,
         TrackMute,
         TrackArm,

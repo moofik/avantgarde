@@ -7,6 +7,20 @@
 
 namespace avantgarde {
 
+// Канонические HUD-события, которые может отправлять любой слой UI через UiIntent.
+enum class UiHudIntentEvent : uint8_t {
+    None = 0,
+    SnapshotCaptured,
+    SnapshotApplied
+};
+
+// Уровень важности ad-hoc HUD-текста.
+enum class UiHudIntentLevel : uint8_t {
+    Info = 0,
+    Action,
+    Critical
+};
+
 // Команды высокого уровня от виджетов к application-layer dispatcher.
 // Виджеты создают intent, но не знают про конкретные runtime/control API.
 enum class UiIntentType : uint8_t {
@@ -54,6 +68,8 @@ enum class UiIntentType : uint8_t {
     SetTrackTrimStart,
     // Явная установка конечной границы playback-региона [0..1].
     SetTrackTrimEnd,
+    // Включить/выключить tempo sync выбранного трека (value: 1.0=on, 0.0=off).
+    SetTrackTempoSync,
     // Явная установка режима квантизации транспорта
     // (value: 0=None, 1=Beat, 2=Bar).
     SetTransportQuant,
@@ -61,7 +77,8 @@ enum class UiIntentType : uint8_t {
     SetTransportBpm,
     // Включить/выключить метроном проекта (value: 1.0=on, 0.0=off).
     SetMetronomeEnabled,
-    // Детект BPM из сэмпла активного трека с учетом его speed и установка project BPM.
+    // Детект BPM из сэмпла активного трека с учетом его speed и HUD-уведомление.
+    // Значение проекта не меняется.
     DetectProjectBpmFromTrack,
     // Явная установка play/stop транспорта (value: 1.0=play, 0.0=stop).
     SetTransportPlaying,
@@ -71,6 +88,51 @@ enum class UiIntentType : uint8_t {
     SwitchPatternNext,
     // Запрос на switch к конкретному паттерну (value = pattern id, 1..N).
     SwitchPatternSet,
+    // Переключить lane-focus режим секвенсора (value: 0/1).
+    SequencerSetLaneFocus,
+    // Выбрать активный lane секвенсора (value: lane index).
+    SequencerSetActiveLane,
+    // Выбрать активный объект внутри lane (value: object index).
+    SequencerSetActiveObject,
+    // Установить scrub tick в секвенсоре (value: absolute tick).
+    SequencerSetScrubTick,
+    // Сместить выбранный объект по времени (value: delta ticks).
+    SequencerNudgeObjectTime,
+    // Изменить значение выбранного объекта (automation/event payload).
+    SequencerAdjustObjectValue,
+    // Установить zoom tier секвенсора [1..8].
+    SequencerSetZoom,
+    // Установить tool/mode индекс секвенсора.
+    SequencerSetTool,
+    // Установить режим поведения на границе цикла паттерна:
+    // value: 1.0 = ResetOnLoop, 0.0 = Continue.
+    SequencerSetLoopMode,
+    // Установить длину паттерна в барах (четное число, кратное 2).
+    SequencerSetPatternLengthBars,
+    // Установить квантизацию секвенсора:
+    // value: 0=None, 1=1/16, 2=1/8, 3=1/4, 4=Bar.
+    SequencerSetQuant,
+    // Добавить точку/событие в текущей scrub позиции.
+    SequencerAddObjectAtCursor,
+    // Удалить выбранную точку/событие.
+    SequencerDeleteSelectedObject,
+    // Удалить выбранный lane целиком вместе со всеми связанными точками/событиями.
+    SequencerDeleteSelectedLane,
+    // Snapshot intent-ы (обрабатываются SnapshotManager-ом на уровне orchestration).
+    // Trigger: policy-based (capture/recall) для текущего режима и контекста.
+    SnapshotTriggerSlot,
+    // Явный capture в слот snapshot (slotIndex в snapshotSlot, track/fxSlot задают контекст).
+    SnapshotCaptureSlot,
+    // Явный recall из snapshot-слота (slotIndex в snapshotSlot).
+    SnapshotRecallSlot,
+    // Нотификация о том, что snapshot успешно captured.
+    SnapshotCaptured,
+    // Нотификация о том, что snapshot успешно applied.
+    SnapshotApplied,
+    // Показать HUD-уведомление через централизованный HUD manager.
+    // Если задан hudEvent != None, используется event-реестр HUD.
+    // Если hudEvent == None и hudText не пустой, показывается ad-hoc текст с hudLevel.
+    HudNotify,
     // Intent-обертки над текущими transport/track действиями движка.
     EnginePlayTrack,
     EngineStopTrack,
@@ -103,6 +165,23 @@ struct UiIntent {
     float value2{0.0f};
     // Путь к файлу (для load intents) или иной string payload.
     std::string path;
+    // Параметры preview для PreviewRequest:
+    // - speed: playback-inc preview-голоса,
+    // - start/end: нормализованный playback-регион [0..1],
+    // - gain: уровень preview-голоса [0..1] (обычно равен gain выбранного трека).
+    float previewSpeed{1.0f};
+    float previewStart01{0.0f};
+    float previewEnd01{1.0f};
+    float previewGain{1.0f};
+    // Snapshot slot [0..3] для snapshot-intent-ов.
+    uint8_t snapshotSlot{0};
+    // Поля HUD-intent (UiIntentType::HudNotify).
+    UiHudIntentEvent hudEvent{UiHudIntentEvent::None};
+    UiHudIntentLevel hudLevel{UiHudIntentLevel::Info};
+    // Доп. payload для event-нотификаций (например slot index для snapshot).
+    uint8_t hudSlot{0};
+    // Текст ad-hoc уведомления (если hudEvent == None).
+    std::string hudText{};
 };
 
 } // namespace avantgarde

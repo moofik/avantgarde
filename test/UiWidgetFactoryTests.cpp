@@ -10,8 +10,11 @@ TEST_CASE("UiWidgetFactory: default options load layouts from assets/ui/layouts"
     REQUIRE_NOTHROW(factory.create(UiScene::Tracks));
     REQUIRE_NOTHROW(factory.create(UiScene::TrackContext));
     REQUIRE_NOTHROW(factory.create(UiScene::SampleEdit));
+    REQUIRE_NOTHROW(factory.create(UiScene::SampleContextMenu));
     REQUIRE_NOTHROW(factory.create(UiScene::Manager));
     REQUIRE_NOTHROW(factory.create(UiScene::FxList));
     REQUIRE_NOTHROW(factory.create(UiScene::FxEditor));
+    REQUIRE_NOTHROW(factory.create(UiScene::Sequencer));
+    REQUIRE_NOTHROW(factory.create(UiScene::SequencerLane));
+    REQUIRE_NOTHROW(factory.create(UiScene::PatternEdit));
 }
-

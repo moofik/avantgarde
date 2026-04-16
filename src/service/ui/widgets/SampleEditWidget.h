@@ -48,6 +48,7 @@ private:
         std::string targetTrackGain{"param.track.selected.gain"};
         std::string targetTrackTrimStart{"param.track.selected.start"};
         std::string targetTrackTrimEnd{"param.track.selected.end"};
+        std::string targetTrackTempoSync{"param.track.selected.tempo_sync"};
     };
 
     static uint8_t clampTrack_(uint8_t track, std::size_t totalTracks) noexcept;

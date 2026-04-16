@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "ISequencer.h"
 #include "ITransport.h"
 #include "types.h"
 
@@ -69,6 +70,12 @@ struct PatternStepEvent {
 struct PatternState {
     PatternId id{kInvalidPatternId};
     PatternTransportSnapshot transport{};
+    // PPQ зафиксирован в контракте, но оставлен в state как поле для будущей миграции/версирования.
+    uint16_t ppq{kSequencerPpq};
+    // Рекомендуемая canonical-временная единица для editor/model слоя.
+    // RT может работать в sampleTime-домене, но source-of-truth секвенсора — ticks.
+    uint32_t lengthBars{64};
+    SequencerTick lengthTicks{static_cast<SequencerTick>(kSequencerPpq * 4u * 64u)};
     uint32_t lengthInSteps{64};
     uint16_t stepsPerBeat{4};
     std::vector<PatternTrackSnapshot> tracks{};
@@ -110,4 +117,3 @@ struct IPatternRuntimePlayer {
 };
 
 } // namespace avantgarde
-

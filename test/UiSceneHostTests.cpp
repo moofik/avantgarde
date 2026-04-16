@@ -2,6 +2,8 @@
 
 #include "service/ui/widgets/FxEditorWidget.h"
 #include "service/ui/widgets/FxListWidget.h"
+#include "service/ui/widgets/PatternEditWidget.h"
+#include "service/ui/widgets/SequencerWidget.h"
 #include "service/ui/widgets/TrackContextMenuWidget.h"
 #include "service/ui/widgets/TracksWidget.h"
 #include "service/ui/UiSceneHost.h"
@@ -414,4 +416,150 @@ TEST_CASE("UiSceneHost: apply on Track Select opens TrackContext scene") {
     REQUIRE(out.intents[0].resetCursor);
     REQUIRE(out.intents[0].resetScroll);
     REQUIRE(out.intents[0].resetSceneActionIndex);
+}
+
+TEST_CASE("UiSceneHost: D emits delete intent in SequencerLane") {
+    UiSceneHost host;
+    SequencerWidget::Options laneOptions{};
+    laneOptions.mode = SequencerWidget::Mode::Lane;
+    REQUIRE(host.registerWidget(UiScene::SequencerLane, std::make_unique<SequencerWidget>(laneOptions)));
+
+    UiState state{};
+    state.sequencer.lanes.resize(1);
+    state.sequencer.lanes[0].kind = UiSequencerLaneKind::Automation;
+    state.sequencer.points.resize(1);
+    state.sequencer.points[0].value = 0.5f;
+    state.sequencer.points[0].tick = 120;
+    host.setScene(UiScene::SequencerLane);
+
+    const WidgetOutput out = host.handleGesture(UiGesture::DeleteObject, state);
+    REQUIRE(out.handled);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::SequencerDeleteSelectedObject);
+}
+
+TEST_CASE("UiSceneHost: D emits delete-lane intent in Sequencer list view") {
+    UiSceneHost host;
+    SequencerWidget::Options listOptions{};
+    listOptions.mode = SequencerWidget::Mode::List;
+    REQUIRE(host.registerWidget(UiScene::Sequencer, std::make_unique<SequencerWidget>(listOptions)));
+
+    UiState state{};
+    state.sequencer.lanes.resize(1);
+    state.sequencer.lanes[0].kind = UiSequencerLaneKind::Automation;
+    host.setScene(UiScene::Sequencer);
+
+    const WidgetOutput out = host.handleGesture(UiGesture::DeleteObject, state);
+    REQUIRE(out.handled);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::SequencerDeleteSelectedLane);
+}
+
+TEST_CASE("UiSceneHost: F1 deletes when selected scene action is Delete in SequencerLane") {
+    UiSceneHost host;
+    SequencerWidget::Options laneOptions{};
+    laneOptions.mode = SequencerWidget::Mode::Lane;
+    REQUIRE(host.registerWidget(UiScene::SequencerLane, std::make_unique<SequencerWidget>(laneOptions)));
+
+    UiState state{};
+    state.sequencer.lanes.resize(1);
+    state.sequencer.lanes[0].kind = UiSequencerLaneKind::Automation;
+    state.sequencer.points.resize(1);
+    state.sequencer.points[0].value = 0.5f;
+    state.sequencer.points[0].tick = 120;
+    host.setScene(UiScene::SequencerLane);
+
+    SequencerWidget probe(laneOptions);
+    UiNavState probeNav = host.nav();
+    const UiActionCatalog catalog = probe.queryAvailableActions(state, probeNav);
+    int deleteIdx = -1;
+    for (std::size_t i = 0; i < catalog.actions.size(); ++i) {
+        if (catalog.actions[i].def.id == UiAction::Id::SceneSequencerDeleteObject) {
+            deleteIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    REQUIRE(deleteIdx >= 0);
+    host.nav().sceneActionIndex = static_cast<uint16_t>(deleteIdx);
+
+    const WidgetOutput out = host.handleGesture(UiGesture::F1, state);
+    REQUIRE(out.handled);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::SequencerDeleteSelectedObject);
+}
+
+TEST_CASE("UiSceneHost: F1 deletes lane when selected scene action is Delete in Sequencer list") {
+    UiSceneHost host;
+    SequencerWidget::Options listOptions{};
+    listOptions.mode = SequencerWidget::Mode::List;
+    REQUIRE(host.registerWidget(UiScene::Sequencer, std::make_unique<SequencerWidget>(listOptions)));
+
+    UiState state{};
+    state.sequencer.lanes.resize(1);
+    state.sequencer.lanes[0].kind = UiSequencerLaneKind::Automation;
+    host.setScene(UiScene::Sequencer);
+
+    SequencerWidget probe(listOptions);
+    UiNavState probeNav = host.nav();
+    const UiActionCatalog catalog = probe.queryAvailableActions(state, probeNav);
+    int deleteIdx = -1;
+    for (std::size_t i = 0; i < catalog.actions.size(); ++i) {
+        if (catalog.actions[i].def.id == UiAction::Id::SceneSequencerDeleteObject) {
+            deleteIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    REQUIRE(deleteIdx >= 0);
+    host.nav().sceneActionIndex = static_cast<uint16_t>(deleteIdx);
+
+    const WidgetOutput out = host.handleGesture(UiGesture::F1, state);
+    REQUIRE(out.handled);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::SequencerDeleteSelectedLane);
+}
+
+TEST_CASE("UiSceneHost: Back from SequencerLane goes to Tracks") {
+    UiSceneHost host;
+    SequencerWidget::Options laneOptions{};
+    laneOptions.mode = SequencerWidget::Mode::Lane;
+    REQUIRE(host.registerWidget(UiScene::SequencerLane, std::make_unique<SequencerWidget>(laneOptions)));
+
+    UiState state{};
+    state.sequencer.lanes.resize(1);
+    state.sequencer.lanes[0].kind = UiSequencerLaneKind::Automation;
+    host.setScene(UiScene::SequencerLane);
+
+    const WidgetOutput out = host.handleGesture(UiGesture::BackScene, state);
+    REQUIRE(out.handled);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::Back);
+    REQUIRE(out.intents[0].scene == UiScene::Tracks);
+}
+
+TEST_CASE("UiSceneHost: Shift+N opens PatternEdit scene") {
+    UiSceneHost host;
+    REQUIRE(host.registerWidget(UiScene::PatternEdit, std::make_unique<PatternEditWidget>()));
+
+    UiState state{};
+    host.setScene(UiScene::Tracks);
+    const WidgetOutput out = host.handleGesture(UiGesture::OpenPatternEdit, state);
+    REQUIRE(out.handled);
+    REQUIRE(out.intents.size() == 1);
+    REQUIRE(out.intents[0].type == UiIntentType::OpenScene);
+    REQUIRE(out.intents[0].scene == UiScene::PatternEdit);
+}
+
+TEST_CASE("UiSceneHost: Play/Stop hotkeys are ignored in SampleEdit scene") {
+    UiSceneHost host;
+    UiState state{};
+    state.tracks.resize(1);
+    host.nav().scene = UiScene::SampleEdit;
+
+    const WidgetOutput playOut = host.handleGesture(UiGesture::PlayActiveTrack, state);
+    REQUIRE(playOut.handled);
+    REQUIRE(playOut.intents.empty());
+
+    const WidgetOutput stopOut = host.handleGesture(UiGesture::StopActiveTrack, state);
+    REQUIRE(stopOut.handled);
+    REQUIRE(stopOut.intents.empty());
 }

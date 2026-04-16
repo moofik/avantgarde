@@ -219,6 +219,81 @@ struct IPatternRuntimePlayer {
 } // namespace avantgarde
 ```
 
+### 23.1) Sequencer MVP (AutomationLane) — зафиксированные правила
+- **Первая фаза** секвенсора: только `AutomationLane` (кривые параметров), transport-synced.
+- Временная база editor/model слоя: **ticks**.
+  - `PPQ = 96` (фикс для MVP).
+  - `Pattern.length` задается в барах и хранится как `lengthBars + lengthTicks`.
+- Минимальная модель таргета automation:
+  - `track / slot / module / param`.
+- Запись automation:
+  - UI-жест записи единый: `Record` (одна глобальная кнопка REC);
+  - используется один глобальный флаг `recordEnabled` (локальные REC-флаги не используются);
+  - в REC жест ручки формирует **один gesture-batch**;
+  - commit этого batch квантизируется по сетке секвенсора:
+    `NONE / 1/16 / 1/8 / 1/4 / BAR`;
+  - undo/redo работает **батчем по gesture**, а не по одной точке.
+- Playback automation:
+  - lane воспроизводится в RT-потоке как поток дискретных param-set команд;
+  - dispatch идет через существующий `ParamBridge / RtCommandQueue` путь.
+- **Правило конфликта на одном тике**:
+  - если в один и тот же квант приходят `EventLane` и `AutomationLane` для одного target,
+    сначала применяется `EventLane`, затем automation (детерминированный порядок).
+
+### 23.2) EventLane (фаза 2) — зафиксированные правила
+- `EventLane` хранит дискретные события:
+  - `fx bypass on/off`, `mute/unmute`, `pitch change`,
+  - `snapshot recall`,
+  - `note on/off` (резерв под следующую фазу).
+- Snapshot recall policy:
+  - в REC нажатие snapshot-кнопки пишет **событие recall(snapshotId)** в `EventLane`;
+  - в STOP/PLAY без REC — snapshot-кнопка обновляет содержимое snapshot-слота;
+  - событие хранит **ссылку на snapshotId**, а не полный дамп параметров;
+  - по умолчанию действует **live-reference** семантика (изменили snapshot → события с этим id
+    читают новое содержимое).
+- Предусмотрено 4 snapshot-слота для UX (`E/R/T/Y`) как базовый профиль управления.
+
+### 23.6) Sequencer UI (MVP)
+- Секвенсор разделен на две сцены:
+  - `Sequencer` — список lane-ов (lane list);
+  - `SequencerLane` — фокус на одном lane.
+- Из `Sequencer` пользователь выбирает lane и проваливается в `SequencerLane`.
+- `SequencerLane` использует процедурную отрисовку:
+  - automation lane -> кривая (waveform-представление значений по времени),
+  - event lane -> импульсный timeline-маркер событий.
+- Lanes — динамические (не фиксированный лимит): количество зависит от реально созданных lane-данных.
+
+### 23.3) Типизация EventLane payload (MVP+)
+- Для `EventLane` фиксируется типизированный payload (без `void*`/неявных полей):
+  - `SnapshotRecall { snapshotId }`
+  - `TrackMuteSet { muted }`
+  - `TrackArmSet { armed }`
+  - `FxBypassSet { bypass }`
+  - `TrackPitchSet { semitones }`
+  - `NoteOn { note, velocity, detune }`
+  - `NoteOff { note }`
+- В переходный период допускается совместимость с legacy-полями (`index/value/snapshotId`),
+  но canonical-модель для новых фич — payload.
+
+### 23.4) Undo/Redo политика секвенсора
+- Базовая единица undo/redo — **gesture transaction**.
+- Одна gesture может порождать batch операций (например, поворот ручки при REC).
+- Commit/undo/redo работают по батчу целиком, а не по одной точке/событию.
+
+### 23.5) Persistence (project save/load) — MVP
+- Для MVP сохраняется **весь проект** в `project.json`:
+  - transport state,
+  - patterns,
+  - lanes (automation/event),
+  - track state,
+  - FX chain + params,
+  - snapshot slots (E/R/T/Y).
+- WAV/аудио-данные не копируются в JSON:
+  - хранятся ссылки (`clipId`, `relativePath`, optional hash/length).
+- Обязательное поле: `schemaVersion` для миграций формата.
+- Восстановление проекта должно быть детерминированным:
+  - load -> состояние UI/движка совпадает с состоянием на момент save.
+
 ## 3) `IParameterized.h` — унификация параметров
 ```cpp
 #pragma once

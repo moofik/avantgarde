@@ -176,6 +176,20 @@ void TransportBridgeDualBuffer::advanceSampleTime(uint64_t frames) noexcept {
     transportRtSnapshot_.sampleTime += frames;
 }
 
+bool TransportBridgeDualBuffer::getSnapshot(SnapshotRecord& out) const noexcept {
+    out = SnapshotRecord{};
+    out.domain = SnapshotDomain::Transport;
+    out.entityId = kSnapshotEntityTransport;
+    out.transport.playing = playingWrite_.load(std::memory_order_relaxed);
+    out.transport.bpm = normalizeTempo(bpmWrite_.load(std::memory_order_relaxed));
+    out.transport.tsNum = normalizeTsNum(tsNumWrite_.load(std::memory_order_relaxed));
+    out.transport.tsDen = normalizeDenominator(tsDenWrite_.load(std::memory_order_relaxed));
+    out.transport.quant = static_cast<QuantizeMode>(quantWrite_.load(std::memory_order_relaxed));
+    out.transport.swing01 = normalizeSwing(swingWrite_.load(std::memory_order_relaxed));
+    out.transport.sampleTime = transportRtSnapshot_.sampleTime;
+    return true;
+}
+
 std::size_t TransportBridgeDualBuffer::getParamCount() const {
     return transportMeta().size();
 }

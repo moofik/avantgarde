@@ -50,8 +50,8 @@ public:
 
     // Считать накопленные события окна и положить их в общую очередь.
     bool readWindowEvents();
-    // Получить следующее событие ввода из общей очереди.
-    bool readNextInputEvent(UiGestureEvent& out);
+    // Получить следующее сырое input-событие из общей очереди.
+    bool readNextInputEvent(PrimitiveInputEvent& out);
 
     // Рендер готового состояния/кадра.
     void render(const UiState& state,
@@ -60,13 +60,13 @@ public:
 private:
     // Простейшая SPSC-подобная очередь для handoff input событий между потоками.
     struct InputEventQueue final {
-        void push(const UiGestureEvent& ev);
-        bool tryPop(UiGestureEvent& out);
+        void push(const PrimitiveInputEvent& ev);
+        bool tryPop(PrimitiveInputEvent& out);
 
         // Защита внутренней очереди.
         std::mutex mutex_{};
-        // Накопленные input события.
-        std::deque<UiGestureEvent> queue_{};
+        // Накопленные сырые input события.
+        std::deque<PrimitiveInputEvent> queue_{};
     };
 
     // Очередь входных событий из разных источников.

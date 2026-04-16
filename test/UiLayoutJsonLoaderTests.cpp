@@ -296,6 +296,54 @@ TEST_CASE("UiLayoutJsonLoader: resolves @theme and @effects preset references") 
     REQUIRE(tpl.root.children[0].effects[0].effectSpeed == Catch::Approx(0.75f));
 }
 
+TEST_CASE("UiLayoutJsonLoader: resolves anim_ref from animations catalog") {
+    const char* json = R"json(
+{
+  "id": "tracks",
+  "animations": {
+    "track": {
+      "bottle": {
+        "demo": {
+          "mode": "scrub",
+          "fps": 6,
+          "frames": ["sprites/bottle/1.png", "sprites/bottle/2.png", "sprites/bottle/3.png"]
+        }
+      }
+    }
+  },
+  "layout": {
+    "type": "column",
+    "children": [
+      {
+        "type": "anim_slot",
+        "id": "track_anim",
+        "bind": "track.selected.playhead",
+        "anim_ref": "@animations.track.bottle.demo",
+        "anim_fps": 10,
+        "anim_show_frame": false,
+        "anim_frame_width": 2,
+        "anim_frame_radius": 7
+      }
+    ]
+  }
+}
+)json";
+
+    UiLayoutTemplate tpl{};
+    std::string err{};
+    REQUIRE(UiLayoutJsonLoader::loadFromString(json, tpl, err));
+    REQUIRE(err.empty());
+    REQUIRE(tpl.root.children.size() == 1);
+    REQUIRE(tpl.root.children[0].type == UiLayoutNodeType::AnimSlot);
+    REQUIRE(tpl.root.children[0].animMode == "scrub");
+    REQUIRE(tpl.root.children[0].animFps == Catch::Approx(10.0f)); // Локальный override выше anim_ref.
+    REQUIRE(tpl.root.children[0].animFrames.size() == 3);
+    REQUIRE(tpl.root.children[0].animFrames[0] == "sprites/bottle/1.png");
+    REQUIRE_FALSE(tpl.root.children[0].animShowFrame);
+    REQUIRE(tpl.root.children[0].animFrameWidth == Catch::Approx(2.0f));
+    REQUIRE(tpl.root.children[0].animFrameRadius == Catch::Approx(7.0f));
+}
+
 TEST_CASE("UiLayoutJsonLoader: loads sibling styles.json for loadFromFile") {
     namespace fs = std::filesystem;
     const fs::path tempDir =

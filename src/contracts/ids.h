@@ -70,7 +70,13 @@ namespace avantgarde {
         StartNorm = 9,
         // Нормализованная точка конца playback-региона [0..1].
         // 1.0 = самый конец файла.
-        EndNorm = 10
+        EndNorm = 10,
+        // Read-only параметр для UI: текущая позиция playhead внутри trim-региона [0..1].
+        // Не используется для setParam (запись игнорируется runtime-слоем).
+        PlayheadNorm = 11,
+        // true: трек подстраивает playbackInc от transport BPM/TS и bars (tempo sync on).
+        // false: playbackInc полностью ручной и не меняется от BPM/TS.
+        TempoSyncEnabled = 12
     };
 
     // Track playback mode:
@@ -149,6 +155,18 @@ namespace avantgarde {
         Retrigger = 3
     };
 
+    // Параметры Buffer FX (super-glitch engine).
+    enum class BufferFxParamId : uint16_t {
+        Mix = 0,
+        SliceSize = 1,
+        Repeat = 2,
+        Speed = 3,
+        Jitter = 4,
+        BufferSize = 5,
+        Retrig = 6,
+        Reverse = 7
+    };
+
     enum class QuantizeCmdValue : uint8_t {
         None = 0,
         Beat = 1,
@@ -192,6 +210,10 @@ namespace avantgarde {
     }
 
     constexpr uint16_t toParamIndex(StutterParamId id) noexcept {
+        return static_cast<uint16_t>(id);
+    }
+
+    constexpr uint16_t toParamIndex(BufferFxParamId id) noexcept {
         return static_cast<uint16_t>(id);
     }
 

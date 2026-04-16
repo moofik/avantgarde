@@ -8,6 +8,7 @@
 #include "service/UiStateStore.h"
 
 namespace avantgarde {
+class HudNotificationsLayer;
 
 // Централизованный применитель UiIntent.
 // Важно:
@@ -24,6 +25,8 @@ public:
         std::vector<UiTrackStateView>& tracks;
         // UI-навигация (scene/cursor/scroll). Может быть nullptr в headless-тестах.
         UiNavState* nav{nullptr};
+        // HUD manager (может быть nullptr в headless/logic-only сценариях).
+        HudNotificationsLayer* hud{nullptr};
     };
 
     // Сформировать обратный intent для undo на основе текущего состояния.

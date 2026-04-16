@@ -40,6 +40,25 @@ struct UiNavState {
     std::string managerCwd{"."};
     // Текст фильтра в File Manager (имя/маска/расширение).
     std::string managerFilter;
+
+    // Sequencer View: true -> lane-focus editor, false -> lane list.
+    bool sequencerLaneFocused{false};
+    // Активный lane в списке секвенсора.
+    uint16_t sequencerLane{0};
+    // Активный объект внутри lane (точка/событие).
+    uint16_t sequencerObject{0};
+    // Scrub-позиция (tick) внутри активного паттерна.
+    uint32_t sequencerScrubTick{0};
+    // Zoom-тир [1..8] для coarse/fine шагов редактирования.
+    uint16_t sequencerZoom{1};
+    // Активный инструмент/режим (knob6).
+    uint16_t sequencerTool{0};
+
+    // Признак активного preview-голоса (UI-control слой, не RT-state).
+    // Используется для toggle-поведения PreviewPlay в SampleEdit/контекстных меню.
+    bool previewPlaying{false};
+    // Трек, для которого был запрошен последний preview.
+    uint8_t previewTrack{0};
 };
 
 } // namespace avantgarde

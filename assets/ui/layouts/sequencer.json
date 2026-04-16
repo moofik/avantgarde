@@ -1,0 +1,78 @@
+{
+  "id": "sequencer",
+  "layout": {
+    "type": "column",
+    "style_ref": "@styles.frame.root",
+    "padding": 0,
+    "gap": 0,
+    "width": 60,
+    "height": 24,
+    "children": [
+      {
+        "type": "statusbar",
+        "id": "header_title",
+        "text": "SEQUENCER",
+        "bind": "status.scene.title",
+        "style_ref": "@styles.header.title.base",
+        "height": 2
+      },
+      {
+        "type": "text",
+        "id": "sequencer_meta",
+        "bind": "status.sequencer.meta",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "text",
+        "id": "sequencer_state",
+        "bind": "status.sequencer.state",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "text",
+        "id": "sequencer_mode",
+        "bind": "status.sequencer.mode",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_top",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "text",
+        "id": "lanes_title",
+        "text": " LANES",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "list",
+        "id": "sequencer_lanes",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "text",
+        "id": "lane_timeline",
+        "bind": "lane_timeline",
+        "style_ref": "@styles.text.primary"
+      },
+      {
+        "type": "separator",
+        "id": "sep_bottom",
+        "style_ref": "@styles.separator.default"
+      },
+      {
+        "type": "text",
+        "id": "action_status",
+        "bind": "status.action",
+        "style_ref": "@styles.footer.action"
+      },
+      {
+        "type": "text",
+        "id": "keys_hint",
+        "bind": "status.keys",
+        "style_ref": "@styles.footer.keys"
+      }
+    ]
+  }
+}

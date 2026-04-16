@@ -63,6 +63,12 @@ struct ProbeTrack final : ITrack {
             }
         }
     }
+
+    bool getSnapshot(SnapshotRecord& out) const noexcept override {
+        out = SnapshotRecord{};
+        out.domain = SnapshotDomain::Track;
+        return true;
+    }
 };
 
 AudioProcessContext makeCtx(std::size_t nframes) {

@@ -100,10 +100,18 @@ namespace avantgarde {
             // Локальная копия контекста: в нее движок вкладывает transport snapshot
             // текущего блока, после чего эта же структура уходит во все RT-узлы.
             AudioProcessContext rtCtx = ctx;
+            if (rtCtx.numOut == 0) {
+                rtCtx.numOut = numOut_;
+            }
             // 0) очистка master out перед миксом
             // (по контракту ctx.out должен быть валидным, но можно добавить guard если хочешь)
-            for (uint32_t ch = 0; ch < numOut_; ++ch) {
-                std::memset(rtCtx.out[ch], 0, rtCtx.nframes * sizeof(float));
+            const uint32_t clearOut = std::min<uint32_t>(numOut_, rtCtx.numOut);
+            if (rtCtx.out != nullptr) {
+                for (uint32_t ch = 0; ch < clearOut; ++ch) {
+                    if (rtCtx.out[ch]) {
+                        std::memset(rtCtx.out[ch], 0, rtCtx.nframes * sizeof(float));
+                    }
+                }
             }
 
             // 1) Drain RT-команд (то, что пришло с control thread до начала блока)

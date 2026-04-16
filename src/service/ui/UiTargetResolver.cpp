@@ -116,6 +116,15 @@ UiTargetResolution resolveTrackTransportTarget(std::string_view key) {
         out.canonical = "param.track.selected.end";
         return out;
     }
+    if (key == "param.track.selected.tempo_sync" ||
+        key == "param.track.selected.tempo.sync" ||
+        key == "track.selected.tempo_sync" ||
+        key == "track.selected.tempo.sync") {
+        out.ok = true;
+        out.kind = UiTargetResolution::Kind::TrackTempoSync;
+        out.canonical = "param.track.selected.tempo_sync";
+        return out;
+    }
     if (key == "param.track.selected.looper.mode" ||
         key == "param.track.selected.looper_mode" ||
         key == "track.selected.looper.mode" ||

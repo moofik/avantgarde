@@ -77,6 +77,7 @@ struct UiAction {
         SceneTrackGain,
         SceneTrackTrimStart,
         SceneTrackTrimEnd,
+        SceneTrackTempoSync,
         SceneQuantize,
         SceneTempoBpm,
         ScenePatternPrev,
@@ -90,6 +91,11 @@ struct UiAction {
         SceneTrackMenuClear,
         SceneTrackMenuFxList,
         SceneTrackMenuSampleEdit,
+        SceneTrackMenuSequencer,
+        SceneTrackMenuPatternEdit,
+        SceneSampleMenuPreview,
+        SceneSampleMenuLoadSample,
+        SceneSampleMenuDetectBpm,
         SceneFxTypeSelect,
         SceneFxSlotSelect,
         SceneFxEnabled,
@@ -97,7 +103,20 @@ struct UiAction {
         SceneFxOpenEditor,
         SceneFxParamSelect,
         SceneFxParamValue,
-        SceneFxBack
+        SceneFxBack,
+        SceneSequencerLaneSelect,
+        SceneSequencerLaneFocus,
+        SceneSequencerScrub,
+        SceneSequencerObjectSelect,
+        SceneSequencerMoveObject,
+        SceneSequencerValue,
+        SceneSequencerLoopMode,
+        SceneSequencerPatternLength,
+        SceneSequencerQuant,
+        SceneSequencerZoom,
+        SceneSequencerTool,
+        SceneSequencerAddObject,
+        SceneSequencerDeleteObject
     };
 
     // Статическое описание экшена (что это за действие и как его исполнять).

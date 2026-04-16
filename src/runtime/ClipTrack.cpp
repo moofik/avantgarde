@@ -6,6 +6,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -256,9 +257,10 @@ namespace avantgarde {
 
     class ClipTrackImpl final : public IClipTrack {
     public:
-        explicit ClipTrackImpl(double outputSampleRate = 48000.0) noexcept
+        explicit ClipTrackImpl(double outputSampleRate = 48000.0, uint8_t trackId = 0) noexcept
             : moduleSampleRate_(sanitizeSampleRate_(outputSampleRate)),
-              outputSampleRate_(sanitizeSampleRate_(outputSampleRate)) {}
+              outputSampleRate_(sanitizeSampleRate_(outputSampleRate)),
+              trackId_(trackId) {}
         ~ClipTrackImpl() override = default;
 
         // ---- ITrack ----
@@ -272,11 +274,14 @@ namespace avantgarde {
             // outside-RT: module is fully prepared here
             mod->init(moduleSampleRate_, kFxScratchFrames);
             mod->reset();
-            modules_.push_back(std::move(mod));
-            moduleEnabled_.push_back(true);
+            std::shared_ptr<IAudioModule> shared(std::move(mod));
+            const std::lock_guard<std::mutex> lock(modulesMutex_);
+            modules_.push_back(std::move(shared));
+            moduleEnabled_.push_back(1U);
         }
 
         IAudioModule* getModule(std::size_t index) override {
+            const std::lock_guard<std::mutex> lock(modulesMutex_);
             if (index >= modules_.size()) return nullptr;
             return modules_[index].get();
         }
@@ -310,6 +315,10 @@ namespace avantgarde {
                     return detail_interp::clampf(playbackRt_.startNorm, 0.0f, 0.99f);
                 case TrackParamId::EndNorm:
                     return detail_interp::clampf(playbackRt_.endNorm, 0.01f, 1.0f);
+                case TrackParamId::PlayheadNorm:
+                    return detail_interp::clampf(uiPlayheadNorm_.load(std::memory_order_relaxed), 0.0f, 1.0f);
+                case TrackParamId::TempoSyncEnabled:
+                    return playbackRt_.stretchToBars ? 1.0f : 0.0f;
                 default:
                     return 0.0f;
             }
@@ -327,7 +336,19 @@ namespace avantgarde {
             return meta[index];
         }
 
+        bool getSnapshot(SnapshotRecord& out) const noexcept override {
+            TrackSnapshot track = snapshotCtl_;
+            track.bars = std::max<uint32_t>(1u, slotBars_.load(std::memory_order_relaxed));
+            track.clipRefId = clipRefId_.load(std::memory_order_relaxed);
+            out = SnapshotRecord{};
+            out.domain = SnapshotDomain::Track;
+            out.entityId = static_cast<int32_t>(trackId_);
+            out.track = track;
+            return true;
+        }
+
         bool removeModuleAt(std::size_t index) override {
+            const std::lock_guard<std::mutex> lock(modulesMutex_);
             if (index >= modules_.size()) {
                 return false;
             }
@@ -345,12 +366,11 @@ namespace avantgarde {
             if (!ctx.out || ctx.nframes == 0) return;
 
             // Контракт не даёт numOut в ctx.
-            // Для MVP считаем, что host даёт хотя бы 1 канал; второй — опционально.
-            float* out0 = ctx.out[0];
+            // Для безопасности используем явно переданное число выходных каналов.
+            const uint32_t outCh = (ctx.numOut > 0U) ? ctx.numOut : 1U;
+            float* out0 = (ctx.out && outCh > 0U) ? ctx.out[0] : nullptr;
             float* out1 = nullptr;
-            // аккуратно: out[1] может быть невалиден, но в нормальном host cfg.numOutput=2
-            // Если хочешь совсем безопасно — держи соглашение "всегда 2 канала".
-            if (ctx.out[1]) out1 = ctx.out[1];
+            if (ctx.out && outCh > 1U && ctx.out[1]) out1 = ctx.out[1];
 
             const ClipBuffer* clip = playbackRt_.clip;
             if (!clip || clip->frames <= 0 || !out0) return;
@@ -359,7 +379,11 @@ namespace avantgarde {
             // - followTransport=true  -> живем по глобальному transport.playing;
             // - followTransport=false -> живем по локальному one-shot gate.
             const bool runGate = playbackRt_.followTransport ? playbackRt_.transportRunning : playbackRt_.oneshotRunning;
-            if (!runGate) return;
+            if (!runGate) {
+                // Даже когда трек "молчит", UI должен видеть актуальную фазу трекового курсора.
+                uiPlayheadNorm_.store(computePlayheadNormRt_(), std::memory_order_relaxed);
+                return;
+            }
             const bool muted = playbackRt_.muted;
 
             const float* c0 = clip->ch[0];
@@ -388,16 +412,52 @@ namespace avantgarde {
                     : 1.0;
             const double inc = std::max(1e-6, clipToOutRate * speed * detuneRatio);
 
+            int64_t phaseResetFrameInBlock = -1;
+            double phaseResetPlayhead = ph;
+            constexpr double kPhaseResetFadeMs = 4.0;
+            const uint32_t phaseResetFadeSamples = static_cast<uint32_t>(
+                std::clamp<double>(std::round(outputSampleRate_ * (kPhaseResetFadeMs / 1000.0)), 2.0, 512.0));
+            if (playbackRt_.pendingPhaseResync && playbackRt_.clip && playbackRt_.loop) {
+                uint64_t dueSample = 0;
+                if (ctx.transportValid && ctx.transportPlaying) {
+                    dueSample = computeDueSampleRt_(ctx, outputSampleRate_);
+                } else {
+                    dueSample = ctx.transportSampleTime;
+                }
+                playbackRt_.pendingPhaseDueSample = dueSample;
+
+                const uint64_t blockStart = ctx.transportSampleTime;
+                const uint64_t blockEnd = blockStart + static_cast<uint64_t>(ctx.nframes);
+                if (dueSample <= blockStart) {
+                    phaseResetFrameInBlock = 0;
+                } else if (dueSample < blockEnd) {
+                    phaseResetFrameInBlock = static_cast<int64_t>(dueSample - blockStart);
+                }
+                if (phaseResetFrameInBlock >= 0) {
+                    const uint64_t resetSample = blockStart + static_cast<uint64_t>(phaseResetFrameInBlock);
+                    phaseResetPlayhead = computeTransportAlignedPlayheadRt_(resetSample);
+                    playbackRt_.pendingPhaseResync = false;
+                    playbackRt_.pendingPhaseDueSample = 0;
+                }
+            }
+
+            std::vector<std::shared_ptr<IAudioModule>> modulesSnapshot{};
+            std::vector<uint8_t> moduleEnabledSnapshot{};
+            {
+                const std::lock_guard<std::mutex> lock(modulesMutex_);
+                modulesSnapshot = modules_;
+                moduleEnabledSnapshot = moduleEnabled_;
+            }
             const bool hasEnabledFx =
-                !modules_.empty() &&
-                std::any_of(moduleEnabled_.begin(), moduleEnabled_.end(), [](bool e) { return e; });
+                !modulesSnapshot.empty() &&
+                std::any_of(moduleEnabledSnapshot.begin(), moduleEnabledSnapshot.end(), [](uint8_t e) { return e != 0U; });
             const bool hasFx = hasEnabledFx && !muted;
             if (hasFx) {
-                for (std::size_t i = 0; i < modules_.size(); ++i) {
-                    if (i < moduleEnabled_.size() && !moduleEnabled_[i]) {
+                for (std::size_t i = 0; i < modulesSnapshot.size(); ++i) {
+                    if (i < moduleEnabledSnapshot.size() && moduleEnabledSnapshot[i] == 0U) {
                         continue;
                     }
-                    modules_[i]->beginBlock();
+                    modulesSnapshot[i]->beginBlock();
                 }
             }
 
@@ -408,7 +468,20 @@ namespace avantgarde {
                    (playbackRt_.followTransport || playbackRt_.oneshotRunning)) {
                 const std::size_t chunk = std::min(kFxScratchFrames, ctx.nframes - offset);
                 const std::size_t produced =
-                    renderClipChunk_(chunk, c0, c1, len, loop, g, inc, regionStart, regionEnd, ph);
+                    renderClipChunk_(chunk,
+                                     c0,
+                                     c1,
+                                     len,
+                                     loop,
+                                     g,
+                                     inc,
+                                     regionStart,
+                                     regionEnd,
+                                     ph,
+                                     offset,
+                                     phaseResetFrameInBlock,
+                                     phaseResetPlayhead,
+                                     phaseResetFadeSamples);
                 if (produced == 0) {
                     break;
                 }
@@ -425,11 +498,11 @@ namespace avantgarde {
 
                 if (hasFx) {
                     bool useAasInput = true;
-                    for (std::size_t i = 0; i < modules_.size(); ++i) {
-                        if (i < moduleEnabled_.size() && !moduleEnabled_[i]) {
+                    for (std::size_t i = 0; i < modulesSnapshot.size(); ++i) {
+                        if (i < moduleEnabledSnapshot.size() && moduleEnabledSnapshot[i] == 0U) {
                             continue;
                         }
-                        auto& mod = modules_[i];
+                        auto& mod = modulesSnapshot[i];
                         const float* inPtrs[2];
                         float* outPtrs[2];
                         if (useAasInput) {
@@ -446,6 +519,7 @@ namespace avantgarde {
                         AudioProcessContext modCtx{};
                         modCtx.in = inPtrs;
                         modCtx.out = outPtrs;
+                        modCtx.numOut = 2U;
                         modCtx.nframes = produced;
                         // FX внутри трека должны видеть тот же transport snapshot,
                         // что и сам трек в текущем аудио-блоке.
@@ -478,6 +552,7 @@ namespace avantgarde {
             }
 
             playbackRt_.playhead = ph;
+            uiPlayheadNorm_.store(computePlayheadNormRt_(), std::memory_order_relaxed);
         }
 
         void onRtCommand(const RtCommand& cmd) noexcept override {
@@ -568,16 +643,41 @@ namespace avantgarde {
                 case CmdId::ParamSet: {
                     if (cmd.slot >= 0) {
                         const std::size_t fxSlot = static_cast<std::size_t>(cmd.slot);
-                        if (fxSlot < modules_.size()) {
-                            if (cmd.index == toParamIndex(FxCommonParamId::Enabled)) {
-                                if (fxSlot < moduleEnabled_.size()) {
-                                    moduleEnabled_[fxSlot] = (cmd.value >= 0.5f);
+                        std::shared_ptr<IAudioModule> mod{};
+                        bool handledFxParam = false;
+                        {
+                            const std::lock_guard<std::mutex> lock(modulesMutex_);
+                            if (fxSlot < modules_.size()) {
+                                handledFxParam = true;
+                                mod = modules_[fxSlot];
+                                if (cmd.index == toParamIndex(FxCommonParamId::Enabled)) {
+                                    if (fxSlot < moduleEnabled_.size()) {
+                                        moduleEnabled_[fxSlot] = (cmd.value >= 0.5f) ? 1U : 0U;
+                                    }
+                                    mod.reset();
                                 }
+                            }
+                        }
+                        if (handledFxParam) {
+                            if (cmd.index == toParamIndex(FxCommonParamId::Enabled)) {
                                 break;
                             }
-                            modules_[fxSlot]->setParam(cmd.index, detail_interp::clampf(cmd.value, 0.0f, 1.0f));
+                            if (mod) {
+                                mod->setParam(cmd.index, detail_interp::clampf(cmd.value, 0.0f, 1.0f));
+                            }
                             break;
                         }
+                        // Backward compatibility для старых тестов/клиентов:
+                        // раньше track ParamSet иногда приходил с slot=0.
+                        if (fxSlot == 0U &&
+                            cmd.index <= toParamIndex(TrackParamId::TempoSyncEnabled)) {
+                            applyTrackParam_(cmd.index, cmd.value);
+                            break;
+                        }
+                        // Слот FX был явно адресован, но в цепочке его больше нет.
+                        // Важно не фолбэкаться в track param apply, иначе можно
+                        // случайно мутировать параметры трека чужим index.
+                        break;
                     }
                     applyTrackParam_(cmd.index, cmd.value);
                 } break;
@@ -650,6 +750,8 @@ namespace avantgarde {
                 return false;
             }
 
+            clipRefId_.store(0u, std::memory_order_relaxed);
+            snapshotCtl_.clipRefId = 0u;
             return publishClipAndResetFx_(std::move(b));
         }
 
@@ -669,6 +771,8 @@ namespace avantgarde {
                 return false;
             }
 
+            clipRefId_.store(0u, std::memory_order_relaxed);
+            snapshotCtl_.clipRefId = 0u;
             return publishClipAndResetFx_(std::move(b));
         }
 
@@ -678,6 +782,8 @@ namespace avantgarde {
             clipCtl_.reset();
             pendingClip_.store(nullptr, std::memory_order_release);
             pendingClear_.store(true, std::memory_order_release);
+            clipRefId_.store(0u, std::memory_order_relaxed);
+            snapshotCtl_.clipRefId = 0u;
             return true;
         }
 
@@ -693,6 +799,9 @@ namespace avantgarde {
             if (bars < 1u) return false;
 
             slotBars_.store(bars, std::memory_order_relaxed);
+            snapshotCtl_.bars = std::max<uint32_t>(1u, bars);
+            // Исторически смена bars включает stretch-to-bars.
+            // Явное ручное отключение остается доступным через TrackParamId::TempoSyncEnabled.
             pendingStretchMode_.store(1, std::memory_order_release);
             pendingStretchRecalc_.store(true, std::memory_order_release);
             return true;
@@ -703,7 +812,58 @@ namespace avantgarde {
 
             // Контракт: только вне RT. Мы публикуем флаг в RT через pendingLoop_.
             pendingLoop_.store(loop ? 1u : 0u, std::memory_order_release);
+            snapshotCtl_.loopEnabled = loop;
             return true;
+        }
+
+        void setClipRefId(uint32_t clipRefId) noexcept override {
+            clipRefId_.store(clipRefId, std::memory_order_relaxed);
+            snapshotCtl_.clipRefId = clipRefId;
+        }
+
+        void mirrorParamForSnapshot(uint16_t paramIndex, float value) noexcept override {
+            if (paramIndex == toParamIndex(TrackParamId::Gain01)) {
+                snapshotCtl_.gain01 = detail_interp::clampf(value, 0.0f, 1.0f);
+                return;
+            }
+            if (paramIndex == toParamIndex(TrackParamId::PlaybackInc)) {
+                snapshotCtl_.playbackInc = detail_interp::clampf(value, 0.05f, 8.0f);
+                snapshotCtl_.tempoSync = false;
+                return;
+            }
+            if (paramIndex == toParamIndex(TrackParamId::MuteEnabled)) {
+                snapshotCtl_.muted = (value >= 0.5f);
+                return;
+            }
+            if (paramIndex == toParamIndex(TrackParamId::ArmEnabled)) {
+                snapshotCtl_.armed = (value >= 0.5f);
+                return;
+            }
+            if (paramIndex == toParamIndex(TrackParamId::LoopEnabled)) {
+                snapshotCtl_.loopEnabled = (value >= 0.5f);
+                return;
+            }
+            if (paramIndex == toParamIndex(TrackParamId::PlaybackMode)) {
+                snapshotCtl_.playbackMode = (value >= 0.5f) ? TrackPlaybackModeValue::Note : TrackPlaybackModeValue::Looper;
+                return;
+            }
+            if (paramIndex == toParamIndex(TrackParamId::StartNorm)) {
+                snapshotCtl_.trimStart01 = detail_interp::clampf(value, 0.0f, 0.99f);
+                if (snapshotCtl_.trimEnd01 <= snapshotCtl_.trimStart01 + 0.01f) {
+                    snapshotCtl_.trimEnd01 = std::min(1.0f, snapshotCtl_.trimStart01 + 0.01f);
+                }
+                return;
+            }
+            if (paramIndex == toParamIndex(TrackParamId::EndNorm)) {
+                snapshotCtl_.trimEnd01 = detail_interp::clampf(value, 0.01f, 1.0f);
+                if (snapshotCtl_.trimStart01 >= snapshotCtl_.trimEnd01 - 0.01f) {
+                    snapshotCtl_.trimStart01 = std::max(0.0f, snapshotCtl_.trimEnd01 - 0.01f);
+                }
+                return;
+            }
+            if (paramIndex == toParamIndex(TrackParamId::TempoSyncEnabled)) {
+                snapshotCtl_.tempoSync = (value >= 0.5f);
+            }
         }
 
     private:
@@ -718,10 +878,22 @@ namespace avantgarde {
                                      double inc,
                                      double regionStart,
                                      double regionEnd,
-                                     double& ph) noexcept {
+                                     double& ph,
+                                     std::size_t blockOffset,
+                                     int64_t phaseResetFrameInBlock,
+                                     double phaseResetPlayhead,
+                                     uint32_t phaseResetFadeSamples) noexcept {
             std::size_t produced = 0;
             const double span = std::max(1.0, regionEnd - regionStart);
             for (; produced < maxFrames; ++produced) {
+                const std::size_t absFrameInBlock = blockOffset + produced;
+                if (phaseResetFrameInBlock >= 0 &&
+                    absFrameInBlock == static_cast<std::size_t>(phaseResetFrameInBlock)) {
+                    ph = std::clamp(phaseResetPlayhead, regionStart, std::max(regionStart, regionEnd - 1.0));
+                    if (phaseResetFadeSamples > 0) {
+                        playbackRt_.phaseResetFadeInRemaining = phaseResetFadeSamples;
+                    }
+                }
                 if (ph < regionStart) {
                     ph = regionStart;
                 }
@@ -744,8 +916,25 @@ namespace avantgarde {
                 const float src0 = detail_interp::sampleCubic(c0, len, ph, loop);
                 const float src1 = c1 ? detail_interp::sampleCubic(c1, len, ph, loop) : src0;
 
-                fxA0_[produced] = src0 * gain;
-                fxA1_[produced] = src1 * gain;
+                float edgeFade = 1.0f;
+                if (phaseResetFrameInBlock >= 0 &&
+                    absFrameInBlock < static_cast<std::size_t>(phaseResetFrameInBlock) &&
+                    phaseResetFadeSamples > 0) {
+                    const std::size_t dist = static_cast<std::size_t>(phaseResetFrameInBlock) - absFrameInBlock;
+                    if (dist <= phaseResetFadeSamples) {
+                        edgeFade = std::min(edgeFade,
+                                            static_cast<float>(dist) / static_cast<float>(phaseResetFadeSamples));
+                    }
+                }
+                if (playbackRt_.phaseResetFadeInRemaining > 0 && phaseResetFadeSamples > 0) {
+                    const uint32_t done = phaseResetFadeSamples - playbackRt_.phaseResetFadeInRemaining;
+                    const float in = static_cast<float>(done + 1U) / static_cast<float>(phaseResetFadeSamples);
+                    edgeFade = std::min(edgeFade, detail_interp::clampf(in, 0.0f, 1.0f));
+                    --playbackRt_.phaseResetFadeInRemaining;
+                }
+
+                fxA0_[produced] = src0 * gain * edgeFade;
+                fxA1_[produced] = src1 * gain * edgeFade;
                 ph += inc;
             }
             return produced;
@@ -815,6 +1004,12 @@ namespace avantgarde {
             bool noteHeld = false;
             // Тонкая подстройка высоты для активной ноты, диапазон [-1..1] (~ +/-1 полутон).
             float noteDetuneNorm = 0.0f;
+            // Запрос на фазовый reset трека к транспортной сетке.
+            bool pendingPhaseResync = false;
+            // Квантизованный момент (transport sampleTime), когда reset должен сработать.
+            uint64_t pendingPhaseDueSample = 0;
+            // Остаток fade-in после phase-jump (в сэмплах), чтобы убрать щелчки.
+            uint32_t phaseResetFadeInRemaining = 0;
         };
 
         static TrackPlaybackModeValue parseTrackMode_(float value) noexcept {
@@ -888,8 +1083,8 @@ namespace avantgarde {
             return kNoMeta;
         }
 
-        static const std::array<ParamMeta, 11>& trackParamMeta_() {
-            static const std::array<ParamMeta, 11> kMeta{{
+        static const std::array<ParamMeta, 13>& trackParamMeta_() {
+            static const std::array<ParamMeta, 13> kMeta{{
                 ParamMeta{.name = "track.gain", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "norm"},
                 ParamMeta{.name = "track.loop", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
                 ParamMeta{.name = "track.playback_inc", .minValue = 0.05f, .maxValue = 8.0f, .logarithmic = false, .unit = "ratio"},
@@ -901,8 +1096,23 @@ namespace avantgarde {
                 ParamMeta{.name = "track.stop_policy", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "enum"},
                 ParamMeta{.name = "track.start_norm", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "norm"},
                 ParamMeta{.name = "track.end_norm", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "norm"},
+                ParamMeta{.name = "track.playhead_norm", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "readonly"},
+                ParamMeta{.name = "track.tempo_sync", .minValue = 0.0f, .maxValue = 1.0f, .logarithmic = false, .unit = "bool"},
             }};
             return kMeta;
+        }
+
+        float computePlayheadNormRt_() const noexcept {
+            const ClipBuffer* clip = playbackRt_.clip;
+            if (!clip || clip->frames <= 0) {
+                return 0.0f;
+            }
+            const double regionStart = clipRegionStartFrameRt_();
+            const double regionEnd = clipRegionEndFrameRt_();
+            const double span = std::max(1.0, regionEnd - regionStart);
+            const double ph = std::clamp(playbackRt_.playhead, regionStart, regionEnd);
+            const double norm = (ph - regionStart) / span;
+            return detail_interp::clampf(static_cast<float>(norm), 0.0f, 1.0f);
         }
 
         void applyTrackParam_(uint16_t index, float value) noexcept {
@@ -915,6 +1125,11 @@ namespace avantgarde {
                     playbackRt_.loop = (value >= 0.5f);
                     break;
                 case TrackParamId::PlaybackInc:
+                    if (playbackRt_.stretchToBars) {
+                        // При выходе из tempo-sync через ручной speed
+                        // ставим мягкий phase reset на ближайшую transport-сетку.
+                        requestQuantizedPhaseResetRt_();
+                    }
                     playbackRt_.playbackInc = detail_interp::clampf(value, 0.05f, 8.0f);
                     // Явная ручная скорость отключает авто-режим stretch-to-bars.
                     playbackRt_.stretchToBars = false;
@@ -970,6 +1185,17 @@ namespace avantgarde {
                         playbackRt_.playhead = clipRegionStartFrameRt_();
                     }
                 } break;
+                case TrackParamId::PlayheadNorm:
+                    // Read-only параметр (UI meter). Внешние setParam игнорируем.
+                    break;
+                case TrackParamId::TempoSyncEnabled:
+                    // Любое переключение sync (ON/OFF) фиксируем через квантизованный
+                    // phase reset, чтобы петля не "уплывала" относительно других треков.
+                    requestQuantizedPhaseResetRt_();
+                    playbackRt_.stretchToBars = (value >= 0.5f);
+                    // При включении sync пересчитываем скорость от текущего transport/clip.
+                    pendingStretchRecalc_.store(true, std::memory_order_release);
+                    break;
                 default:
                     break;
             }
@@ -1017,6 +1243,79 @@ namespace avantgarde {
             return detail_interp::clampf(inc, 0.05f, 8.0f);
         }
 
+        static uint64_t computeQuantumSamplesRt_(const AudioProcessContext& ctx,
+                                                 double outputSampleRate) noexcept {
+            // transportQuant: 0=None, 1=Beat, 2=Bar.
+            const uint8_t q = ctx.transportQuant;
+            if (q == 0u) {
+                return 1;
+            }
+            const double bpm = (std::isfinite(ctx.transportBpm) && ctx.transportBpm > 0.0f)
+                                   ? static_cast<double>(ctx.transportBpm)
+                                   : 120.0;
+            const uint8_t den = sanitizeTsDen_(static_cast<int>(ctx.transportTsDen));
+            const uint8_t num = sanitizeTsNum_(static_cast<int>(ctx.transportTsNum));
+            const uint64_t beatSamples = static_cast<uint64_t>(
+                std::max(1.0, std::round(outputSampleRate * 60.0 / bpm)));
+            if (q == 1u) {
+                return std::max<uint64_t>(1, beatSamples);
+            }
+            const uint64_t scaledNum = static_cast<uint64_t>(num) * 4ULL;
+            return std::max<uint64_t>(1, (beatSamples * scaledNum) / den);
+        }
+
+        static uint64_t computeDueSampleRt_(const AudioProcessContext& ctx,
+                                            double outputSampleRate) noexcept {
+            const uint64_t now = ctx.transportSampleTime;
+            if (ctx.transportQuant == 0u) {
+                return now;
+            }
+            const uint64_t quantum = computeQuantumSamplesRt_(ctx, outputSampleRate);
+            if (quantum <= 1) {
+                return now;
+            }
+            const uint64_t rem = now % quantum;
+            return (rem == 0) ? now : (now + (quantum - rem));
+        }
+
+        void requestQuantizedPhaseResetRt_() noexcept {
+            playbackRt_.pendingPhaseResync = true;
+            playbackRt_.pendingPhaseDueSample = 0;
+        }
+
+        double computeTransportAlignedPlayheadRt_(uint64_t atTransportSample) const noexcept {
+            const ClipBuffer* clip = playbackRt_.clip;
+            if (!clip || clip->frames <= 0) {
+                return playbackRt_.playhead;
+            }
+            const double regionStart = clipRegionStartFrameRt_();
+            const double regionEnd = clipRegionEndFrameRt_();
+            const double span = std::max(1.0, regionEnd - regionStart);
+
+            const double speed = static_cast<double>(
+                detail_interp::clampf(playbackRt_.playbackInc, 0.05f, 8.0f));
+            const double clipToOutRate =
+                (clip->sampleRate > 0 && outputSampleRate_ > 1.0)
+                    ? (static_cast<double>(clip->sampleRate) / outputSampleRate_)
+                    : 1.0;
+            const double detuneRatio =
+                (playbackRt_.playbackMode == TrackPlaybackModeValue::Note)
+                    ? std::exp2(static_cast<double>(playbackRt_.noteDetuneNorm) / 12.0)
+                    : 1.0;
+            const double effectiveInc = std::max(1e-6, clipToOutRate * speed * detuneRatio);
+            const double loopSamplesOut = span / effectiveInc;
+            if (!(loopSamplesOut > 1.0) || !std::isfinite(loopSamplesOut)) {
+                return regionStart;
+            }
+
+            double phase = std::fmod(static_cast<double>(atTransportSample), loopSamplesOut);
+            if (phase < 0.0) {
+                phase += loopSamplesOut;
+            }
+            const double norm = std::clamp(phase / loopSamplesOut, 0.0, 1.0);
+            return std::clamp(regionStart + norm * span, regionStart, std::max(regionStart, regionEnd - 1.0));
+        }
+
         bool publishClipAndResetFx_(std::shared_ptr<ClipBuffer>&& b) {
             if (!b || b->frames <= 0 || b->sampleRate <= 0 || !b->ch[0]) {
                 return false;
@@ -1034,7 +1333,12 @@ namespace avantgarde {
 
             // Переинициализируем FX-блоки вне RT для детерминированного состояния
             // после смены исходного клипа.
-            for (auto& mod : modules_) {
+            std::vector<std::shared_ptr<IAudioModule>> modulesSnapshot{};
+            {
+                const std::lock_guard<std::mutex> lock(modulesMutex_);
+                modulesSnapshot = modules_;
+            }
+            for (auto& mod : modulesSnapshot) {
                 mod->init(moduleSampleRate_, kFxScratchFrames);
                 mod->reset();
             }
@@ -1100,10 +1404,12 @@ namespace avantgarde {
         }
 
     private:
-        std::vector<std::unique_ptr<IAudioModule>> modules_;
-        std::vector<bool> moduleEnabled_{};
+        mutable std::mutex modulesMutex_{};
+        std::vector<std::shared_ptr<IAudioModule>> modules_{};
+        std::vector<uint8_t> moduleEnabled_{};
         double moduleSampleRate_{48000.0};
         double outputSampleRate_{48000.0};
+        uint8_t trackId_{0};
 
         std::array<float, kFxScratchFrames> fxA0_{};
         std::array<float, kFxScratchFrames> fxA1_{};
@@ -1129,6 +1435,12 @@ namespace avantgarde {
         // record-arm (MVP)
         std::atomic<bool> recArmed_{false};
         std::atomic<uint32_t> slotBars_{4};
+        // Stable clipRef id для snapshot/pattern switch.
+        std::atomic<uint32_t> clipRefId_{0u};
+        // Control-side snapshot (без записи в RT-state).
+        TrackSnapshot snapshotCtl_{};
+        // RT->UI публикация трекового playhead внутри trim-региона [0..1].
+        std::atomic<float> uiPlayheadNorm_{0.0f};
 
         // RT-only состояние плеера/гейтов данного трека.
         ClipPlaybackRtState playbackRt_{};

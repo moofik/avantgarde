@@ -13,6 +13,44 @@
 
 namespace avantgarde {
 
+enum class UiHudPosition : uint8_t {
+    TopCenter = 0,
+    Center
+};
+
+// Подготовленный runtime-вид HUD-оверлея для одного кадра.
+// Это уже "что рисовать", без знания очередей/таймеров/событий.
+struct UiHudOverlayView {
+    bool visible{false};
+    UiHudPosition position{UiHudPosition::TopCenter};
+    std::string text{};
+
+    uint16_t width{20};
+    uint16_t height{5};
+    uint16_t padding{1};
+    std::string font{"gothic"};
+    float fontSize{0.0f};
+    UiLayoutAlign align{UiLayoutAlign::Center};
+    UiLayoutJustify justify{UiLayoutJustify::Center};
+    bool textWrap{true};
+    // Цепочка текстовых визуальных эффектов HUD (typing/glitch/glow/...).
+    // Рендерер применяет только поддерживаемые им эффекты.
+    std::vector<UiLayoutNode::EffectSpec> textEffects{};
+    // Уникальный id жизненного цикла текущего HUD-сообщения.
+    // Используется visual-fx слоем как стабильный instance key,
+    // чтобы trigger=change корректно перезапускался для каждого уведомления.
+    uint64_t fxInstanceId{0U};
+
+    std::string textColor{"#E3D4E8"};
+    std::string borderColor{"#8F6E95"};
+    std::string backgroundColor{"#130D16D8"};
+
+    float opacity{1.0f};
+    float scale{1.0f};
+    float glow01{0.0f};
+    float glitch01{0.0f};
+};
+
 // Prepared-layout кадр: результат работы виджета перед передачей в renderer.
 struct UiPreparedLayout {
     // Идентификатор сцены/виджета.
@@ -24,6 +62,8 @@ struct UiPreparedLayout {
     uint16_t frameHeightHint{0};
     // Набор UI-компонентов с уже подставленными значениями из state.
     std::vector<std::unique_ptr<IUiComponent>> components{};
+    // Всплывающий HUD-оверлей поверх сцены.
+    UiHudOverlayView hud{};
 };
 
 // Вернуть px-размер root-ноды в символьной сетке, если он задан как фиксированный.

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <type_traits>
 #include "IParameterized.h"
+#include "ISnapshotable.h"
 
 namespace avantgarde {
 
@@ -160,7 +161,7 @@ namespace avantgarde {
     static_assert(std::is_trivially_copyable_v<TransportRtSnapshot>,
                   "TransportRtSnapshot must be POD for RT safety");
 
-    struct ITransportBridge : IParameterized {
+    struct ITransportBridge : IParameterized, ISnapshotable {
         virtual ~ITransportBridge() = default;
 
         // Control-side: задать параметры транспорта (часто, неблокирующе).
@@ -178,6 +179,22 @@ namespace avantgarde {
 
         // RT-side: апдейт sampleTime (только RT увеличивает)
         virtual void advanceSampleTime(uint64_t frames) noexcept = 0;
+
+        // Унифицированный snapshot API для orchestration/service слоя.
+        bool getSnapshot(SnapshotRecord& out) const noexcept override {
+            const TransportRtSnapshot& snap = rt();
+            out = SnapshotRecord{};
+            out.domain = SnapshotDomain::Transport;
+            out.entityId = kSnapshotEntityTransport;
+            out.transport.playing = snap.playing;
+            out.transport.bpm = snap.bpm;
+            out.transport.tsNum = snap.tsNum;
+            out.transport.tsDen = snap.tsDen;
+            out.transport.quant = snap.quant;
+            out.transport.swing01 = snap.swing;
+            out.transport.sampleTime = snap.sampleTime;
+            return true;
+        }
     };
 
 } // namespace avantgarde

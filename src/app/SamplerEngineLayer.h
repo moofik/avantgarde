@@ -10,7 +10,6 @@
 #include "contracts/ITransport.h"
 #include "contracts/IPattern.h"
 #include "contracts/ids.h"
-#include "service/pattern/PatternSnapshotManager.h"
 
 namespace avantgarde {
 
@@ -82,6 +81,14 @@ public:
     // Pattern / PatternOnce / Loop / OneShot.
     bool setTrackPlaybackProfile(uint8_t track, TrackPlaybackProfileValue profile) noexcept;
     bool setTrackSpeed(uint8_t track, float speed) noexcept;
+    // Включить/выключить tempo-sync для трека:
+    // ON  -> playbackInc следует за transport BPM/TS и bars,
+    // OFF -> playbackInc остается ручным.
+    bool setTrackTempoSync(uint8_t track, bool enabled) noexcept;
+    // Отправить note-on в выбранный трек (для NOTE режима/секвенсора).
+    bool triggerTrackNoteOn(uint8_t track, uint8_t note, float velocity01) noexcept;
+    // Отправить note-off в выбранный трек.
+    bool triggerTrackNoteOff(uint8_t track, uint8_t note) noexcept;
     // Универсальная установка track-параметра по индексу ids.h.
     bool setTrackParam(uint8_t track, uint16_t paramIndex, float value) noexcept;
     // Задать длину slot0 в барах (>=1) для режима stretch-to-bars.
@@ -101,8 +108,12 @@ public:
     bool setTrackClipRef(uint8_t track, uint32_t clipRefId) noexcept;
     // Очистить загруженный сэмпл трека (slot0) без удаления FX-цепочки.
     bool clearTrackSample(uint8_t track) noexcept;
-    // Preview-голос (скрытый отдельный трек).
-    void previewRequest(const std::string& path) noexcept;
+    // Preview-голос (отдельный sample-preview engine, не Track/не Transport).
+    void previewRequest(const std::string& path,
+                        float speed,
+                        float start01,
+                        float end01,
+                        float gain01) noexcept;
     void previewStop() noexcept;
 
     // Pattern subsystem API.

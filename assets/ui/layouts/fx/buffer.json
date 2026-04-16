@@ -1,0 +1,151 @@
+{
+  "id": "fx_profile_buffer",
+  "layout": {
+    "type": "column",
+    "gap": 1,
+    "children": [
+      {
+        "type": "text",
+        "id": "fx_meta",
+        "bind": "status.fx.meta",
+        "style_ref": "@styles.fx.meta"
+      },
+      {
+        "type": "row",
+        "id": "fx_split",
+        "width": "100%",
+        "gap": 2,
+        "children": [
+          {
+            "type": "column",
+            "id": "fx_controls_col",
+            "width": "56%",
+            "gap": 1,
+            "children": [
+              {
+                "type": "row",
+                "id": "bf_knobs_row_top",
+                "width": "100%",
+                "gap": 1,
+                "children": [
+                  {
+                    "type": "knob",
+                    "id": "bf_mix",
+                    "label": "MIX",
+                    "bind": "fx.selected.param.0",
+                    "target": "param.fx.selected.0",
+                    "style_ref": "@styles.fx.knob.base",
+                    "width": "49%"
+                  },
+                  {
+                    "type": "knob",
+                    "id": "bf_slice",
+                    "label": "SLICE",
+                    "bind": "fx.selected.param.1",
+                    "target": "param.fx.selected.1",
+                    "style_ref": "@styles.fx.knob.base",
+                    "width": "49%"
+                  }
+                ]
+              },
+              {
+                "type": "row",
+                "id": "bf_knobs_row_mid",
+                "width": "100%",
+                "gap": 1,
+                "children": [
+                  {
+                    "type": "knob",
+                    "id": "bf_repeat",
+                    "label": "REPEAT",
+                    "bind": "fx.selected.param.2",
+                    "target": "param.fx.selected.2",
+                    "style_ref": "@styles.fx.knob.base",
+                    "width": "49%"
+                  },
+                  {
+                    "type": "knob",
+                    "id": "bf_speed",
+                    "label": "SPEED",
+                    "bind": "fx.selected.param.3",
+                    "target": "param.fx.selected.3",
+                    "style_ref": "@styles.fx.knob.base",
+                    "width": "49%"
+                  }
+                ]
+              },
+              {
+                "type": "row",
+                "id": "bf_knobs_row_bottom",
+                "width": "100%",
+                "gap": 1,
+                "children": [
+                  {
+                    "type": "knob",
+                    "id": "bf_buffer",
+                    "label": "BUFFER",
+                    "bind": "fx.selected.param.5",
+                    "target": "param.fx.selected.5",
+                    "style_ref": "@styles.fx.knob.base",
+                    "width": "100%"
+                  }
+                ]
+              },
+              {
+                "type": "row",
+                "id": "bf_switch_row",
+                "width": "100%",
+                "gap": 1,
+                "children": [
+                  {
+                    "type": "knob",
+                    "id": "bf_retrig",
+                    "label": "RETRIG",
+                    "bind": "fx.selected.param.6",
+                    "target": "param.fx.selected.6",
+                    "style_ref": "@styles.fx.knob.base",
+                    "width": "49%"
+                  }
+                ]
+              },
+              {
+                "type": "row",
+                "id": "bf_switch_row_2",
+                "width": "100%",
+                "gap": 1,
+                "children": [
+                  {
+                    "type": "switch",
+                    "id": "bf_reverse",
+                    "label": "REVERSE",
+                    "bind": "fx.selected.param.7",
+                    "target": "param.fx.selected.7",
+                    "options": ["OFF", "ON"],
+                    "style_ref": "@styles.fx.switch.base",
+                    "width": "100%"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "column",
+            "id": "fx_visual_col",
+            "width": "44%",
+            "gap": 1,
+            "children": [
+              {
+                "type": "anim_slot",
+                "id": "bf_anim",
+                "bind": "fx.anim.current",
+                "style_ref": "@styles.fx.animslot",
+                "width": "100%",
+                "height": 8
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

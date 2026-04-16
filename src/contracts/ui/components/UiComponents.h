@@ -130,10 +130,18 @@ public:
 // Слот анимации (например для FX-визуализации).
 class UiAnimSlotComponent final : public IUiComponent {
 public:
+    enum class PlaybackMode : uint8_t {
+        Loop = 0,
+        Scrub
+    };
+
     std::string idValue{};
     std::string label{};
     std::string animKey{};
     float intensity01{0.0f};
+    PlaybackMode playbackMode{PlaybackMode::Loop};
+    float fps{8.0f};
+    std::vector<std::string> frames{};
 
     UiComponentType type() const noexcept override { return UiComponentType::AnimSlot; }
     std::string_view id() const noexcept override { return idValue; }
@@ -142,12 +150,27 @@ public:
 // Компонент waveform (пиковая огибающая в нормализованном виде [0..1]).
 class UiWaveformComponent final : public IUiComponent {
 public:
+    struct Marker {
+        float x01{0.0f};
+        float y01{0.0f};
+    };
+
     std::string idValue{};
     // Пики по X-оси: каждый элемент соответствует одному "столбцу" волны.
     std::vector<float> peaks01{};
     // Нормализованные границы trim-региона [0..1].
     float trimStart01{0.0f};
     float trimEnd01{1.0f};
+    // Нормализованная позиция playhead [0..1].
+    float playhead01{0.0f};
+    // Маркеры ключевых точек (automation/event points).
+    std::vector<Marker> markers{};
+    // Индекс выделенного маркера, -1 если выделения нет.
+    int32_t selectedMarker{-1};
+    // Режим отрисовки:
+    // false -> классическая "envelope" (для sample edit),
+    // true  -> curve/timeline режим секвенсора.
+    bool curveMode{false};
 
     UiComponentType type() const noexcept override { return UiComponentType::Waveform; }
     std::string_view id() const noexcept override { return idValue; }
@@ -368,6 +391,8 @@ private:
 // Builder: UiAnimSlotComponent.
 class UiAnimSlotBuilder final {
 public:
+    using PlaybackMode = UiAnimSlotComponent::PlaybackMode;
+
     explicit UiAnimSlotBuilder(std::string id) { component_.idValue = std::move(id); }
 
     UiAnimSlotBuilder& label(std::string value) {
@@ -382,6 +407,21 @@ public:
 
     UiAnimSlotBuilder& intensity01(float value) {
         component_.intensity01 = value;
+        return *this;
+    }
+
+    UiAnimSlotBuilder& playbackMode(PlaybackMode value) {
+        component_.playbackMode = value;
+        return *this;
+    }
+
+    UiAnimSlotBuilder& fps(float value) {
+        component_.fps = std::max(0.1f, value);
+        return *this;
+    }
+
+    UiAnimSlotBuilder& frames(std::vector<std::string> value) {
+        component_.frames = std::move(value);
         return *this;
     }
 
@@ -410,6 +450,26 @@ public:
 
     UiWaveformBuilder& trimEnd01(float value) {
         component_.trimEnd01 = value;
+        return *this;
+    }
+
+    UiWaveformBuilder& playhead01(float value) {
+        component_.playhead01 = value;
+        return *this;
+    }
+
+    UiWaveformBuilder& markers(std::vector<UiWaveformComponent::Marker> values) {
+        component_.markers = std::move(values);
+        return *this;
+    }
+
+    UiWaveformBuilder& selectedMarker(int32_t value) {
+        component_.selectedMarker = value;
+        return *this;
+    }
+
+    UiWaveformBuilder& curveMode(bool value) {
+        component_.curveMode = value;
         return *this;
     }
 

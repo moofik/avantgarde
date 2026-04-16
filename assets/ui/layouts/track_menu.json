@@ -40,7 +40,7 @@
       {
         "type": "text",
         "id": "keys_hint",
-        "text": " keys [F5/F6 select] [F1 apply] [esc back] ",
+        "text": " keys [F5/F6 select] [F1 apply] [n seq] [shift+n pattern] [esc back] ",
         "bind": "status.keys",
         "style_ref": "@styles.footer.keys"
       }

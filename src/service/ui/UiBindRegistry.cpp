@@ -21,6 +21,7 @@ std::vector<UiBindOption> fxEditorAnimCatalog() {
         {"current", "fx.anim.current", "Анимация текущего типа FX"},
         {"reverb", "fx.anim.reverb", "Анимация для реверба"},
         {"hpf", "fx.anim.hpf", "Анимация для HPF"},
+        {"buffer", "fx.anim.buffer", "Анимация для Buffer FX"},
     };
 }
 
@@ -41,6 +42,8 @@ std::vector<UiBindOption> sampleEditControlCatalog() {
         {"gain", "track.selected.gain", "Громкость выбранного трека"},
         {"start", "track.selected.start", "Старт playback-региона выбранного трека"},
         {"end", "track.selected.end", "Конец playback-региона выбранного трека"},
+        {"tempo_sync", "track.selected.tempo_sync", "Tempo Sync выбранного трека"},
+        {"sync", "track.selected.tempo_sync", "Tempo Sync выбранного трека"},
     };
 }
 

@@ -35,6 +35,7 @@ struct UiWidgetFactoryOptions {
         {std::string(FxRegistry::kReverbSchroederId), "fx/reverb.json"},
         {std::string(FxRegistry::kHpfOnePoleId), "fx/hpf.json"},
         {std::string(FxRegistry::kStutterId), "fx/stutter.json"},
+        {std::string(FxRegistry::kBufferFxId), "fx/buffer.json"},
     };
 };
 

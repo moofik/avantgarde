@@ -28,6 +28,12 @@ struct MockTrack : ITrack {
     void process(const AudioProcessContext&) override { ++calls; }
 
     void onRtCommand(const RtCommand& cmd) noexcept override { seen.push_back(cmd); }
+
+    bool getSnapshot(SnapshotRecord& out) const noexcept override {
+        out = SnapshotRecord{};
+        out.domain = SnapshotDomain::Track;
+        return true;
+    }
 };
 
 struct MockRtQueue : IRtCommandQueue {

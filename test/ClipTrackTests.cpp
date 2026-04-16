@@ -525,6 +525,15 @@ TEST_CASE("ClipTrack: setSlotLengthInBars stretches playback length to target ba
     // Auto-stretch to 1 bar at default 120 BPM, 4/4:
     // 1 bar = 2 sec => 16 frames at 8 Hz.
     REQUIRE(tr.setSlotLengthInBars(0, 1) == true);
+    send_cmd(tr,
+             avantgarde::CmdId::ParamSet,
+             /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::TempoSyncEnabled),
+             1.0f);
+    // Применяем pending-параметры в RT-состояние.
+    auto prep = make_ctx(1);
+    clear_out(prep);
+    tr.process(prep.ctx);
 
     auto t = make_ctx(16);
     send_cmd(tr, avantgarde::CmdId::Play, 0);
@@ -545,6 +554,15 @@ TEST_CASE("ClipTrack: auto-stretch responds to transport tempo changes") {
     REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
     REQUIRE(tr.setSlotLooping(0, false) == true);
     REQUIRE(tr.setSlotLengthInBars(0, 1) == true);
+    send_cmd(tr,
+             avantgarde::CmdId::ParamSet,
+             /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::TempoSyncEnabled),
+             1.0f);
+    // Применяем pending stretch-обновления до проверки PlaybackInc.
+    auto prep = make_ctx(1);
+    clear_out(prep);
+    tr.process(prep.ctx);
 
     // Start from 120 BPM.
     send_cmd(tr, avantgarde::CmdId::SetTempoBpm, 0, 0, 120.0f);
@@ -567,6 +585,76 @@ TEST_CASE("ClipTrack: auto-stretch responds to transport tempo changes") {
     REQUIRE(nz120 >= 15);
     REQUIRE(nz240 <= 9);
     REQUIRE(nz240 < nz120);
+}
+
+TEST_CASE("ClipTrack: tempo sync OFF freezes playback speed on tempo change") {
+    avantgarde::ClipTrackImpl tr(/*outputSampleRate*/8.0);
+
+    const int sr = 8;
+    std::vector<int16_t> pcm = { 32767,32767,32767,32767,32767,32767,32767,32767 };
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_test_tempo_sync_off.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLooping(0, false) == true);
+    REQUIRE(tr.setSlotLengthInBars(0, 1) == true);
+
+    // Включаем sync для инициализации auto-inc и применяем RT-pending.
+    send_cmd(tr,
+             avantgarde::CmdId::ParamSet,
+             /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::TempoSyncEnabled),
+             1.0f);
+    auto prep = make_ctx(1);
+    clear_out(prep);
+    tr.process(prep.ctx);
+
+    // На 120 BPM ожидаем auto playbackInc ~0.5.
+    send_cmd(tr, avantgarde::CmdId::SetTempoBpm, 0, 0, 120.0f);
+    const float inc120 = tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::PlaybackInc));
+    REQUIRE(absf(inc120 - 0.5f) < 1e-3f);
+
+    // Выключаем sync и убеждаемся, что дальнейший tempo change не трогает speed.
+    send_cmd(tr,
+             avantgarde::CmdId::ParamSet,
+             /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::TempoSyncEnabled),
+             0.0f);
+    clear_out(prep);
+    tr.process(prep.ctx);
+    send_cmd(tr, avantgarde::CmdId::SetTempoBpm, 0, 0, 240.0f);
+    const float inc240 = tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::PlaybackInc));
+    REQUIRE(absf(inc240 - inc120) < 1e-6f);
+}
+
+TEST_CASE("ClipTrack: manual speed write disables tempo sync") {
+    avantgarde::ClipTrackImpl tr(/*outputSampleRate*/8.0);
+
+    const int sr = 8;
+    std::vector<int16_t> pcm = { 32767,32767,32767,32767,32767,32767,32767,32767 };
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_test_manual_speed_disables_sync.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLengthInBars(0, 1) == true);
+
+    send_cmd(tr,
+             avantgarde::CmdId::ParamSet,
+             /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::TempoSyncEnabled),
+             1.0f);
+    auto prep = make_ctx(1);
+    clear_out(prep);
+    tr.process(prep.ctx);
+    REQUIRE(tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::TempoSyncEnabled)) > 0.5f);
+
+    // Ручной speed должен выключить sync.
+    send_cmd(tr,
+             avantgarde::CmdId::ParamSet,
+             /*slot*/-1,
+             avantgarde::toParamIndex(avantgarde::TrackParamId::PlaybackInc),
+             1.0f);
+    clear_out(prep);
+    tr.process(prep.ctx);
+    REQUIRE(tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::TempoSyncEnabled)) < 0.5f);
 }
 
 TEST_CASE("ClipTrack: clearSlot resets audio (no playback after clear)") {
@@ -601,8 +689,10 @@ TEST_CASE("ClipTrack: clearSlot resets audio (no playback after clear)") {
 TEST_CASE("ClipTrack: IParameterized surface exposes and applies track params") {
     avantgarde::ClipTrackImpl tr;
 
-    REQUIRE(tr.getParamCount() == 11);
+    REQUIRE(tr.getParamCount() == 13);
     REQUIRE(tr.getParamMeta(avantgarde::toParamIndex(avantgarde::TrackParamId::MuteEnabled)).name == "track.mute");
+    REQUIRE(tr.getParamMeta(avantgarde::toParamIndex(avantgarde::TrackParamId::PlayheadNorm)).name == "track.playhead_norm");
+    REQUIRE(tr.getParamMeta(avantgarde::toParamIndex(avantgarde::TrackParamId::TempoSyncEnabled)).name == "track.tempo_sync");
 
     tr.setParam(avantgarde::toParamIndex(avantgarde::TrackParamId::Gain01), 0.25f);
     REQUIRE(absf(tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::Gain01)) - 0.25f) < 1e-6f);
@@ -629,6 +719,33 @@ TEST_CASE("ClipTrack: IParameterized surface exposes and applies track params") 
     float sumAfterMute = 0.0f;
     for (float v : t.out0) sumAfterMute += absf(v);
     REQUIRE(sumAfterMute < 1e-4f);
+}
+
+TEST_CASE("ClipTrack: PlayheadNorm reflects per-track playback progress") {
+    avantgarde::ClipTrackImpl tr;
+
+    const int sr = 48000;
+    std::vector<int16_t> pcm(256, 32767);
+    const fs::path tmp = fs::temp_directory_path() / "ag_cliptrack_playhead_norm.wav";
+    write_wav_pcm16(tmp, sr, 1, pcm);
+    REQUIRE(tr.loadSlotFromFile(0, tmp.string().c_str()) == true);
+    REQUIRE(tr.setSlotLooping(0, true) == true);
+
+    auto t = make_ctx(32);
+    send_cmd(tr, avantgarde::CmdId::Play, 0);
+    clear_out(t);
+    tr.process(t.ctx);
+    const float p0 = tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::PlayheadNorm));
+
+    clear_out(t);
+    tr.process(t.ctx);
+    const float p1 = tr.getParam(avantgarde::toParamIndex(avantgarde::TrackParamId::PlayheadNorm));
+
+    REQUIRE(p0 >= 0.0f);
+    REQUIRE(p0 <= 1.0f);
+    REQUIRE(p1 >= 0.0f);
+    REQUIRE(p1 <= 1.0f);
+    REQUIRE(std::fabs(p1 - p0) > 1e-6f);
 }
 
 TEST_CASE("ClipTrack: note mode policies stop playback on NoteOff and retrigger on NoteOn") {

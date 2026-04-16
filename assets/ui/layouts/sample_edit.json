@@ -36,6 +36,7 @@
             "type": "row",
             "id": "sample_split",
             "width": "100%",
+            "playhead_color": "@theme.colors.text.secondary",
             "gap": 1,
             "wrap": false,
             "justify": "start",
@@ -68,6 +69,8 @@
                     "id": "sample_row_1",
                     "width": "100%",
                     "gap": 1,
+                    "padding": 1,
+                    "justify": "start",
                     "wrap": false,
                     "children": [
                       {
@@ -76,8 +79,8 @@
                         "label": "GAIN",
                         "bind": "track.selected.gain",
                         "target": "param.track.selected.gain",
-                        "style_ref": "@styles.sample.knob",
-                        "width": "33%"
+                        "style_ref": ["@styles.fx.knob.base", "@styles.fx.knob.glitch_on_change"],
+                        "width": "34%"
                       },
                       {
                         "type": "knob",
@@ -85,7 +88,16 @@
                         "label": "SPD",
                         "bind": "track.selected.speed",
                         "target": "param.track.selected.speed",
-                        "style_ref": "@styles.sample.knob",
+                        "style_ref": ["@styles.fx.knob.base", "@styles.fx.knob.glitch_on_change"],
+                        "width": "33%"
+                      },
+                      {
+                        "type": "switch",
+                        "id": "track_tempo_sync",
+                        "label": "SYNC",
+                        "bind": "track.selected.tempo_sync",
+                        "target": "param.track.selected.tempo_sync",
+                        "style_ref": ["@styles.fx.knob.base", "@styles.fx.knob.glitch_on_change"],
                         "width": "33%"
                       }
                     ]
@@ -95,6 +107,8 @@
                     "id": "sample_row_2",
                     "width": "100%",
                     "gap": 1,
+                    "justify": "start",
+                    "padding": 1,
                     "wrap": false,
                     "children": [
                       {
@@ -103,7 +117,7 @@
                         "label": "START",
                         "bind": "track.selected.start",
                         "target": "param.track.selected.start",
-                        "style_ref": "@styles.sample.knob",
+                        "style_ref": ["@styles.fx.knob.base", "@styles.fx.knob.glitch_on_change"],
                         "width": "33%"
                       },
                       {
@@ -112,7 +126,7 @@
                         "label": "END",
                         "bind": "track.selected.end",
                         "target": "param.track.selected.end",
-                        "style_ref": "@styles.sample.knob",
+                        "style_ref": ["@styles.fx.knob.base", "@styles.fx.knob.glitch_on_change"],
                         "width": "33%"
                       }
                     ]

@@ -13,7 +13,7 @@ public:
     MacPrimitiveWindowInput();
     ~MacPrimitiveWindowInput();
 
-    bool readNextInputEvent(UiGestureEvent& out) noexcept;
+    bool readNextInputEvent(PrimitiveInputEvent& out) noexcept;
 
 private:
     struct Impl;

@@ -12,6 +12,9 @@
       "text": {
         "primary": "#FFEAF2",
         "secondary": "#C81C63",
+        "record_active": "#C81C63",
+        "arm_on": "#FFEAF2",
+        "arm_off": "#ABAAAC",
         "header": "#FFEAF2",
         "anim": "#2A1A24",
         "wave": "#FFEAF2"

@@ -24,6 +24,21 @@
 namespace avantgarde::macos {
 namespace {
 
+#if __has_feature(objc_arc)
+template <typename T>
+T* retainObj(T* obj) {
+    return obj;
+}
+#else
+template <typename T>
+T* retainObj(T* obj) {
+    if (obj) {
+        [obj retain];
+    }
+    return obj;
+}
+#endif
+
 NSFont* resizedFont(NSFont* font, CGFloat size) {
     if (!font) {
         return nil;
@@ -107,6 +122,10 @@ std::vector<std::string> buildImagePathCandidates(std::string_view specUtf8,
     }
     // Частый формат: "icons/foo.png" -> "assets/icons/foo.png".
     if (specUtf8.rfind("icons/", 0) == 0U) {
+        pushUnique(cwd / "assets" / spec);
+    }
+    // Формат спрайтов: "sprites/foo.png" -> "assets/sprites/foo.png".
+    if (specUtf8.rfind("sprites/", 0) == 0U) {
         pushUnique(cwd / "assets" / spec);
     }
     // Если указали только имя файла, попробуем assets/images/<name>.
@@ -264,6 +283,51 @@ NSColor* nodeBackgroundColor(const UiLayoutNode* node,
     return resolveColorSpec(node->backgroundColor, fallback);
 }
 
+bool collectNodePath(const UiLayoutNode& cursor,
+                     const UiLayoutNode* target,
+                     std::vector<const UiLayoutNode*>& pathOut) {
+    pathOut.push_back(&cursor);
+    if (&cursor == target) {
+        return true;
+    }
+    for (const UiLayoutNode& child : cursor.children) {
+        if (collectNodePath(child, target, pathOut)) {
+            return true;
+        }
+    }
+    pathOut.pop_back();
+    return false;
+}
+
+NSColor* nodePlayheadColor(const UiLayoutNode* node,
+                           const IUiComponent* component,
+                           const UiLayoutNode* rootNode,
+                           NSColor* fallback) {
+    if (!node) {
+        return fallback;
+    }
+    const UiLayoutNode::StateSpec* st = nodeStateStyle(node, component);
+    if (st && !st->playheadColor.empty()) {
+        return resolveColorSpec(st->playheadColor, fallback);
+    }
+    if (!node->playheadColor.empty()) {
+        return resolveColorSpec(node->playheadColor, fallback);
+    }
+    // Если у waveform-ноды цвет не задан, даем override ближайшему родителю.
+    if (rootNode) {
+        std::vector<const UiLayoutNode*> path{};
+        if (collectNodePath(*rootNode, node, path) && path.size() > 1U) {
+            for (std::size_t i = path.size(); i > 1U; --i) {
+                const UiLayoutNode* parent = path[i - 2U];
+                if (parent && !parent->playheadColor.empty()) {
+                    return resolveColorSpec(parent->playheadColor, fallback);
+                }
+            }
+        }
+    }
+    return fallback;
+}
+
 std::string toLowerAscii(std::string_view value) {
     std::string out(value);
     std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
@@ -276,6 +340,13 @@ float textHashToValue01(std::string_view text) {
     const std::size_t h = std::hash<std::string_view>{}(text);
     const uint16_t bucket = static_cast<uint16_t>(h & 0xFFFFU);
     return static_cast<float>(bucket) / 65535.0f;
+}
+
+float finite01(float value, float fallback = 0.0f) noexcept {
+    if (!std::isfinite(value)) {
+        return std::clamp(fallback, 0.0f, 1.0f);
+    }
+    return std::clamp(value, 0.0f, 1.0f);
 }
 
 struct NodeTextFxChain {
@@ -395,7 +466,10 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
         }
 
         if (ctx.dynamicFontCache) {
-            ctx.dynamicFontCache->emplace(cacheKey, loaded);
+            // Важно: NSFont от fontWithName/resize обычно autoreleased.
+            // Кеш живет между кадрами, поэтому храним удержанный объект,
+            // иначе легко получить dangling pointer и SIGSEGV в рендере.
+            ctx.dynamicFontCache->emplace(cacheKey, retainObj(loaded));
         }
         if (loaded) {
             return loaded;
@@ -546,10 +620,12 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                          CATextLayerAlignmentMode align,
                          bool wrapText,
                          const NodeTextFxChain* fxChain,
-                         CGFloat componentOpacity) {
+                         CGFloat componentOpacity,
+                         CALayer* targetLayer) {
         if (!text || [text length] == 0) {
             return;
         }
+        CALayer* drawLayer = targetLayer ? targetLayer : contentLayer;
 
         const CGFloat scale = [NSScreen mainScreen] ? [NSScreen mainScreen].backingScaleFactor : 2.0;
         auto makeTextLayer = [&](NSString* drawText,
@@ -572,7 +648,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                                  const CGRect& layerRect,
                                  NSColor* layerColor,
                                  CGFloat opacity) {
-            [contentLayer addSublayer:makeTextLayer(drawText, layerRect, layerColor, opacity)];
+            [drawLayer addSublayer:makeTextLayer(drawText, layerRect, layerColor, opacity)];
         };
         auto buildImageWithRgbaFx = [&](NSString* drawText,
                                         const CGRect& drawRect,
@@ -726,7 +802,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                             layer.contents = (__bridge id)processedImage;
                             layer.contentsScale = std::max<CGFloat>(scale, 1.0);
                             layer.opacity = static_cast<float>(std::clamp(opacity * componentOpacity, 0.0, 1.0));
-                            [contentLayer addSublayer:layer];
+                            [drawLayer addSublayer:layer];
                         };
                         if (plan.splitPx > 0.01f) {
                             pushImageLayer(CGRectOffset(base, static_cast<CGFloat>(-plan.splitPx), 0.0), 0.42);
@@ -759,7 +835,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                         sliceMask.path = mp;
                         CGPathRelease(mp);
                         layer.mask = sliceMask;
-                        [contentLayer addSublayer:layer];
+                        [drawLayer addSublayer:layer];
                     }
                 }
                 if (processedImage) {
@@ -785,7 +861,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
             layer.contents = (__bridge id)image;
             layer.contentsScale = std::max<CGFloat>(scale, 1.0);
             layer.opacity = static_cast<float>(std::clamp(componentOpacity, 0.0, 1.0));
-            [contentLayer addSublayer:layer];
+            [drawLayer addSublayer:layer];
             CGImageRelease(image);
         };
 
@@ -886,8 +962,11 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
         if (component && !component->isVisible()) {
             continue;
         }
-        const CGFloat componentOpacity = static_cast<CGFloat>(
-            std::clamp(component ? component->opacity() : 1.0f, 0.0f, 1.0f));
+        float opacity01 = component ? component->opacity() : 1.0f;
+        if (!std::isfinite(opacity01)) {
+            opacity01 = 1.0f;
+        }
+        const CGFloat componentOpacity = static_cast<CGFloat>(std::clamp(opacity01, 0.0f, 1.0f));
 
         const CGRect rect = pxRectForChars(static_cast<int16_t>(box.rect.x + 1),
                                            static_cast<int16_t>(box.rect.y + 1),
@@ -903,6 +982,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 NSColor* textColor = nodeTextColor(box.node, component, sceneDefaultTextColor);
                 CGRect textRect = rect;
                 const bool wrapText = box.node->textWrap;
+                CATextLayerAlignmentMode textAlignMode = kCAAlignmentLeft;
                 if (const auto* s = dynamic_cast<const UiStatusBarComponent*>(component)) {
                     text = [NSString stringWithUTF8String:s->text.c_str()];
                     const bool isHeaderTitle = (box.node->id == "header_title");
@@ -944,10 +1024,22 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                     }
                 } else if (const auto* t = dynamic_cast<const UiTextComponent*>(component)) {
                     text = [NSString stringWithUTF8String:t->text.c_str()];
+                    switch (t->align) {
+                        case UiTextComponent::Align::Center:
+                            textAlignMode = kCAAlignmentCenter;
+                            break;
+                        case UiTextComponent::Align::Right:
+                            textAlignMode = kCAAlignmentRight;
+                            break;
+                        case UiTextComponent::Align::Left:
+                        default:
+                            textAlignMode = kCAAlignmentLeft;
+                            break;
+                    }
                 } else if (!box.node->text.empty()) {
                     text = [NSString stringWithUTF8String:box.node->text.c_str()];
                 }
-                textLayer(textRect, text, textColor, textFont, kCAAlignmentLeft, wrapText, &fxChain, componentOpacity);
+                textLayer(textRect, text, textColor, textFont, textAlignMode, wrapText, &fxChain, componentOpacity, contentLayer);
             } break;
 
             case UiLayoutNodeType::Separator: {
@@ -980,7 +1072,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                                                  rowTop,
                                                  rect.size.width,
                                                  rowH);
-                    textLayer(rr, rowText, listTextColor, ctx.bodyFont, kCAAlignmentLeft, false, nullptr, componentOpacity);
+                    textLayer(rr, rowText, listTextColor, ctx.bodyFont, kCAAlignmentLeft, false, nullptr, componentOpacity, contentLayer);
                 }
             } break;
 
@@ -1036,7 +1128,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 ring.opacity = static_cast<float>(componentOpacity);
                 [contentLayer addSublayer:ring];
 
-                const CGFloat v = std::clamp(knob->value01, 0.0f, 1.0f);
+                const CGFloat v = finite01(knob->value01);
                 const CGFloat a = (225.0 - v * 270.0) * static_cast<CGFloat>(M_PI / 180.0);
                 const CGFloat nx = cx + std::cos(a) * r * 0.85;
                 const CGFloat ny = cy + std::sin(a) * r * 0.85;
@@ -1070,7 +1162,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                                                  rect.origin.y + rect.size.height - labelH,
                                                  std::max<CGFloat>(8.0, rect.size.width - 2.0),
                                                  labelH);
-                    textLayer(lr, label, knobTextColor, labelFont, alignMode, false, &fxChain, componentOpacity);
+                    textLayer(lr, label, knobTextColor, labelFont, alignMode, false, &fxChain, componentOpacity, contentLayer);
                 }
             } break;
 
@@ -1090,7 +1182,7 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                     const NodeTextFxChain fxChain = textFxChainForNode(box.node, component);
                     NSString* label = [NSString stringWithUTF8String:sw->label.c_str()];
                     const CGRect lr = CGRectMake(rect.origin.x, rect.origin.y, rect.size.width, labelH);
-                    textLayer(lr, label, switchTextColor, labelFont, kCAAlignmentLeft, false, &fxChain, componentOpacity);
+                    textLayer(lr, label, switchTextColor, labelFont, kCAAlignmentLeft, false, &fxChain, componentOpacity, contentLayer);
                 }
                 const CGFloat bodyAreaY = rect.origin.y + labelH + (labelH > 0.0 ? 2.0 : 0.0);
                 const CGFloat bodyAreaH = std::max<CGFloat>(12.0, rect.size.height - labelH - (labelH > 0.0 ? 2.0 : 0.0));
@@ -1270,17 +1362,61 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 }
                 const CGRect drawRect = CGRectMake(drawX, drawY, side, side);
 
-                CAShapeLayer* frame = [CAShapeLayer layer];
-                frame.frame = contentLayer.bounds;
-                frame.fillColor = [NSColor clearColor].CGColor;
-                frame.strokeColor = animBorderColor.CGColor;
-                frame.lineWidth = 1.1;
-                CGMutablePathRef p = CGPathCreateMutable();
-                CGPathAddRoundedRect(p, nullptr, drawRect, 4.0, 4.0);
-                frame.path = p;
-                CGPathRelease(p);
-                frame.opacity = static_cast<float>(componentOpacity);
-                [contentLayer addSublayer:frame];
+                if (box.node->animShowFrame) {
+                    CAShapeLayer* frame = [CAShapeLayer layer];
+                    frame.frame = contentLayer.bounds;
+                    frame.fillColor = [NSColor clearColor].CGColor;
+                    frame.strokeColor = animBorderColor.CGColor;
+                    frame.lineWidth = std::max<CGFloat>(0.0, static_cast<CGFloat>(box.node->animFrameWidth));
+                    const CGFloat radius = std::max<CGFloat>(0.0, static_cast<CGFloat>(box.node->animFrameRadius));
+                    CGMutablePathRef p = CGPathCreateMutable();
+                    CGPathAddRoundedRect(p, nullptr, drawRect, radius, radius);
+                    frame.path = p;
+                    CGPathRelease(p);
+                    frame.opacity = static_cast<float>(componentOpacity);
+                    [contentLayer addSublayer:frame];
+                }
+
+                if (!anim->frames.empty()) {
+                    const CGRect imgRect = CGRectInset(drawRect, 2.0, 2.0);
+                    auto drawFrame = [&](std::size_t idx, double alpha01) {
+                        if (idx >= anim->frames.size() || alpha01 <= 0.0001) {
+                            return;
+                        }
+                        NSImage* img = loadIconImageCached(anim->frames[idx], ctx.cwd);
+                        if (!img) {
+                            return;
+                        }
+                        CGImageRef cg = [img CGImageForProposedRect:nullptr context:nil hints:nil];
+                        if (!cg) {
+                            return;
+                        }
+                        CALayer* imageLayer = [CALayer layer];
+                        imageLayer.frame = imgRect;
+                        imageLayer.contents = (__bridge id)cg;
+                        imageLayer.contentsGravity = kCAGravityResizeAspect;
+                        imageLayer.minificationFilter = kCAFilterNearest;
+                        imageLayer.magnificationFilter = kCAFilterNearest;
+                        imageLayer.opacity = static_cast<float>(componentOpacity * std::clamp(alpha01, 0.0, 1.0));
+                        [contentLayer addSublayer:imageLayer];
+                    };
+
+                    if (anim->playbackMode == UiAnimSlotComponent::PlaybackMode::Scrub) {
+                        // Scrub mode: жестко выбираем один кадр по intensity.
+                        // Без blend/crossfade, чтобы смена кадров была дискретной.
+                        const std::size_t last = anim->frames.size() - 1U;
+                        const std::size_t frameIndex = std::min<std::size_t>(
+                            static_cast<std::size_t>(std::floor(std::clamp(anim->intensity01, 0.0f, 1.0f) * static_cast<float>(last + 1U))),
+                            last);
+                        drawFrame(frameIndex, 1.0);
+                    } else {
+                        const double fps = std::max(0.1, static_cast<double>(anim->fps));
+                        const double now = CACurrentMediaTime();
+                        const uint64_t tick = static_cast<uint64_t>(std::floor(now * fps));
+                        const std::size_t frameIndex = static_cast<std::size_t>(tick % anim->frames.size());
+                        drawFrame(frameIndex, 1.0);
+                    }
+                }
 
                 if (!anim->label.empty()) {
                     NSString* title = [NSString stringWithUTF8String:anim->label.c_str()];
@@ -1291,7 +1427,8 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                               kCAAlignmentLeft,
                               false,
                               nullptr,
-                              componentOpacity);
+                              componentOpacity,
+                              contentLayer);
                 }
             } break;
 
@@ -1304,82 +1441,170 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
                 NSColor* waveBorderColor = nodeBorderColor(box.node, component, ctx.mid);
                 NSColor* waveFillColor =
                     nodeBackgroundColor(box.node, component, [waveBorderColor colorWithAlphaComponent:0.10]);
+                NSColor* wavePlayheadColor = nodePlayheadColor(box.node, component, rootNode, waveBorderColor);
                 const CGRect drawRect = CGRectInset(rect, 2.0, 2.0);
                 if (drawRect.size.width < 4.0 || drawRect.size.height < 4.0) {
                     break;
                 }
 
-                // Подсветка активного trim-региона.
-                const float trimStart = std::clamp(wave->trimStart01, 0.0f, 0.99f);
-                const float trimEnd = std::clamp(wave->trimEnd01, 0.01f, 1.0f);
-                const CGFloat sx = drawRect.origin.x + drawRect.size.width * trimStart;
-                const CGFloat ex = drawRect.origin.x + drawRect.size.width * std::max(trimStart, trimEnd);
-                if (ex > sx + 0.5) {
-                    CALayer* trimRegion = [CALayer layer];
-                    trimRegion.frame = CGRectMake(sx, drawRect.origin.y, ex - sx, drawRect.size.height);
-                    trimRegion.backgroundColor = waveFillColor.CGColor;
-                    trimRegion.opacity = static_cast<float>(componentOpacity);
-                    [contentLayer addSublayer:trimRegion];
-                }
+                if (wave->curveMode) {
+                    // Sequencer lane mode: ломаная + playhead + key-points.
+                    CALayer* bg = [CALayer layer];
+                    bg.frame = drawRect;
+                    bg.backgroundColor = [waveFillColor colorWithAlphaComponent:0.55].CGColor;
+                    bg.opacity = static_cast<float>(componentOpacity);
+                    [contentLayer addSublayer:bg];
 
-                // Центральная ось.
-                const CGFloat centerY = drawRect.origin.y + drawRect.size.height * 0.5;
-                CAShapeLayer* center = [CAShapeLayer layer];
-                center.frame = contentLayer.bounds;
-                center.fillColor = [NSColor clearColor].CGColor;
-                center.strokeColor = [waveBorderColor colorWithAlphaComponent:0.55].CGColor;
-                center.lineWidth = 1.0;
-                CGMutablePathRef centerPath = CGPathCreateMutable();
-                CGPathMoveToPoint(centerPath, nullptr, drawRect.origin.x, centerY);
-                CGPathAddLineToPoint(centerPath, nullptr, drawRect.origin.x + drawRect.size.width, centerY);
-                center.path = centerPath;
-                CGPathRelease(centerPath);
-                center.opacity = static_cast<float>(componentOpacity);
-                [contentLayer addSublayer:center];
-
-                // Пиковая огибающая (вертикальные столбцы по X).
-                if (!wave->peaks01.empty()) {
-                    const std::size_t cols = std::max<std::size_t>(
-                        1U,
-                        static_cast<std::size_t>(std::floor(drawRect.size.width)));
-                    const CGFloat halfRange = drawRect.size.height * 0.46;
-                    CGMutablePathRef peaksPath = CGPathCreateMutable();
-                    for (std::size_t x = 0; x < cols; ++x) {
-                        const std::size_t idx = (x * wave->peaks01.size()) / cols;
-                        const float v = std::clamp(wave->peaks01[std::min<std::size_t>(idx, wave->peaks01.size() - 1U)],
-                                                   0.0f,
-                                                   1.0f);
-                        const CGFloat hh = std::max<CGFloat>(1.0, halfRange * static_cast<CGFloat>(v));
-                        const CGFloat px = drawRect.origin.x + static_cast<CGFloat>(x) + 0.5;
-                        CGPathMoveToPoint(peaksPath, nullptr, px, centerY - hh);
-                        CGPathAddLineToPoint(peaksPath, nullptr, px, centerY + hh);
+                    if (!wave->peaks01.empty()) {
+                        const std::size_t cols = std::max<std::size_t>(2U, static_cast<std::size_t>(std::floor(drawRect.size.width)));
+                        CGMutablePathRef curvePath = CGPathCreateMutable();
+                        for (std::size_t x = 0; x < cols; ++x) {
+                            const std::size_t idx = (x * wave->peaks01.size()) / cols;
+                            const float v = finite01(
+                                wave->peaks01[std::min<std::size_t>(idx, wave->peaks01.size() - 1U)]);
+                            const CGFloat px = drawRect.origin.x + static_cast<CGFloat>(x);
+                            // В bottom-up координатах CoreAnimation:
+                            // 0.0 -> низ, 1.0 -> верх. Для lane-automation нужно "больше = выше".
+                            const CGFloat py = drawRect.origin.y + static_cast<CGFloat>(v) * drawRect.size.height;
+                            if (x == 0U) {
+                                CGPathMoveToPoint(curvePath, nullptr, px, py);
+                            } else {
+                                CGPathAddLineToPoint(curvePath, nullptr, px, py);
+                            }
+                        }
+                        CAShapeLayer* curve = [CAShapeLayer layer];
+                        curve.frame = contentLayer.bounds;
+                        curve.fillColor = [NSColor clearColor].CGColor;
+                        curve.strokeColor = [waveTextColor colorWithAlphaComponent:0.95].CGColor;
+                        curve.lineWidth = 1.2;
+                        curve.path = curvePath;
+                        CGPathRelease(curvePath);
+                        curve.opacity = static_cast<float>(componentOpacity);
+                        [contentLayer addSublayer:curve];
                     }
-                    CAShapeLayer* peaksLayer = [CAShapeLayer layer];
-                    peaksLayer.frame = contentLayer.bounds;
-                    peaksLayer.fillColor = [NSColor clearColor].CGColor;
-                    peaksLayer.strokeColor = [waveTextColor colorWithAlphaComponent:0.92].CGColor;
-                    peaksLayer.lineWidth = 1.0;
-                    peaksLayer.path = peaksPath;
-                    CGPathRelease(peaksPath);
-                    peaksLayer.opacity = static_cast<float>(componentOpacity);
-                    [contentLayer addSublayer:peaksLayer];
-                }
 
-                // Маркеры trim start/end.
-                CAShapeLayer* marks = [CAShapeLayer layer];
-                marks.frame = contentLayer.bounds;
-                marks.fillColor = [NSColor clearColor].CGColor;
-                marks.strokeColor = waveTextColor.CGColor;
-                marks.lineWidth = 1.1;
-                CGMutablePathRef markPath = CGPathCreateMutable();
-                CGPathMoveToPoint(markPath, nullptr, sx, drawRect.origin.y);
-                CGPathAddLineToPoint(markPath, nullptr, sx, drawRect.origin.y + drawRect.size.height);
-                CGPathMoveToPoint(markPath, nullptr, ex, drawRect.origin.y);
-                CGPathAddLineToPoint(markPath, nullptr, ex, drawRect.origin.y + drawRect.size.height);
-                marks.path = markPath;
-                CGPathRelease(markPath);
-                marks.opacity = static_cast<float>(componentOpacity);
-                [contentLayer addSublayer:marks];
+                    const CGFloat ph = drawRect.origin.x + drawRect.size.width * finite01(wave->playhead01);
+                    CAShapeLayer* playhead = [CAShapeLayer layer];
+                    playhead.frame = contentLayer.bounds;
+                    playhead.fillColor = [NSColor clearColor].CGColor;
+                    playhead.strokeColor = [wavePlayheadColor colorWithAlphaComponent:0.95].CGColor;
+                    playhead.lineWidth = 1.2;
+                    CGMutablePathRef phPath = CGPathCreateMutable();
+                    CGPathMoveToPoint(phPath, nullptr, ph, drawRect.origin.y);
+                    CGPathAddLineToPoint(phPath, nullptr, ph, drawRect.origin.y + drawRect.size.height);
+                    playhead.path = phPath;
+                    CGPathRelease(phPath);
+                    playhead.opacity = static_cast<float>(componentOpacity);
+                    [contentLayer addSublayer:playhead];
+
+                    for (std::size_t i = 0; i < wave->markers.size(); ++i) {
+                        const auto& m = wave->markers[i];
+                        const CGFloat mx = drawRect.origin.x + drawRect.size.width * finite01(m.x01);
+                        const CGFloat my = drawRect.origin.y + finite01(m.y01) * drawRect.size.height;
+                        const bool selected = (static_cast<int32_t>(i) == wave->selectedMarker);
+                        const CGFloat r = selected ? 3.5 : 2.3;
+                        NSColor* selectedFill = [waveBorderColor colorWithAlphaComponent:0.98];
+                        NSColor* selectedStroke = [waveTextColor colorWithAlphaComponent:1.0];
+                        CAShapeLayer* dot = [CAShapeLayer layer];
+                        dot.frame = contentLayer.bounds;
+                        dot.fillColor = selected
+                            ? selectedFill.CGColor
+                            : [waveTextColor colorWithAlphaComponent:0.90].CGColor;
+                        dot.strokeColor = selected
+                            ? selectedStroke.CGColor
+                            : [waveBorderColor colorWithAlphaComponent:0.75].CGColor;
+                        dot.lineWidth = selected ? 1.4 : 1.0;
+                        CGMutablePathRef dotPath = CGPathCreateMutable();
+                        CGPathAddEllipseInRect(dotPath, nullptr, CGRectMake(mx - r, my - r, r * 2.0, r * 2.0));
+                        dot.path = dotPath;
+                        CGPathRelease(dotPath);
+                        dot.opacity = static_cast<float>(componentOpacity);
+                        [contentLayer addSublayer:dot];
+                    }
+                } else {
+                    // Классический waveform-режим (sample edit).
+                    const float trimStart = std::min(0.99f, finite01(wave->trimStart01, 0.0f));
+                    const float trimEnd = std::max(0.01f, finite01(wave->trimEnd01, 1.0f));
+                    const CGFloat sx = drawRect.origin.x + drawRect.size.width * trimStart;
+                    const CGFloat ex = drawRect.origin.x + drawRect.size.width * std::max(trimStart, trimEnd);
+                    if (ex > sx + 0.5) {
+                        CALayer* trimRegion = [CALayer layer];
+                        trimRegion.frame = CGRectMake(sx, drawRect.origin.y, ex - sx, drawRect.size.height);
+                        trimRegion.backgroundColor = waveFillColor.CGColor;
+                        trimRegion.opacity = static_cast<float>(componentOpacity);
+                        [contentLayer addSublayer:trimRegion];
+                    }
+
+                    const CGFloat centerY = drawRect.origin.y + drawRect.size.height * 0.5;
+                    CAShapeLayer* center = [CAShapeLayer layer];
+                    center.frame = contentLayer.bounds;
+                    center.fillColor = [NSColor clearColor].CGColor;
+                    center.strokeColor = [waveBorderColor colorWithAlphaComponent:0.55].CGColor;
+                    center.lineWidth = 1.0;
+                    CGMutablePathRef centerPath = CGPathCreateMutable();
+                    CGPathMoveToPoint(centerPath, nullptr, drawRect.origin.x, centerY);
+                    CGPathAddLineToPoint(centerPath, nullptr, drawRect.origin.x + drawRect.size.width, centerY);
+                    center.path = centerPath;
+                    CGPathRelease(centerPath);
+                    center.opacity = static_cast<float>(componentOpacity);
+                    [contentLayer addSublayer:center];
+
+                    if (!wave->peaks01.empty()) {
+                        const std::size_t cols = std::max<std::size_t>(
+                            1U,
+                            static_cast<std::size_t>(std::floor(drawRect.size.width)));
+                        const CGFloat halfRange = drawRect.size.height * 0.46;
+                        CGMutablePathRef peaksPath = CGPathCreateMutable();
+                        for (std::size_t x = 0; x < cols; ++x) {
+                            const std::size_t idx = (x * wave->peaks01.size()) / cols;
+                            const float v = finite01(
+                                wave->peaks01[std::min<std::size_t>(idx, wave->peaks01.size() - 1U)]);
+                            const CGFloat hh = std::max<CGFloat>(1.0, halfRange * static_cast<CGFloat>(v));
+                            const CGFloat px = drawRect.origin.x + static_cast<CGFloat>(x) + 0.5;
+                            CGPathMoveToPoint(peaksPath, nullptr, px, centerY - hh);
+                            CGPathAddLineToPoint(peaksPath, nullptr, px, centerY + hh);
+                        }
+                        CAShapeLayer* peaksLayer = [CAShapeLayer layer];
+                        peaksLayer.frame = contentLayer.bounds;
+                        peaksLayer.fillColor = [NSColor clearColor].CGColor;
+                        peaksLayer.strokeColor = [waveTextColor colorWithAlphaComponent:0.92].CGColor;
+                        peaksLayer.lineWidth = 1.0;
+                        peaksLayer.path = peaksPath;
+                        CGPathRelease(peaksPath);
+                        peaksLayer.opacity = static_cast<float>(componentOpacity);
+                        [contentLayer addSublayer:peaksLayer];
+                    }
+
+                    // Playhead в sample-view: отдельная линия поверх waveform.
+                    const CGFloat ph = drawRect.origin.x + drawRect.size.width * finite01(wave->playhead01);
+                    CAShapeLayer* playhead = [CAShapeLayer layer];
+                    playhead.frame = contentLayer.bounds;
+                    playhead.fillColor = [NSColor clearColor].CGColor;
+                    playhead.strokeColor = [wavePlayheadColor colorWithAlphaComponent:0.95].CGColor;
+                    playhead.lineWidth = 1.2;
+                    CGMutablePathRef phPath = CGPathCreateMutable();
+                    CGPathMoveToPoint(phPath, nullptr, ph, drawRect.origin.y);
+                    CGPathAddLineToPoint(phPath, nullptr, ph, drawRect.origin.y + drawRect.size.height);
+                    playhead.path = phPath;
+                    CGPathRelease(phPath);
+                    playhead.opacity = static_cast<float>(componentOpacity);
+                    [contentLayer addSublayer:playhead];
+
+                    CAShapeLayer* marks = [CAShapeLayer layer];
+                    marks.frame = contentLayer.bounds;
+                    marks.fillColor = [NSColor clearColor].CGColor;
+                    marks.strokeColor = waveTextColor.CGColor;
+                    marks.lineWidth = 1.1;
+                    CGMutablePathRef markPath = CGPathCreateMutable();
+                    CGPathMoveToPoint(markPath, nullptr, sx, drawRect.origin.y);
+                    CGPathAddLineToPoint(markPath, nullptr, sx, drawRect.origin.y + drawRect.size.height);
+                    CGPathMoveToPoint(markPath, nullptr, ex, drawRect.origin.y);
+                    CGPathAddLineToPoint(markPath, nullptr, ex, drawRect.origin.y + drawRect.size.height);
+                    marks.path = markPath;
+                    CGPathRelease(markPath);
+                    marks.opacity = static_cast<float>(componentOpacity);
+                    [contentLayer addSublayer:marks];
+                }
             } break;
 
             case UiLayoutNodeType::TrackView:
@@ -1391,6 +1616,175 @@ void renderPreparedLayoutScene(const MacPrimitiveScenePaintContext& ctx,
             case UiLayoutNodeType::Unknown:
             default:
                 break;
+        }
+    }
+
+    // HUD-оверлей рисуем поверх контента сцены.
+    if (prepared.hud.visible && !prepared.hud.text.empty()) {
+        const UiHudOverlayView& hud = prepared.hud;
+
+        const uint16_t maxW = (frameWChars > 6U) ? static_cast<uint16_t>(frameWChars - 4U) : frameWChars;
+        const uint16_t maxH = (frameHChars > 6U) ? static_cast<uint16_t>(frameHChars - 4U) : frameHChars;
+        const uint16_t hudW = static_cast<uint16_t>(std::clamp<uint16_t>(hud.width, 8U, std::max<uint16_t>(8U, maxW)));
+        const uint16_t hudH = static_cast<uint16_t>(std::clamp<uint16_t>(hud.height, 2U, std::max<uint16_t>(2U, maxH)));
+
+        int16_t hudX = static_cast<int16_t>(std::max<int>(1, (static_cast<int>(frameWChars) - static_cast<int>(hudW)) / 2));
+        int16_t hudY = 1;
+        if (hud.position == UiHudPosition::Center) {
+            hudY = static_cast<int16_t>(std::max<int>(1, (static_cast<int>(frameHChars) - static_cast<int>(hudH)) / 2));
+        }
+        hudX = static_cast<int16_t>(std::clamp<int>(hudX, 1, std::max<int>(1, static_cast<int>(frameWChars - hudW - 1))));
+        hudY = static_cast<int16_t>(std::clamp<int>(hudY, 1, std::max<int>(1, static_cast<int>(frameHChars - hudH - 1))));
+
+        CGRect hudRect = pxRectForChars(hudX, hudY, hudW, hudH);
+        const CGFloat scale = std::clamp<CGFloat>(hud.scale, 0.80, 1.20);
+        if (std::fabs(scale - 1.0) > 0.0001) {
+            const CGFloat cx = hudRect.origin.x + hudRect.size.width * 0.5;
+            const CGFloat cy = hudRect.origin.y + hudRect.size.height * 0.5;
+            hudRect = CGRectMake(cx - hudRect.size.width * scale * 0.5,
+                                 cy - hudRect.size.height * scale * 0.5,
+                                 hudRect.size.width * scale,
+                                 hudRect.size.height * scale);
+        }
+
+        NSColor* hudTextColor = resolveColorSpec(hud.textColor, sceneDefaultTextColor);
+        NSColor* hudBorderColor = resolveColorSpec(hud.borderColor, ctx.mid);
+        NSColor* hudBgColor = resolveColorSpec(hud.backgroundColor, ctx.panel);
+
+        const CGFloat baseOpacity = static_cast<CGFloat>(std::clamp(hud.opacity, 0.0f, 1.0f));
+        const CGFloat glow = static_cast<CGFloat>(std::clamp(hud.glow01, 0.0f, 1.0f));
+        const CGFloat glitch = static_cast<CGFloat>(std::clamp(hud.glitch01, 0.0f, 1.0f));
+
+        if (glow > 0.001) {
+            CALayer* glowLayer = [CALayer layer];
+            const CGFloat spread = 3.0 + glow * 10.0;
+            glowLayer.frame = CGRectInset(hudRect, -spread, -spread);
+            glowLayer.backgroundColor = [hudBorderColor colorWithAlphaComponent:0.10 + glow * 0.35].CGColor;
+            glowLayer.cornerRadius = 7.0 + spread * 0.35;
+            glowLayer.opacity = static_cast<float>(baseOpacity);
+            [root addSublayer:glowLayer];
+        }
+
+        CAShapeLayer* panel = [CAShapeLayer layer];
+        panel.frame = root.bounds;
+        panel.fillColor = [hudBgColor colorWithAlphaComponent:0.96].CGColor;
+        panel.strokeColor = hudBorderColor.CGColor;
+        panel.lineWidth = 1.2;
+        panel.opacity = static_cast<float>(baseOpacity);
+        CGMutablePathRef panelPath = CGPathCreateMutable();
+        CGPathAddRoundedRect(panelPath, nullptr, hudRect, 5.0, 5.0);
+        panel.path = panelPath;
+        CGPathRelease(panelPath);
+        [root addSublayer:panel];
+
+        const std::string hudText = hud.text;
+
+        NSString* title = [NSString stringWithUTF8String:hudText.c_str()];
+        if (title && [title length] > 0) {
+            UiLayoutNode hudTextNode{};
+            hudTextNode.font = hud.font;
+            hudTextNode.fontSize = hud.fontSize;
+            NSFont* hudFont = fontForNode(&hudTextNode, nullptr, ctx.bodyFont);
+            if (!hudFont) {
+                hudFont = ctx.bodyFont ? ctx.bodyFont : ctx.gothicFont;
+            }
+
+            CATextLayerAlignmentMode textAlignMode = kCAAlignmentCenter;
+            switch (hud.align) {
+                case UiLayoutAlign::Start:
+                    textAlignMode = kCAAlignmentLeft;
+                    break;
+                case UiLayoutAlign::End:
+                    textAlignMode = kCAAlignmentRight;
+                    break;
+                case UiLayoutAlign::Center:
+                default:
+                    textAlignMode = kCAAlignmentCenter;
+                    break;
+            }
+            const bool wrapText = hud.textWrap;
+            const CGFloat padX =
+                static_cast<CGFloat>(std::max<uint16_t>(1U, hud.padding)) * ctx.cellW * 0.5;
+            const CGFloat padY =
+                static_cast<CGFloat>(std::max<uint16_t>(0U, hud.padding)) * ctx.cellH * 0.20;
+            const CGRect textBounds = CGRectInset(hudRect, padX, padY);
+            CGRect textRect = textBounds;
+            const CGFloat lineH = std::max<CGFloat>(
+                11.0,
+                (hudFont ? hudFont.pointSize : 11.0) * 1.20);
+            CGFloat fitH = std::min<CGFloat>(lineH, textBounds.size.height);
+            if (wrapText) {
+                NSDictionary* attrs = @{
+                    NSFontAttributeName : (hudFont ? hudFont : (ctx.bodyFont ? ctx.bodyFont : ctx.gothicFont))
+                };
+                const CGRect measured = [title boundingRectWithSize:CGSizeMake(
+                                                                    std::max<CGFloat>(1.0, textBounds.size.width),
+                                                                    CGFLOAT_MAX)
+                                                             options:(NSStringDrawingUsesLineFragmentOrigin |
+                                                                      NSStringDrawingUsesFontLeading)
+                                                          attributes:attrs];
+                fitH = std::min<CGFloat>(
+                    textBounds.size.height,
+                    std::max<CGFloat>(lineH, std::ceil(measured.size.height)));
+            }
+            CGFloat y = textBounds.origin.y;
+            switch (hud.justify) {
+                case UiLayoutJustify::End:
+                    y = textBounds.origin.y;
+                    break;
+                case UiLayoutJustify::Center:
+                case UiLayoutJustify::SpaceBetween:
+                    y = textBounds.origin.y + (textBounds.size.height - fitH) * 0.5;
+                    break;
+                case UiLayoutJustify::Start:
+                default:
+                    y = textBounds.origin.y + (textBounds.size.height - fitH);
+                    break;
+            }
+            textRect = CGRectMake(textBounds.origin.x, y, textBounds.size.width, fitH);
+
+            NodeTextFxChain hudFxChain{};
+            if (ctx.visualFx) {
+                VisualFxRequest base{};
+                base.nodeId = "hud.overlay.text";
+                base.instanceKey = "hud.overlay.text";
+                base.nodeText = hudText;
+                base.nowMs = nowMs;
+                base.hasValue01 = true;
+                const float instanceSeed = static_cast<float>(hud.fxInstanceId & 0xFFULL) / 255.0f;
+                base.value01 = std::clamp(static_cast<float>(baseOpacity) * 0.7f + instanceSeed * 0.3f, 0.0f, 1.0f);
+                for (const UiLayoutNode::EffectSpec& spec : hud.textEffects) {
+                    VisualFxRequest req = base;
+                    req.effect = spec.type;
+                    req.effectColor = spec.effectColor;
+                    req.effectTrigger = spec.effectTrigger;
+                    req.effectTransition = spec.effectTransition;
+                    req.effectTriggerOutMs = spec.effectTriggerOutMs;
+                    req.effectIntervalMs = spec.effectIntervalMs;
+                    req.effectAmount = spec.effectAmount;
+                    req.effectSpeed = spec.effectSpeed;
+                    if (!req.effect.empty()) {
+                        hudFxChain.requests.push_back(std::move(req));
+                    }
+                }
+                if (glitch > 0.001f) {
+                    VisualFxRequest req = base;
+                    req.effect = "glitch";
+                    req.effectTrigger = "always";
+                    req.effectAmount = std::clamp(static_cast<float>(glitch), 0.0f, 1.0f);
+                    req.effectSpeed = 1.0f + std::clamp(static_cast<float>(glitch), 0.0f, 1.0f) * 0.8f;
+                    hudFxChain.requests.push_back(std::move(req));
+                }
+            }
+            textLayer(textRect,
+                      title,
+                      hudTextColor,
+                      hudFont,
+                      textAlignMode,
+                      wrapText,
+                      hudFxChain.requests.empty() ? nullptr : &hudFxChain,
+                      baseOpacity,
+                      root);
         }
     }
 }

@@ -255,13 +255,14 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     std::string transportLine{};
     {
         char line[256]{};
-        std::snprintf(line, sizeof(line), " TRN:%s BPM:%5.1f TS:%u/%u Q:%s MET:%c OVF:%c ",
+        std::snprintf(line, sizeof(line), " TRN:%s BPM:%5.1f TS:%u/%u Q:%s MET:%c REC:%c OVF:%c ",
                       rtState.transport.playing ? "PLAY" : "STOP",
                       rtState.transport.bpm,
                       static_cast<unsigned>(rtState.transport.tsNum),
                       static_cast<unsigned>(rtState.transport.tsDen),
                       quantToStr(rtState.transport.quant),
                       rtState.transport.metronomeEnabled ? 'Y' : 'N',
+                      rtState.transport.recordEnabled ? 'Y' : 'N',
                       rtState.telemetry.rtQueueOverflow ? 'Y' : 'N');
         transportLine = line;
     }
@@ -309,13 +310,17 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
                           clipShort(tr.clipName, clipWidth).c_str());
             trackRows.emplace_back(line);
 
-            std::snprintf(line, sizeof(line), "   bars:%u",
-                          static_cast<unsigned>(tr.bars)
-//                          static_cast<unsigned>(tr.fxCount),
-//                          tr.loop ? 'Y' : 'N',
-//                          tr.muted ? 'Y' : 'N',
-//                          tr.armed ? 'Y' : 'N'
-                          );
+            const uint32_t safeBars = std::max<uint32_t>(1U, tr.bars);
+            uint32_t currentBar = 0U;
+            if (!tr.clipName.empty()) {
+                const float ph01 = std::clamp(tr.playhead01, 0.0f, 0.999999f);
+                currentBar = std::min<uint32_t>(
+                    safeBars,
+                    static_cast<uint32_t>(std::floor(ph01 * static_cast<float>(safeBars))) + 1U);
+            }
+            std::snprintf(line, sizeof(line), "   bars:%u current bar:%u",
+                          static_cast<unsigned>(safeBars),
+                          static_cast<unsigned>(currentBar));
             trackRows.emplace_back(line);
 
             std::snprintf(line, sizeof(line), "   mode:%s",
@@ -344,8 +349,8 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
             keysLine1 = layout_.keysHint;
         }
     } else {
-        keysLine1 = " keys [j/k focus] [/? adjust] [o apply] [m metronome] [F10 detect BPM]";
-        keysLine2 = "      [F2 undo] [F9 redo] [F4 manager] [F11/F12 pages] [q]";
+        keysLine1 = " keys [j/k focus] [/? adjust] [o apply] [m metronome] [v rec] [n seq] [shift+n pattern]";
+        keysLine2 = "      [F2 undo] [F9 redo] [F4 manager] [F10 detect BPM] [F11/F12 pages] [q] [e/r/t/y snap]";
     }
     const std::string keys = keysLine2.empty() ? keysLine1 : (keysLine1 + " " + keysLine2);
 
@@ -382,6 +387,8 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     const bool selectedMuted = selectedTrackView && selectedTrackView->muted;
     const bool selectedArmed = selectedTrackView && selectedTrackView->armed;
     const bool selectedLoop = selectedTrackView && selectedTrackView->loop;
+    const bool selectedRecordActive =
+        selectedTrackView && selectedTrackView->armed && rtState.transport.recordEnabled && rtState.transport.playing;
     const uint8_t selectedFxCount = selectedTrackView ? selectedTrackView->fxCount : 0U;
     bool selectedFxEnabledAny = false;
     if (selectedTrackView && selectedFxCount > 0U) {
@@ -411,6 +418,8 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     constexpr float kMinBpm = 40.0f;
     constexpr float kMaxBpm = 220.0f;
     const float bpm01 = std::clamp((rtState.transport.bpm - kMinBpm) / (kMaxBpm - kMinBpm), 0.0f, 1.0f);
+    const float trackPlayhead01 =
+        selectedTrackView ? std::clamp(selectedTrackView->playhead01, 0.0f, 1.0f) : 0.0f;
 
     params.number["track.selected.speed"] = selectedSpeed01;
     params.number["track.selected.gain"] = selectedGain01;
@@ -424,12 +433,18 @@ UiPreparedParams TracksWidget::buildPreparedLayoutParams_(const UiState& rtState
     params.text["track.selected.playback_profile.label"] = "MODE";
     params.text["track.selected.icon.loop"] = selectedLoop ? "LP:Y" : "LP:N";
     params.text["track.selected.icon.mute"] = selectedMuted ? "MT:Y" : "MT:N";
-    params.text["track.selected.icon.arm"] = selectedArmed ? "AR:Y" : "AR:N";
+    params.text["track.selected.icon.arm"] =
+        selectedRecordActive ? "● REC" : (selectedArmed ? "● ARM" : "○ ARM");
     params.text["track.selected.icon.play"] = std::string("ST:") + selectedPlayState;
     params.text["track.selected.icon.fx"] = std::string("FX:") + std::to_string(static_cast<unsigned>(selectedFxCount));
     params.flag["track.selected.fx.enabled"] = selectedFxEnabledAny;
+    params.flag["track.selected.recording.armed"] = selectedRecordActive;
+    params.flag["track.selected.arm.enabled"] = selectedArmed;
     params.text["track.selected.fx.icon.path"] = "images/icon.png";
     params.number["transport.bpm"] = bpm01;
+    params.number["track.selected.playhead"] = trackPlayhead01;
+    params.text["track.selected.playhead.label"] = "";
+    params.text["track.selected.playhead.animKey"] = "track.selected.playhead";
     params.number["fx.anim.current"] = selectedGain01;
     params.number["current"] = selectedGain01;
     params.text["fx.anim.current.label"] = "";

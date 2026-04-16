@@ -101,6 +101,7 @@ namespace avantgarde {
         const float** in; // [numIn][nframes]
         float** out; // [numOut][nframes]
         std::size_t nframes; // 128/256/512 и т.п.
+        uint32_t numOut{2}; // число валидных выходных каналов в out
         // Transport snapshot for tempo-synced DSP (filled by engine per block).
         bool transportValid{false};      // true, если транспорт подключен
         bool transportPlaying{false};    // play/stop на начало блока
