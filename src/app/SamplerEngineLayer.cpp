@@ -36,6 +36,15 @@
 #include "runtime/RtCommandQueueSPSC.cpp"
 
 namespace avantgarde {
+
+// User-data для callback-а аудиохоста.
+// Важно: тип имеет внешнюю linkage (не anonymous namespace), чтобы не ловить
+// -Wsubobject-linkage в тестах, где этот TU подключается напрямую.
+struct EngineRenderUser {
+    IAudioEngine* engine{nullptr};
+    ISamplePreviewEngine* preview{nullptr};
+};
+
 namespace {
 
 constexpr uint8_t kMinTrackCount = 1;
@@ -206,11 +215,6 @@ uint32_t inferBarsFromClipDuration(const SharedClipBuffer& clip,
     const uint32_t rounded = static_cast<uint32_t>(std::llround(std::max(1.0, rawBars)));
     return std::clamp<uint32_t>(rounded, 1u, 512u);
 }
-
-struct EngineRenderUser {
-    IAudioEngine* engine{nullptr};
-    ISamplePreviewEngine* preview{nullptr};
-};
 
 void renderThunk(AudioProcessContext& ctx, void* user) noexcept {
     // Колбэк аудиохоста:

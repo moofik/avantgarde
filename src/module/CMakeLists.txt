@@ -18,6 +18,19 @@ target_link_libraries(avantgarde_module
         # если  использует runtime — раскомментируй:
         # PRIVATE avantgarde_runtime
 )
+
+# GCC/ARM (в т.ч. Raspberry Pi) может требовать libatomic для __atomic_* символов
+# при использовании std::atomic на 8/16-байтовых типах.
+# Линкуем как PUBLIC зависимость модуля, чтобы потребители (app/tests) получали это автоматически.
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_library(AVANTGARDE_ATOMIC_LIB atomic)
+    if (AVANTGARDE_ATOMIC_LIB)
+        target_link_libraries(avantgarde_module
+                ${_iface} ${AVANTGARDE_ATOMIC_LIB}
+        )
+    endif()
+endif()
+
 target_include_directories(avantgarde_module
         ${_iface} ${CMAKE_CURRENT_LIST_DIR}/..
 )

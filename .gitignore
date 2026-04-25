@@ -1,5 +1,14 @@
 build/
+build-*/
 cmake-build-debug/
 .idea/
 *.wav
 *.mp3
+
+# OS / editor junk
+.DS_Store
+**/.DS_Store
+
+# Runtime logs
+logs/
+*.log

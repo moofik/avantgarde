@@ -27,8 +27,10 @@ SamplerIoLayer::~SamplerIoLayer() = default;
 bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) {
     const UiTheme effectiveTheme = config.themeProvided ? config.theme : UiTheme::Gothic;
     rpiWrapper_.reset();
+#if defined(__APPLE__)
     windowRenderer_ = nullptr;
     windowInput_.reset();
+#endif
 
 #if defined(__APPLE__)
     if (config.mode == SamplerUiMode::GbWindow) {

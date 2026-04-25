@@ -14,10 +14,12 @@
 
 namespace avantgarde {
 
+#if defined(__APPLE__)
 class MacPrimitiveWindowRenderer;
 namespace macos {
 class MacPrimitiveWindowInput;
 }
+#endif
 namespace raspi {
 class RpiUiWrapper;
 }
@@ -81,10 +83,12 @@ private:
     // Текущий renderer backend.
     std::unique_ptr<IUiRenderer> renderer_{};
 
+#if defined(__APPLE__)
     // Кэш указателя на window renderer для fast-path window input.
     MacPrimitiveWindowRenderer* windowRenderer_{nullptr};
     // Отдельный сборщик input для window режима (не в renderer).
     std::unique_ptr<macos::MacPrimitiveWindowInput> windowInput_{};
+#endif
 
     // Raspberry wrapper (renderer+input bridge).
     std::unique_ptr<raspi::RpiUiWrapper> rpiWrapper_{};
