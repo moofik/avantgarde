@@ -235,3 +235,56 @@ TEST_CASE("BufferFx: phrase params are latched and applied on boundary") {
     // разницы быть не должно: новые значения только pending.
     REQUIRE(maxAbsDiff(outA2, outB2) < 1e-6f);
 }
+
+TEST_CASE("BufferFx: buffer knob changes lookback depth (small vs large buffer differ)") {
+    BufferFxModule fxFresh{};
+    BufferFxModule fxDeep{};
+    fxFresh.init(48000.0, 512);
+    fxDeep.init(48000.0, 512);
+    fxFresh.reset();
+    fxDeep.reset();
+
+    for (BufferFxModule* fx : {&fxFresh, &fxDeep}) {
+        fx->setParam(BufferFxModule::P_MIX, 1.0f);
+        fx->setParam(BufferFxModule::P_SLICE_SIZE, 0.0f); // short slice -> many phrase boundaries
+        fx->setParam(BufferFxModule::P_REPEAT, 0.0f);     // repeat=1
+        fx->setParam(BufferFxModule::P_SPEED, 0.5f); // neutral
+        fx->setParam(BufferFxModule::P_RETRIG, 0.0f); // immediate phrase start (without WaitNextGrid)
+    }
+    fxFresh.setParam(BufferFxModule::P_BUFFER_SIZE, 0.0f); // near-present lookback
+    fxDeep.setParam(BufferFxModule::P_BUFFER_SIZE, 1.0f);  // deep lookback
+    fxFresh.beginBlock();
+    fxDeep.beginBlock();
+
+    std::vector<float> in(48000, 0.0f);
+    uint32_t seed = 0x12345678u;
+    for (std::size_t i = 0; i < in.size(); ++i) {
+        seed = seed * 1664525u + 1013904223u;
+        const float u = static_cast<float>(seed) / static_cast<float>(UINT32_MAX); // 0..1
+        in[i] = u * 2.0f - 1.0f;
+    }
+
+    std::vector<float> outFresh(in.size(), 0.0f);
+    std::vector<float> outDeep(in.size(), 0.0f);
+    const float* inPtr[2] = {in.data(), in.data()};
+    float* outFreshPtr[2] = {outFresh.data(), outFresh.data()};
+    float* outDeepPtr[2] = {outDeep.data(), outDeep.data()};
+
+    AudioProcessContext ctxA{};
+    ctxA.in = inPtr;
+    ctxA.out = outFreshPtr;
+    ctxA.nframes = in.size();
+    ctxA.transportValid = true;
+    ctxA.transportPlaying = true;
+    ctxA.transportBpm = 120.0f;
+    ctxA.transportTsNum = 4;
+    ctxA.transportTsDen = 4;
+    ctxA.transportSampleTime = 0;
+    AudioProcessContext ctxB = ctxA;
+    ctxB.out = outDeepPtr;
+
+    fxFresh.process(ctxA);
+    fxDeep.process(ctxB);
+
+    REQUIRE(maxAbsDiff(outFresh, outDeep) > 1e-3f);
+}

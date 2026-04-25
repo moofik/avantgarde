@@ -4,12 +4,17 @@
 #include "platform/macos/MacPrimitiveWindowInput.h"
 #include "platform/macos/MacPrimitiveWindowRenderer.h"
 #endif
+#include "platform/raspi/RpiUiWrapper.h"
 
 namespace avantgarde {
 
 bool parseSamplerUiMode(std::string_view raw, SamplerUiMode& out) noexcept {
     if (raw == "gb-window" || raw == "window") {
         out = SamplerUiMode::GbWindow;
+        return true;
+    }
+    if (raw == "rpi-wrapper" || raw == "rpi" || raw == "raspi") {
+        out = SamplerUiMode::RpiWrapper;
         return true;
     }
     return false;
@@ -21,6 +26,9 @@ SamplerIoLayer::~SamplerIoLayer() = default;
 
 bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) {
     const UiTheme effectiveTheme = config.themeProvided ? config.theme : UiTheme::Gothic;
+    rpiWrapper_.reset();
+    windowRenderer_ = nullptr;
+    windowInput_.reset();
 
 #if defined(__APPLE__)
     if (config.mode == SamplerUiMode::GbWindow) {
@@ -30,14 +38,36 @@ bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) 
         return true;
     }
 #endif
-    windowRenderer_ = nullptr;
-    windowInput_.reset();
+    if (config.mode == SamplerUiMode::RpiWrapper) {
+        rpiWrapper_ = std::make_unique<raspi::RpiUiWrapper>();
+        raspi::RpiUiWrapperConfig rpiCfg{};
+        rpiCfg.width = 640;
+        rpiCfg.height = 480;
+        rpiCfg.headless = true;
+        rpiCfg.inputDevice = config.rpiInputDevice;
+        if (!rpiWrapper_->init(rpiCfg, errorOut)) {
+            rpiWrapper_.reset();
+            return false;
+        }
+        return true;
+    }
+
     (void)effectiveTheme;
-    errorOut = "gb-window mode is supported only on macOS";
+    errorOut = "gb-window mode is supported only on macOS; use --ui=rpi-wrapper for Raspberry wrapper";
     return false;
 }
 
 bool SamplerIoLayer::readWindowEvents() {
+    if (rpiWrapper_) {
+        const bool hadPlatformEvents = rpiWrapper_->pollEvents();
+        PrimitiveInputEvent ev{};
+        bool hadInputEvents = false;
+        while (rpiWrapper_->readNextInputEvent(ev)) {
+            inputQueue_.push(ev);
+            hadInputEvents = true;
+        }
+        return hadPlatformEvents || hadInputEvents;
+    }
 #if defined(__APPLE__)
     if (!windowRenderer_ || !windowInput_) {
         return false;
@@ -62,6 +92,10 @@ bool SamplerIoLayer::readNextInputEvent(PrimitiveInputEvent& out) {
 
 void SamplerIoLayer::render(const UiState& state,
                             const UiPreparedLayout* preparedLayout) {
+    if (rpiWrapper_) {
+        rpiWrapper_->render(state, preparedLayout);
+        return;
+    }
     if (!renderer_) {
         return;
     }

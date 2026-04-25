@@ -76,12 +76,13 @@ bool FxListWidget::fxEnabled_(const UiTrackStateView& track, uint16_t slot) noex
     return true;
 }
 
-const std::array<FxListWidget::FxTypeOption, 4>& FxListWidget::fxTypeOptions_() noexcept {
-    static const std::array<FxTypeOption, 4> kTypes{{
+const std::array<FxListWidget::FxTypeOption, 5>& FxListWidget::fxTypeOptions_() noexcept {
+    static const std::array<FxTypeOption, 5> kTypes{{
         {FxRegistry::kReverbSchroederId, "Reverb"},
         {FxRegistry::kHpfOnePoleId, "HPF"},
         {FxRegistry::kStutterId, "Stutter"},
         {FxRegistry::kBufferFxId, "Buffer FX"},
+        {FxRegistry::kSuperGlitchId, "Super Glitch"},
     }};
     return kTypes;
 }

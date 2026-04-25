@@ -11,18 +11,24 @@ TEST_CASE("FxRegistry: resolves canonical ids and aliases") {
     const FxDescriptor* stutterB = FxRegistry::find("stutter");
     const FxDescriptor* bufferA = FxRegistry::find("fx.buffer.superglitch");
     const FxDescriptor* bufferB = FxRegistry::find("buffer");
+    const FxDescriptor* superA = FxRegistry::find("fx.superglitch.v1");
+    const FxDescriptor* superB = FxRegistry::find("super-glitch");
     REQUIRE(reverbA != nullptr);
     REQUIRE(reverbB != nullptr);
     REQUIRE(stutterA != nullptr);
     REQUIRE(stutterB != nullptr);
     REQUIRE(bufferA != nullptr);
     REQUIRE(bufferB != nullptr);
+    REQUIRE(superA != nullptr);
+    REQUIRE(superB != nullptr);
     REQUIRE(reverbA->id == FxRegistry::kReverbSchroederId);
     REQUIRE(reverbB->id == FxRegistry::kReverbSchroederId);
     REQUIRE(stutterA->id == FxRegistry::kStutterId);
     REQUIRE(stutterB->id == FxRegistry::kStutterId);
     REQUIRE(bufferA->id == FxRegistry::kBufferFxId);
     REQUIRE(bufferB->id == FxRegistry::kBufferFxId);
+    REQUIRE(superA->id == FxRegistry::kSuperGlitchId);
+    REQUIRE(superB->id == FxRegistry::kSuperGlitchId);
 }
 
 TEST_CASE("FxRegistry: descriptors expose parameter metadata") {
@@ -46,4 +52,10 @@ TEST_CASE("FxRegistry: descriptors expose parameter metadata") {
     REQUIRE(buffer.params[3].label == "Speed");
     REQUIRE(buffer.params[6].label == "Retrig");
     REQUIRE(buffer.params[7].label == "Reverse");
+
+    const FxDescriptor& super = FxRegistry::findOrFallback("fx.superglitch.v1");
+    REQUIRE(super.paramCount == 8);
+    REQUIRE(super.params[1].label == "Subslice");
+    REQUIRE(super.params[4].label == "Mode");
+    REQUIRE(super.params[5].label == "Phrase");
 }

@@ -167,6 +167,18 @@ namespace avantgarde {
         Reverse = 7
     };
 
+    // Параметры SUPER GLITCH (phrase/subslice engine).
+    enum class SuperGlitchParamId : uint16_t {
+        Mix = 0,          // dry/wet
+        Subslice = 1,     // деление phrase: whole/2/4/8/16
+        Hold = 2,         // плотность/длительность удержания (gate duty)
+        Speed = 3,        // скорость чтения phrase
+        Mode = 4,         // 0=smooth, 1=choppy
+        Phrase = 5,       // длина phrase (1/4..2 bar, optional free 4s)
+        Retrig = 6,       // сетка перезапуска
+        Reverse = 7       // реверс чтения
+    };
+
     enum class QuantizeCmdValue : uint8_t {
         None = 0,
         Beat = 1,
@@ -214,6 +226,10 @@ namespace avantgarde {
     }
 
     constexpr uint16_t toParamIndex(BufferFxParamId id) noexcept {
+        return static_cast<uint16_t>(id);
+    }
+
+    constexpr uint16_t toParamIndex(SuperGlitchParamId id) noexcept {
         return static_cast<uint16_t>(id);
     }
 

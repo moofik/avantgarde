@@ -22,6 +22,7 @@ int main(int argc, char** argv) {
     UiTheme uiTheme = UiTheme::Default;
     bool uiThemeProvided = false;
     uint8_t trackCount = 4;
+    std::string rpiInputDevice = "/dev/input/event0";
 
     int argi = 1;
     while (argi < argc) {
@@ -82,8 +83,18 @@ int main(int argc, char** argv) {
             argi += 2;
             continue;
         }
+        if (arg.rfind("--rpi-input=", 0) == 0) {
+            rpiInputDevice = std::string(std::string_view(arg).substr(12));
+            ++argi;
+            continue;
+        }
+        if (arg == "--rpi-input" && (argi + 1) < argc) {
+            rpiInputDevice = argv[argi + 1];
+            argi += 2;
+            continue;
+        }
         if (arg == "--ui") {
-            std::printf("Missing value for --ui (expected: gb-window|window)\n");
+            std::printf("Missing value for --ui (expected: gb-window|window|rpi-wrapper)\n");
             return 1;
         }
         if (arg == "--theme") {
@@ -92,6 +103,10 @@ int main(int argc, char** argv) {
         }
         if (arg == "--tracks") {
             std::printf("Missing value for --tracks (expected: 1..32)\n");
+            return 1;
+        }
+        if (arg == "--rpi-input") {
+            std::printf("Missing value for --rpi-input (expected: /dev/input/eventX or empty)\n");
             return 1;
         }
         if (arg.rfind("--", 0) == 0) {
@@ -105,6 +120,7 @@ int main(int argc, char** argv) {
     config.io.mode = uiMode;
     config.io.theme = uiTheme;
     config.io.themeProvided = uiThemeProvided;
+    config.io.rpiInputDevice = rpiInputDevice;
     config.engine.trackCount = trackCount;
     config.audioHost = createDefaultAudioHost();
     if (!config.audioHost) {

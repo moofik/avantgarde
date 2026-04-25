@@ -18,10 +18,14 @@ class MacPrimitiveWindowRenderer;
 namespace macos {
 class MacPrimitiveWindowInput;
 }
+namespace raspi {
+class RpiUiWrapper;
+}
 
 // Режимы UI backend.
 enum class SamplerUiMode : uint8_t {
-    GbWindow = 0
+    GbWindow = 0,
+    RpiWrapper = 1
 };
 
 // Парсинг CLI-строки режима UI.
@@ -35,6 +39,9 @@ struct SamplerIoConfig {
     UiTheme theme{UiTheme::Default};
     // true, если тема пришла из CLI.
     bool themeProvided{false};
+    // Linux evdev устройство для Raspberry wrapper (например /dev/input/event0).
+    // Пустая строка отключает физический ввод в rpi-wrapper.
+    std::string rpiInputDevice{"/dev/input/event0"};
 };
 
 // Слой ввода/вывода:
@@ -78,6 +85,9 @@ private:
     MacPrimitiveWindowRenderer* windowRenderer_{nullptr};
     // Отдельный сборщик input для window режима (не в renderer).
     std::unique_ptr<macos::MacPrimitiveWindowInput> windowInput_{};
+
+    // Raspberry wrapper (renderer+input bridge).
+    std::unique_ptr<raspi::RpiUiWrapper> rpiWrapper_{};
 };
 
 } // namespace avantgarde

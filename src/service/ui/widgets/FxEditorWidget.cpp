@@ -149,7 +149,10 @@ bool FxEditorWidget::buildPreparedLayout(UiPreparedLayout& out,
         throw std::runtime_error("FxEditorWidget: fxId '" + *fxId + "' is not registered in FxRegistry");
     }
     const std::size_t paramCount = descriptor ? descriptor->paramCount : 0U;
-    const uint16_t selectedParam = clampParamIndex_(navState.cursor, paramCount);
+    const std::vector<uint16_t> selectableParams = buildSelectableParams_(layout, paramCount);
+    const std::size_t selectableCount = selectableParams.size();
+    const uint16_t selectedSlot = resolveSelectedSlot_(navState.cursor, selectableCount);
+    const uint16_t selectedParam = resolveSelectedParam_(selectableParams, navState.cursor, paramCount);
     const SlotCache* cache = descriptor ? cacheForConst_(track, fxSlot, *descriptor) : nullptr;
 
     auto resolveValue = [cache](const FxDescriptor& d, uint16_t idx) -> float {
@@ -194,8 +197,8 @@ bool FxEditorWidget::buildPreparedLayout(UiPreparedLayout& out,
                       " fx:%s  state:%s  params:%u  sel:%u ",
                       descriptor ? std::string(descriptor->displayName).c_str() : "none",
                       fxEnabled ? "ON" : "OFF",
-                      static_cast<unsigned>(paramCount),
-                      static_cast<unsigned>(selectedParam + 1U));
+                      static_cast<unsigned>(selectableCount),
+                      static_cast<unsigned>(selectedSlot + 1U));
         view.addToSlot(layout.metaNodeId, UiTextBuilder(layout.metaNodeId).text(meta));
     }
 
@@ -318,6 +321,63 @@ uint16_t FxEditorWidget::resolveWriteParam_(const LayoutModel& layout,
         }
     }
     return selected;
+}
+
+std::vector<uint16_t> FxEditorWidget::buildSelectableParams_(const LayoutModel& layout,
+                                                             std::size_t paramCount) noexcept {
+    std::vector<uint16_t> out{};
+    if (paramCount == 0U) {
+        return out;
+    }
+
+    auto addUnique = [&out, paramCount](int32_t idx) {
+        if (idx < 0) {
+            return;
+        }
+        const uint16_t p = static_cast<uint16_t>(idx);
+        if (p >= paramCount) {
+            return;
+        }
+        if (std::find(out.begin(), out.end(), p) == out.end()) {
+            out.push_back(p);
+        }
+    };
+
+    for (const LayoutKnob& k : layout.knobs) {
+        addUnique(k.paramIndex);
+    }
+    for (const LayoutSwitch& sw : layout.switches) {
+        addUnique(sw.paramIndex);
+    }
+
+    // Если в шаблоне нет явных индексов (или профиль legacy), даем полный fallback.
+    if (out.empty()) {
+        out.reserve(paramCount);
+        for (uint16_t i = 0; i < paramCount; ++i) {
+            out.push_back(i);
+        }
+    }
+    return out;
+}
+
+uint16_t FxEditorWidget::resolveSelectedSlot_(uint16_t cursor, std::size_t selectableCount) noexcept {
+    if (selectableCount == 0U) {
+        return 0U;
+    }
+    return (cursor >= selectableCount) ? static_cast<uint16_t>(selectableCount - 1U) : cursor;
+}
+
+uint16_t FxEditorWidget::resolveSelectedParam_(const std::vector<uint16_t>& selectableParams,
+                                               uint16_t cursor,
+                                               std::size_t fallbackParamCount) noexcept {
+    if (!selectableParams.empty()) {
+        const uint16_t slot = resolveSelectedSlot_(cursor, selectableParams.size());
+        return selectableParams[slot];
+    }
+    if (fallbackParamCount == 0U) {
+        return 0U;
+    }
+    return (cursor >= fallbackParamCount) ? static_cast<uint16_t>(fallbackParamCount - 1U) : cursor;
 }
 
 FxEditorWidget::LayoutModel FxEditorWidget::buildLayoutModel_(const UiLayoutTemplate& tpl) {
@@ -475,16 +535,19 @@ WidgetOutput FxEditorWidget::onGesture(UiGesture action, const UiState& rtState,
     const UiLayoutTemplate* activeTemplate =
         (fxId && !fxId->empty()) ? resolveActiveLayoutTemplate_(*fxId) : nullptr;
     const LayoutModel layout = activeTemplate ? buildLayoutModel_(*activeTemplate) : LayoutModel{};
+    const std::vector<uint16_t> selectableParams = buildSelectableParams_(layout, paramCount);
+    const std::size_t selectableCount = selectableParams.size();
 
-    if (action == UiGesture::ListUp && paramCount > 0U) {
-        const uint16_t current = clampParamIndex_(navState.cursor, paramCount);
-        navState.cursor = (current == 0U) ? static_cast<uint16_t>(paramCount - 1U)
+    if (action == UiGesture::ListUp && selectableCount > 0U) {
+        const uint16_t current = resolveSelectedSlot_(navState.cursor, selectableCount);
+        navState.cursor = (current == 0U) ? static_cast<uint16_t>(selectableCount - 1U)
                                           : static_cast<uint16_t>(current - 1U);
         out.handled = true;
         return out;
     }
-    if (action == UiGesture::ListDown && paramCount > 0U) {
-        navState.cursor = static_cast<uint16_t>((clampParamIndex_(navState.cursor, paramCount) + 1U) % paramCount);
+    if (action == UiGesture::ListDown && selectableCount > 0U) {
+        navState.cursor = static_cast<uint16_t>((resolveSelectedSlot_(navState.cursor, selectableCount) + 1U) %
+                                                selectableCount);
         out.handled = true;
         return out;
     }
@@ -499,23 +562,23 @@ WidgetOutput FxEditorWidget::onGesture(UiGesture action, const UiState& rtState,
     }
     // Обычные клавиши (не pointer-action):
     // '='/'-' в текущем keymap приходят как TrackSpeedUp/TrackSpeedDown.
-    if (action == UiGesture::TrackSpeedUp && paramCount > 0U) {
-        const uint16_t current = clampParamIndex_(navState.cursor, paramCount);
-        navState.cursor = static_cast<uint16_t>((current + 1U) % paramCount);
+    if (action == UiGesture::TrackSpeedUp && selectableCount > 0U) {
+        const uint16_t current = resolveSelectedSlot_(navState.cursor, selectableCount);
+        navState.cursor = static_cast<uint16_t>((current + 1U) % selectableCount);
         out.handled = true;
         return out;
     }
-    if (action == UiGesture::TrackSpeedDown && paramCount > 0U) {
-        const uint16_t current = clampParamIndex_(navState.cursor, paramCount);
-        navState.cursor = (current == 0U) ? static_cast<uint16_t>(paramCount - 1U)
+    if (action == UiGesture::TrackSpeedDown && selectableCount > 0U) {
+        const uint16_t current = resolveSelectedSlot_(navState.cursor, selectableCount);
+        navState.cursor = (current == 0U) ? static_cast<uint16_t>(selectableCount - 1U)
                                           : static_cast<uint16_t>(current - 1U);
         out.handled = true;
         return out;
     }
     // '['/']' в текущем keymap приходят как BpmDown/BpmUp.
     if ((action == UiGesture::BpmUp || action == UiGesture::BpmDown) &&
-        descriptor && paramCount > 0U) {
-        const uint16_t selectedParam = clampParamIndex_(navState.cursor, paramCount);
+        descriptor && selectableCount > 0U) {
+        const uint16_t selectedParam = resolveSelectedParam_(selectableParams, navState.cursor, paramCount);
         const uint16_t writeParam = resolveWriteParam_(layout, selectedParam, paramCount);
         const FxParamDescriptor& def = descriptor->params[writeParam];
         const float dir = (action == UiGesture::BpmUp) ? 1.0f : -1.0f;
@@ -544,7 +607,14 @@ UiActionCatalog FxEditorWidget::queryAvailableActions(const UiState& rtState, co
     const uint16_t fxSlot = clampFx_(navState.selectedFx, fxCount);
     const FxDescriptor* descriptor = resolveDescriptor_(rtState, track, fxSlot);
     const std::size_t paramCount = descriptor ? descriptor->paramCount : 0U;
-    const uint16_t selectedParam = clampParamIndex_(navState.cursor, paramCount);
+    const std::string* fxId = resolveFxId_(rtState, track, fxSlot);
+    const UiLayoutTemplate* activeTemplate =
+        (fxId && !fxId->empty()) ? resolveActiveLayoutTemplate_(*fxId) : nullptr;
+    const LayoutModel layout = activeTemplate ? buildLayoutModel_(*activeTemplate) : LayoutModel{};
+    const std::vector<uint16_t> selectableParams = buildSelectableParams_(layout, paramCount);
+    const std::size_t selectableCount = selectableParams.size();
+    const uint16_t selectedSlot = resolveSelectedSlot_(navState.cursor, selectableCount);
+    const uint16_t selectedParam = resolveSelectedParam_(selectableParams, navState.cursor, paramCount);
     const bool selectedFxAvailable = UiCapabilityService::hasSelectedFx(rtState, navState);
 
     float selectedValue = 0.0f;
@@ -581,10 +651,10 @@ UiActionCatalog FxEditorWidget::queryAvailableActions(const UiState& rtState, co
         a.def.valueKind = UiAction::ValueKind::Integer;
         a.def.label = "FX Param";
         a.def.minValue = 1.0f;
-        a.def.maxValue = static_cast<float>(std::max<std::size_t>(1U, paramCount));
+        a.def.maxValue = static_cast<float>(std::max<std::size_t>(1U, selectableCount));
         a.def.step = 1.0f;
-        a.state.enabled = selectedFxAvailable && (paramCount > 0U);
-        a.state.value = static_cast<float>(selectedParam + 1U);
+        a.state.enabled = selectedFxAvailable && (selectableCount > 0U);
+        a.state.value = static_cast<float>(selectedSlot + 1U);
         push(std::move(a));
     }
     {
@@ -597,7 +667,7 @@ UiActionCatalog FxEditorWidget::queryAvailableActions(const UiState& rtState, co
         a.def.minValue = 0.0f;
         a.def.maxValue = 1.0f;
         a.def.step = paramStep_;
-        a.state.enabled = selectedFxAvailable && (paramCount > 0U);
+        a.state.enabled = selectedFxAvailable && (selectableCount > 0U);
         a.state.value = selectedValue;
         push(std::move(a));
     }
@@ -637,6 +707,8 @@ WidgetOutput FxEditorWidget::onAction(UiAction& action, const UiState& rtState, 
     const UiLayoutTemplate* activeTemplate =
         (fxId && !fxId->empty()) ? resolveActiveLayoutTemplate_(*fxId) : nullptr;
     const LayoutModel layout = activeTemplate ? buildLayoutModel_(*activeTemplate) : LayoutModel{};
+    const std::vector<uint16_t> selectableParams = buildSelectableParams_(layout, paramCount);
+    const std::size_t selectableCount = selectableParams.size();
 
     auto pushIntent = [&out](UiIntent intent) {
         out.intents.push_back(std::move(intent));
@@ -663,16 +735,16 @@ WidgetOutput FxEditorWidget::onAction(UiAction& action, const UiState& rtState, 
         } break;
 
         case UiAction::Id::SceneFxParamSelect: {
-            if (paramCount == 0U) {
+            if (selectableCount == 0U) {
                 break;
             }
-            const uint16_t current = clampParamIndex_(navState.cursor, paramCount);
+            const uint16_t current = resolveSelectedSlot_(navState.cursor, selectableCount);
             if (action.op == UiAction::Op::AdjustPrev) {
-                navState.cursor = (current == 0U) ? static_cast<uint16_t>(paramCount - 1U)
+                navState.cursor = (current == 0U) ? static_cast<uint16_t>(selectableCount - 1U)
                                                   : static_cast<uint16_t>(current - 1U);
             } else if (action.op == UiAction::Op::AdjustNext ||
                        action.op == UiAction::Op::Apply) {
-                navState.cursor = static_cast<uint16_t>((current + 1U) % paramCount);
+                navState.cursor = static_cast<uint16_t>((current + 1U) % selectableCount);
             }
         } break;
 
@@ -684,7 +756,7 @@ WidgetOutput FxEditorWidget::onAction(UiAction& action, const UiState& rtState, 
                 action.op != UiAction::Op::AdjustNext) {
                 break;
             }
-            const uint16_t selectedParam = clampParamIndex_(navState.cursor, paramCount);
+            const uint16_t selectedParam = resolveSelectedParam_(selectableParams, navState.cursor, paramCount);
             const uint16_t writeParam = resolveWriteParam_(layout, selectedParam, paramCount);
             const FxParamDescriptor& def = descriptor->params[writeParam];
             const float step = (action.def.step > 0.0f) ? action.def.step : paramStep_;
@@ -734,7 +806,12 @@ std::string FxEditorWidget::buildActionStatusLine_(const UiState& rtState, const
     const uint16_t fxSlot = clampFx_(navState.selectedFx, fxCount);
     const FxDescriptor* descriptor = resolveDescriptor_(rtState, track, fxSlot);
     const std::size_t paramCount = descriptor ? descriptor->paramCount : 0U;
-    const uint16_t selectedParam = clampParamIndex_(navState.cursor, paramCount);
+    const std::string* fxId = resolveFxId_(rtState, track, fxSlot);
+    const UiLayoutTemplate* activeTemplate =
+        (fxId && !fxId->empty()) ? resolveActiveLayoutTemplate_(*fxId) : nullptr;
+    const LayoutModel layout = activeTemplate ? buildLayoutModel_(*activeTemplate) : LayoutModel{};
+    const std::vector<uint16_t> selectableParams = buildSelectableParams_(layout, paramCount);
+    const uint16_t selectedParam = resolveSelectedParam_(selectableParams, navState.cursor, paramCount);
 
     const std::size_t idx = std::min<std::size_t>(catalog.currentIndex, catalog.actions.size() - 1U);
     const UiAction& a = catalog.actions[idx];

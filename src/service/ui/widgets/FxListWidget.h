@@ -53,7 +53,7 @@ private:
     // Состояние bypass слота FX (true = enabled, false = bypass).
     static bool fxEnabled_(const UiTrackStateView& track, uint16_t slot) noexcept;
     // Каталог доступных типов FX для действия "Add FX".
-    static const std::array<FxTypeOption, 4>& fxTypeOptions_() noexcept;
+    static const std::array<FxTypeOption, 5>& fxTypeOptions_() noexcept;
     // Безопасное ограничение индекса типа FX.
     static uint16_t clampFxType_(uint16_t typeIndex) noexcept;
     // Строка статуса active action pointer внизу кадра.

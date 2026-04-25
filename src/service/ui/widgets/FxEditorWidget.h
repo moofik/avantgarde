@@ -136,6 +136,15 @@ private:
     static uint16_t resolveWriteParam_(const LayoutModel& layout,
                                        uint16_t selectedParam,
                                        std::size_t paramCount) noexcept;
+    // Список параметров, реально представленных в layout (knob/switch).
+    static std::vector<uint16_t> buildSelectableParams_(const LayoutModel& layout,
+                                                         std::size_t paramCount) noexcept;
+    // Ограничение индекса "слота выбора" среди отображаемых параметров.
+    static uint16_t resolveSelectedSlot_(uint16_t cursor, std::size_t selectableCount) noexcept;
+    // Резолв реального descriptor index из cursor по selectable-порядку.
+    static uint16_t resolveSelectedParam_(const std::vector<uint16_t>& selectableParams,
+                                          uint16_t cursor,
+                                          std::size_t fallbackParamCount) noexcept;
     // Рекурсивный поиск ноды по id.
     static UiLayoutNode* findNodeById_(UiLayoutNode& root, std::string_view id) noexcept;
     // Выбор активного layout-профиля для текущего FX.

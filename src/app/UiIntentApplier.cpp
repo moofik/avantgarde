@@ -13,6 +13,7 @@
 #include "module/BufferFxModule.h"
 #include "module/SchroederReverbModule.h"
 #include "module/StutterModule.h"
+#include "module/SuperGlitchModule.h"
 #include "service/audio/BpmDetectorService.h"
 #include "service/ui/hud/HudNotificationsLayer.h"
 
@@ -30,6 +31,9 @@ std::unique_ptr<IAudioModule> createBuiltinFxByCanonicalId(std::string_view cano
     }
     if (canonicalId == FxRegistry::kBufferFxId) {
         return std::make_unique<BufferFxModule>();
+    }
+    if (canonicalId == FxRegistry::kSuperGlitchId) {
+        return std::make_unique<SuperGlitchModule>();
     }
     // Остальные профили можно добавить сюда по мере реализации модулей.
     return nullptr;

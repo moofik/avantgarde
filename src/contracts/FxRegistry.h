@@ -45,6 +45,7 @@ public:
     static constexpr std::string_view kHpfOnePoleId = "fx.filter.hpf.onepole";
     static constexpr std::string_view kStutterId = "fx.stutter.sync";
     static constexpr std::string_view kBufferFxId = "fx.buffer.superglitch";
+    static constexpr std::string_view kSuperGlitchId = "fx.superglitch.v1";
 
     // Резолв ID/алиаса в descriptor. Возвращает nullptr, если профиль неизвестен.
     static const FxDescriptor* find(std::string_view id) noexcept {
@@ -59,6 +60,9 @@ public:
         }
         if (id == kBufferFxId || id == "buffer" || id == "bufferfx" || id == "superglitch" || id == "glitch") {
             return &bufferFx_;
+        }
+        if (id == kSuperGlitchId || id == "superglitch.v1" || id == "super_glitch" || id == "super-glitch") {
+            return &superGlitch_;
         }
         return nullptr;
     }
@@ -101,6 +105,17 @@ private:
         {toParamIndex(BufferFxParamId::Reverse), "reverse", "Reverse", 0.0f, 1.0f, 0.00f},
     }};
 
+    static inline constexpr std::array<FxParamDescriptor, 8> superGlitchParams_{{
+        {toParamIndex(SuperGlitchParamId::Mix), "mix", "Mix", 0.0f, 1.0f, 0.70f},
+        {toParamIndex(SuperGlitchParamId::Subslice), "subslice", "Subslice", 0.0f, 1.0f, 0.25f},
+        {toParamIndex(SuperGlitchParamId::Hold), "hold", "Hold", 0.0f, 1.0f, 0.70f},
+        {toParamIndex(SuperGlitchParamId::Speed), "speed", "Speed", 0.0f, 1.0f, 0.50f},
+        {toParamIndex(SuperGlitchParamId::Mode), "mode", "Mode", 0.0f, 1.0f, 0.00f},
+        {toParamIndex(SuperGlitchParamId::Phrase), "phrase", "Phrase", 0.0f, 1.0f, 0.50f},
+        {toParamIndex(SuperGlitchParamId::Retrig), "retrig", "Retrig", 0.0f, 1.0f, 0.30f},
+        {toParamIndex(SuperGlitchParamId::Reverse), "reverse", "Reverse", 0.0f, 1.0f, 0.00f},
+    }};
+
     static inline constexpr FxDescriptor reverb_{
         kReverbSchroederId,
         "Schroeder Reverb",
@@ -127,6 +142,13 @@ private:
         "Buffer FX",
         bufferFxParams_.data(),
         bufferFxParams_.size(),
+    };
+
+    static inline constexpr FxDescriptor superGlitch_{
+        kSuperGlitchId,
+        "Super Glitch",
+        superGlitchParams_.data(),
+        superGlitchParams_.size(),
     };
 };
 
