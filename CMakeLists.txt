@@ -99,6 +99,10 @@ target_link_libraries(avantgarde
         avantgarde_module
 )
 
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_libraries(avantgarde PRIVATE atomic)
+endif()
+
 target_include_directories(avantgarde
         PRIVATE ${CMAKE_SOURCE_DIR}/src
 )

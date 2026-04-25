@@ -37,6 +37,10 @@ if (TEST_SOURCES)
             avantgarde_module
     )
 
+    if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_link_libraries(avantgarde_tests PRIVATE atomic)
+    endif()
+
     # если тестам нужен C++20 (на всякий случай)
     target_compile_features(avantgarde_tests PRIVATE cxx_std_20)
     target_compile_definitions(avantgarde_tests PRIVATE
