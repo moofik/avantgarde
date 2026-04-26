@@ -17,6 +17,11 @@ else()
     list(FILTER PLATFORM_SOURCES EXCLUDE REGEX ".*/macos/.*")
 endif()
 
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Linux-specific platform backend.
+    list(FILTER PLATFORM_SOURCES EXCLUDE REGEX ".*/linux/.*")
+endif()
+
 add_library(avantgarde_platform STATIC ${PLATFORM_SOURCES})
 
 target_link_libraries(avantgarde_platform
@@ -57,4 +62,9 @@ if(APPLE)
             "-framework AppKit"
             "-framework QuartzCore"
     )
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(ALSA REQUIRED)
+    target_link_libraries(avantgarde_platform PRIVATE ALSA::ALSA)
 endif()
