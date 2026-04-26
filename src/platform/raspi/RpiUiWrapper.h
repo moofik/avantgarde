@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -22,17 +23,25 @@ struct RpiUiWrapperConfig {
     std::string inputDevice{"/dev/input/event0"};
 };
 
-// RPi renderer-обертка (пока no-op/stub).
-// Важно: интерфейс оставляем platform-neutral, чтобы позже заменить внутренности
-// на DRM/SDL/FBO отрисовку без изменения app-слоя.
+// RPi renderer-обертка.
+// Текущая реализация: Linux framebuffer (/dev/fb0) + software rasterizer.
+// Интерфейс оставляем platform-neutral, чтобы позже безболезненно заменить
+// backend на DRM/SDL/FBO без изменения app-слоя.
 class RpiUiRenderer final : public IUiRenderer {
 public:
     explicit RpiUiRenderer(RpiUiWrapperConfig config) noexcept;
+    ~RpiUiRenderer() override;
+    RpiUiRenderer(const RpiUiRenderer&) = delete;
+    RpiUiRenderer& operator=(const RpiUiRenderer&) = delete;
+    RpiUiRenderer(RpiUiRenderer&&) noexcept = default;
+    RpiUiRenderer& operator=(RpiUiRenderer&&) noexcept = default;
     void render(const UiState& state) override;
     void renderPreparedLayout(const UiPreparedLayout& prepared) noexcept;
 
 private:
+    struct Impl;
     RpiUiWrapperConfig config_{};
+    std::unique_ptr<Impl> impl_{};
     bool warned_{false};
 };
 

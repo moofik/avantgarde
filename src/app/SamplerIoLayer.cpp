@@ -45,7 +45,7 @@ bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) 
         raspi::RpiUiWrapperConfig rpiCfg{};
         rpiCfg.width = 640;
         rpiCfg.height = 480;
-        rpiCfg.headless = true;
+        rpiCfg.headless = false;
         rpiCfg.inputDevice = config.rpiInputDevice;
         if (!rpiWrapper_->init(rpiCfg, errorOut)) {
             rpiWrapper_.reset();
