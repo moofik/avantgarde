@@ -1,5 +1,6 @@
 #include "contracts/IPlatform.h"
 
+#if defined(__linux__)
 #include <alsa/asoundlib.h>
 
 #include <algorithm>
@@ -226,3 +227,4 @@ std::shared_ptr<IAudioHost> createDefaultAudioHost() {
 
 } // namespace avantgarde
 
+#endif // defined(__linux__)
