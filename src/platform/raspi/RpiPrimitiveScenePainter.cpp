@@ -257,7 +257,7 @@ std::string resolveFontSpec(std::string_view raw) {
         return "assets/fonts/MedievalTimes-AL7l6.ttf";
     }
     if (low == "default" || low == "body" || low == "mono") {
-        return "assets/fonts/MedievalTimes-AL7l6.ttf";
+        return {};
     }
     return std::string(raw);
 }
@@ -471,50 +471,18 @@ FreetypeRuntime& freetypeRuntime() {
 }
 
 bool resolveFontFilePath(std::string_view spec, std::string_view cwd, std::string& outPath) {
-    namespace fs = std::filesystem;
-
-    auto pathExists = [](const std::string& p) -> bool {
-        if (p.empty()) {
-            return false;
-        }
-        std::error_code ec{};
-        return fs::exists(fs::path(p), ec) && !ec;
-    };
-
-    auto pushUnique = [](std::vector<std::string>& out, std::string p) {
-        if (p.empty()) {
-            return;
-        }
-        if (std::find(out.begin(), out.end(), p) == out.end()) {
-            out.push_back(std::move(p));
-        }
-    };
-
     outPath.clear();
     const std::string resolved = resolveFontSpec(spec);
     if (resolved.empty()) {
         return false;
     }
-
-    std::vector<std::string> candidates = buildAssetPathCandidates(resolved, cwd, false);
-    const std::string resolvedLow = toLowerAscii(resolved);
-    if (resolvedLow.find("gothic-pixel-font.ttf") != std::string::npos) {
-        const std::vector<std::string> alt = buildAssetPathCandidates("assets/fonts/gothic_pixel.ttf", cwd, false);
-        for (const auto& c : alt) {
-            pushUnique(candidates, c);
-        }
-    }
-    const std::vector<std::string> fallbackLocal = buildAssetPathCandidates("assets/fonts/MedievalTimes-AL7l6.ttf", cwd, false);
-    for (const auto& c : fallbackLocal) {
-        pushUnique(candidates, c);
-    }
-
-    // Системный fallback на Linux (если локальные fonts недоступны/битые).
-    pushUnique(candidates, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
-    pushUnique(candidates, "/usr/share/fonts/truetype/freefont/FreeSans.ttf");
-
+    const auto candidates = buildAssetPathCandidates(resolved, cwd, false);
     for (const std::string& c : candidates) {
-        if (hasFontExt(c) && pathExists(c)) {
+        if (hasFontExt(c)) {
+            std::error_code ec{};
+            if (!std::filesystem::exists(std::filesystem::path(c), ec) || ec) {
+                continue;
+            }
             outPath = c;
             return true;
         }
@@ -902,6 +870,8 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                     }
                 }
             }
+            // STRICT: если font задан, но FT не отработал — не fallback-им на tiny.
+            return 0;
         }
 #else
         (void)fontSpec;
@@ -923,6 +893,8 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
             if (drawTextFt(canvas, x, y, text, fontSpec, pixelSize, color, opacity01, ctx.cwd)) {
                 return;
             }
+            // STRICT: если font задан, но FT не отрисовал — не рисуем tiny fallback.
+            return;
         }
 #else
         (void)fontSpec;
