@@ -3,6 +3,7 @@
 #include "platform/render/PreparedLayoutUtils.h"
 #include "platform/render/RenderGeometry.h"
 #include "service/ui/layout/UiLayoutEngine.h"
+#include "app/AppDiagnostics.h"
 
 #include <algorithm>
 #include <array>
@@ -224,6 +225,8 @@ std::string toLowerAscii(std::string s) {
         pushUnique(specPath);
     } else {
         pushUnique(cwdPath / specPath);
+        pushUnique(cwdPath / ".." / specPath);
+        pushUnique(cwdPath / ".." / ".." / specPath);
     }
 
     if (specPath.parent_path().empty()) {
@@ -254,7 +257,7 @@ std::string resolveFontSpec(std::string_view raw) {
         return "assets/fonts/MedievalTimes-AL7l6.ttf";
     }
     if (low == "default" || low == "body" || low == "mono") {
-        return {};
+        return "assets/fonts/MedievalTimes-AL7l6.ttf";
     }
     return std::string(raw);
 }
@@ -468,14 +471,50 @@ FreetypeRuntime& freetypeRuntime() {
 }
 
 bool resolveFontFilePath(std::string_view spec, std::string_view cwd, std::string& outPath) {
+    namespace fs = std::filesystem;
+
+    auto pathExists = [](const std::string& p) -> bool {
+        if (p.empty()) {
+            return false;
+        }
+        std::error_code ec{};
+        return fs::exists(fs::path(p), ec) && !ec;
+    };
+
+    auto pushUnique = [](std::vector<std::string>& out, std::string p) {
+        if (p.empty()) {
+            return;
+        }
+        if (std::find(out.begin(), out.end(), p) == out.end()) {
+            out.push_back(std::move(p));
+        }
+    };
+
     outPath.clear();
     const std::string resolved = resolveFontSpec(spec);
     if (resolved.empty()) {
         return false;
     }
-    const auto candidates = buildAssetPathCandidates(resolved, cwd, false);
+
+    std::vector<std::string> candidates = buildAssetPathCandidates(resolved, cwd, false);
+    const std::string resolvedLow = toLowerAscii(resolved);
+    if (resolvedLow.find("gothic-pixel-font.ttf") != std::string::npos) {
+        const std::vector<std::string> alt = buildAssetPathCandidates("assets/fonts/gothic_pixel.ttf", cwd, false);
+        for (const auto& c : alt) {
+            pushUnique(candidates, c);
+        }
+    }
+    const std::vector<std::string> fallbackLocal = buildAssetPathCandidates("assets/fonts/MedievalTimes-AL7l6.ttf", cwd, false);
+    for (const auto& c : fallbackLocal) {
+        pushUnique(candidates, c);
+    }
+
+    // Системный fallback на Linux (если локальные fonts недоступны/битые).
+    pushUnique(candidates, "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+    pushUnique(candidates, "/usr/share/fonts/truetype/freefont/FreeSans.ttf");
+
     for (const std::string& c : candidates) {
-        if (hasFontExt(c)) {
+        if (hasFontExt(c) && pathExists(c)) {
             outPath = c;
             return true;
         }
@@ -511,14 +550,37 @@ bool drawTextFt(RpiPixelCanvas& canvas,
                 std::string_view cwd) {
     FreetypeRuntime& rt = freetypeRuntime();
     if (!rt.ok()) {
+        static bool warnedNoFt = false;
+        if (!warnedNoFt) {
+            warnedNoFt = true;
+            AppDiagnostics::logf(AppLogLevel::Warn, "RPi/FT: runtime is not initialized");
+        }
         return false;
     }
     std::string path{};
     if (!resolveFontFilePath(fontSpec, cwd, path)) {
+        static std::unordered_map<std::string, bool> warnedResolve{};
+        const std::string key(fontSpec);
+        if (!key.empty() && warnedResolve.find(key) == warnedResolve.end()) {
+            warnedResolve.emplace(key, true);
+            AppDiagnostics::logf(AppLogLevel::Warn,
+                                 "RPi/FT: cannot resolve font spec='%s' cwd='%s'",
+                                 key.c_str(),
+                                 std::string(cwd).c_str());
+        }
         return false;
     }
     FT_Face face = rt.face(path, std::max(6, pixelSize));
     if (!face) {
+        static std::unordered_map<std::string, bool> warnedFace{};
+        const std::string key = path + "#" + std::to_string(std::max(6, pixelSize));
+        if (warnedFace.find(key) == warnedFace.end()) {
+            warnedFace.emplace(key, true);
+            AppDiagnostics::logf(AppLogLevel::Warn,
+                                 "RPi/FT: cannot load face path='%s' size=%d",
+                                 path.c_str(),
+                                 std::max(6, pixelSize));
+        }
         return false;
     }
 

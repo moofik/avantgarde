@@ -152,7 +152,7 @@ public:
                 uint16_t dy = sy;
                 switch (rotation) {
                     case 90U:
-                        dx = static_cast<uint16_t>(height_ - 1U - sy);
+                        dx = static_cast<uint16_t>(width_ - 1U - sy);
                         dy = sx;
                         break;
                     case 180U:
@@ -161,7 +161,7 @@ public:
                         break;
                     case 270U:
                         dx = sy;
-                        dy = static_cast<uint16_t>(width_ - 1U - sx);
+                        dy = static_cast<uint16_t>(height_ - 1U - sx);
                         break;
                     case 0U:
                     default:
