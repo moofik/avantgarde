@@ -1035,6 +1035,35 @@ void applyFxRequestsToRect(RpiPixelCanvas& canvas,
     }
 }
 
+RpiRgba unpackRgba(uint32_t px) noexcept {
+    return RpiRgba{
+        static_cast<uint8_t>((px >> 24U) & 0xFFU),
+        static_cast<uint8_t>((px >> 16U) & 0xFFU),
+        static_cast<uint8_t>((px >> 8U) & 0xFFU),
+        static_cast<uint8_t>(px & 0xFFU)};
+}
+
+void blitLayerOverCanvas(RpiPixelCanvas& dst,
+                         const RpiPixelCanvas& layer,
+                         int dstX,
+                         int dstY) {
+    const auto& srcPixels = layer.pixels();
+    const int h = static_cast<int>(layer.height());
+    const int w = static_cast<int>(layer.width());
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const uint32_t packed = srcPixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(w) +
+                                              static_cast<std::size_t>(x)];
+            const RpiRgba c = unpackRgba(packed);
+            if (c.a == 0U) {
+                continue;
+            }
+            const float a01 = static_cast<float>(c.a) / 255.0f;
+            dst.fillRect(RpiRectI{dstX + x, dstY + y, 1, 1}, RpiRgba{c.r, c.g, c.b, 255U}, a01);
+        }
+    }
+}
+
 } // namespace
 
 void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
@@ -1231,7 +1260,32 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
         }
 
         for (const std::string& line : lines) {
-            const int textW = measureTextWidth(line, fontSpec, px, fallbackScale);
+            std::string renderLine = line;
+            int textW = measureTextWidth(renderLine, fontSpec, px, fallbackScale);
+            if (textW > rect.w) {
+                // Жестко ограничиваем строку шириной rect, чтобы текст
+                // не залезал в соседние layout-зоны (например в anim slot).
+                constexpr std::string_view kEllipsis = "...";
+                std::string candidate = renderLine;
+                bool usedEllipsis = false;
+                while (!candidate.empty() &&
+                       measureTextWidth(candidate, fontSpec, px, fallbackScale) > rect.w) {
+                    candidate.pop_back();
+                    if (!usedEllipsis && !candidate.empty()) {
+                        usedEllipsis = true;
+                    }
+                }
+                if (usedEllipsis && candidate.size() > kEllipsis.size()) {
+                    candidate.resize(candidate.size() - kEllipsis.size());
+                    candidate += std::string(kEllipsis);
+                    while (!candidate.empty() &&
+                           measureTextWidth(candidate, fontSpec, px, fallbackScale) > rect.w) {
+                        candidate.pop_back();
+                    }
+                }
+                renderLine = std::move(candidate);
+                textW = measureTextWidth(renderLine, fontSpec, px, fallbackScale);
+            }
             int x = rect.x;
             switch (align) {
                 case UiLayoutAlign::Center:
@@ -1244,7 +1298,7 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 default:
                     break;
             }
-            drawTextLine(x, y, line, fontSpec, px, fallbackScale, color, opacity01);
+            drawTextLine(x, y, renderLine, fontSpec, px, fallbackScale, color, opacity01);
             y += lineH;
             if (y + lineH > rect.y + rect.h + 1) {
                 break;
@@ -1343,7 +1397,14 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 if (!list) {
                     break;
                 }
-                const int lineH = TinyFontPainter::lineHeight(std::max(1, textScale - 1));
+                const int rowScale = std::max(1, textScale);
+                const float rowFontPx = (fontPx > 0.0f) ? fontPx : 0.0f;
+                const int lineH = (rowFontPx > 0.0f)
+                                      ? std::max(TinyFontPainter::lineHeight(rowScale),
+                                                 std::max(8,
+                                                          static_cast<int>(
+                                                              std::lround(rowFontPx + std::max(1.0f, rowFontPx / 5.0f)))))
+                                      : TinyFontPainter::lineHeight(rowScale);
                 int y = rect.y + 1;
                 for (std::size_t i = 0; i < list->rows.size(); ++i) {
                     if (y + lineH > rect.y + rect.h) {
@@ -1356,8 +1417,8 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                     drawTextInRect(RpiRectI{rect.x + 2, y, std::max(0, rect.w - 4), lineH},
                                    row,
                                    fontSpec,
-                                   (fontPx > 0.0f) ? std::max(6.0f, fontPx * 0.86f) : 0.0f,
-                                   std::max(1, textScale - 1),
+                                   rowFontPx,
+                                   rowScale,
                                    UiLayoutAlign::Start,
                                    UiLayoutJustify::Start,
                                    rowColor,
@@ -1426,10 +1487,10 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 const auto* icon = dynamic_cast<const UiIconComponent*>(component);
                 const int pad = std::max(0, static_cast<int>(node->padding));
                 const RpiRectI iconRect{
-                    rect.x + 2 + pad,
-                    rect.y + 2 + pad,
-                    std::max(4, rect.w - 4 - pad * 2),
-                    std::max(4, rect.h - 4 - pad * 2)};
+                    rect.x + pad,
+                    rect.y + pad,
+                    std::max(4, rect.w - pad * 2),
+                    std::max(4, rect.h - pad * 2)};
                 std::string path{};
                 if (icon && !icon->path.empty()) {
                     path = icon->path;
@@ -1438,13 +1499,21 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 }
                 const RpiImage* image = loadImageCached(path, ctx.cwd);
                 if (image) {
-                    drawImageFit(canvas, iconRect, *image, nodeOpacity);
+                    RpiPixelCanvas layer{};
+                    layer.resize(static_cast<uint16_t>(iconRect.w), static_cast<uint16_t>(iconRect.h));
+                    layer.clear(RpiRgba{0, 0, 0, 0});
+                    drawImageFit(layer, RpiRectI{0, 0, iconRect.w, iconRect.h}, *image, nodeOpacity);
+                    const std::vector<VisualFxRequest> fxRequests = buildFxForNode(node, component, path);
+                    applyFxRequestsToRect(layer,
+                                          RpiRectI{0, 0, iconRect.w, iconRect.h},
+                                          fxRequests,
+                                          ctx.visualFx);
+                    blitLayerOverCanvas(canvas, layer, iconRect.x, iconRect.y);
                 } else {
                     canvas.strokeRect(iconRect, borderColor, 1, nodeOpacity);
                     canvas.line(iconRect.x, iconRect.y, iconRect.x + iconRect.w - 1, iconRect.y + iconRect.h - 1, borderColor, nodeOpacity);
                     canvas.line(iconRect.x + iconRect.w - 1, iconRect.y, iconRect.x, iconRect.y + iconRect.h - 1, borderColor, nodeOpacity);
                 }
-                applyNodeFx(node, component, iconRect, path);
             } break;
 
             case UiLayoutNodeType::AnimSlot: {

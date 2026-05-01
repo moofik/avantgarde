@@ -43,7 +43,7 @@
           {
             "type": "list",
             "id": "tracks_body",
-            "style_ref": "@styles.text.primary"
+            "style_ref": "@styles.track.body"
           },
           {
             "type": "row",

@@ -60,6 +60,11 @@
         { "preset": "@effects.mode.typing" }
       ]
     },
+    "track.body": {
+      "font": "@theme.fonts.medieval",
+      "font_size": 18,
+      "text_color": "@theme.colors.text.primary"
+    },
     "track.animslot": {
       "border_color": "@theme.colors.border.accent",
       "text_color": "@theme.colors.text.anim"
