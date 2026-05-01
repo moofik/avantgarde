@@ -4,7 +4,9 @@
 #include "platform/macos/MacPrimitiveWindowInput.h"
 #include "platform/macos/MacPrimitiveWindowRenderer.h"
 #endif
-#include "platform/raspi/RpiUiWrapper.h"
+#include "platform/raspi/RpiPrimitiveWindowInput.h"
+#include "platform/raspi/RpiPrimitiveWindowRenderer.h"
+#include "platform/raspi/RpiUiConfig.h"
 
 namespace avantgarde {
 
@@ -26,7 +28,8 @@ SamplerIoLayer::~SamplerIoLayer() = default;
 
 bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) {
     const UiTheme effectiveTheme = config.themeProvided ? config.theme : UiTheme::Gothic;
-    rpiWrapper_.reset();
+    rpiRenderer_.reset();
+    rpiInput_.reset();
 #if defined(__APPLE__)
     windowRenderer_ = nullptr;
     windowInput_.reset();
@@ -41,14 +44,21 @@ bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) 
     }
 #endif
     if (config.mode == SamplerUiMode::RpiWrapper) {
-        rpiWrapper_ = std::make_unique<raspi::RpiUiWrapper>();
-        raspi::RpiUiWrapperConfig rpiCfg{};
+        rpiRenderer_ = std::make_unique<raspi::RpiPrimitiveWindowRenderer>();
+        rpiInput_ = std::make_unique<raspi::RpiPrimitiveWindowInput>();
+        raspi::RpiUiConfig rpiCfg{};
         rpiCfg.width = 640;
         rpiCfg.height = 480;
         rpiCfg.headless = false;
         rpiCfg.inputDevice = config.rpiInputDevice;
-        if (!rpiWrapper_->init(rpiCfg, errorOut)) {
-            rpiWrapper_.reset();
+        if (!rpiRenderer_->init(rpiCfg, errorOut)) {
+            rpiRenderer_.reset();
+            rpiInput_.reset();
+            return false;
+        }
+        if (!rpiInput_->init(rpiCfg, errorOut)) {
+            rpiRenderer_.reset();
+            rpiInput_.reset();
             return false;
         }
         return true;
@@ -60,11 +70,11 @@ bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) 
 }
 
 bool SamplerIoLayer::readWindowEvents() {
-    if (rpiWrapper_) {
-        const bool hadPlatformEvents = rpiWrapper_->pollEvents();
+    if (rpiInput_) {
+        const bool hadPlatformEvents = rpiInput_->pollPlatformEvents();
         PrimitiveInputEvent ev{};
         bool hadInputEvents = false;
-        while (rpiWrapper_->readNextInputEvent(ev)) {
+        while (rpiInput_->readNextInputEvent(ev)) {
             inputQueue_.push(ev);
             hadInputEvents = true;
         }
@@ -94,8 +104,12 @@ bool SamplerIoLayer::readNextInputEvent(PrimitiveInputEvent& out) {
 
 void SamplerIoLayer::render(const UiState& state,
                             const UiPreparedLayout* preparedLayout) {
-    if (rpiWrapper_) {
-        rpiWrapper_->render(state, preparedLayout);
+    if (rpiRenderer_) {
+        if (preparedLayout) {
+            rpiRenderer_->renderPreparedLayout(*preparedLayout);
+        } else {
+            rpiRenderer_->render(state);
+        }
         return;
     }
     if (!renderer_) {

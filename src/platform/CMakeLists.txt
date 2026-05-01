@@ -26,6 +26,7 @@ add_library(avantgarde_platform STATIC ${PLATFORM_SOURCES})
 
 target_link_libraries(avantgarde_platform
         PUBLIC avantgarde_contracts
+        PRIVATE avantgarde_service
 )
 
 target_include_directories(avantgarde_platform

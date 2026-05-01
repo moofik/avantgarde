@@ -21,7 +21,8 @@ class MacPrimitiveWindowInput;
 }
 #endif
 namespace raspi {
-class RpiUiWrapper;
+class RpiPrimitiveWindowRenderer;
+class RpiPrimitiveWindowInput;
 }
 
 // Режимы UI backend.
@@ -90,8 +91,9 @@ private:
     std::unique_ptr<macos::MacPrimitiveWindowInput> windowInput_{};
 #endif
 
-    // Raspberry wrapper (renderer+input bridge).
-    std::unique_ptr<raspi::RpiUiWrapper> rpiWrapper_{};
+    // Raspberry renderer + input (по той же схеме, что и macOS backend).
+    std::unique_ptr<raspi::RpiPrimitiveWindowRenderer> rpiRenderer_{};
+    std::unique_ptr<raspi::RpiPrimitiveWindowInput> rpiInput_{};
 };
 
 } // namespace avantgarde
