@@ -138,13 +138,22 @@ int main(int argc, char** argv) {
         break;
     }
 
-    // В framebuffer-режиме лог в stderr визуально конфликтует с кадром на /dev/fb0.
-    // По умолчанию для rpi-wrapper оставляем только файловый лог.
-    // Можно форсировать stderr обратно через AVANTGARDE_LOG_STDERR=1.
+    // В framebuffer-режиме любой вывод в tty (stdout/stderr) визуально конфликтует
+    // с кадром на /dev/fb0. По умолчанию оставляем только файловый лог.
+    // Для отладки можно вернуть stderr через AVANTGARDE_LOG_STDERR=1.
+    // Для полного отключения mute (stdout+stderr) можно выставить
+    // AVANTGARDE_CONSOLE_STDIO=1 (не отключать stdio).
     if (uiMode == SamplerUiMode::RpiWrapper) {
         const char* stderrEnv = std::getenv("AVANTGARDE_LOG_STDERR");
         const bool keepStderr = (stderrEnv && std::string_view(stderrEnv) == "1");
         AppDiagnostics::setStderrEnabled(keepStderr);
+
+        const char* keepConsoleEnv = std::getenv("AVANTGARDE_CONSOLE_STDIO");
+        const bool keepConsole = (keepConsoleEnv && std::string_view(keepConsoleEnv) == "1");
+        if (!keepConsole) {
+            (void)std::freopen("/dev/null", "w", stdout);
+            (void)std::freopen("/dev/null", "w", stderr);
+        }
     }
 
     const char* logPathEnv = std::getenv("AVANTGARDE_LOG_PATH");

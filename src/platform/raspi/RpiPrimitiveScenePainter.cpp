@@ -498,19 +498,190 @@ bool resolveFontFilePath(std::string_view spec, std::string_view cwd, std::strin
     return false;
 }
 
-int measureTextFt(FT_Face face, std::string_view text) {
+bool readUtf8Codepoint(std::string_view s, std::size_t& pos, uint32_t& cp) {
+    if (pos >= s.size()) {
+        return false;
+    }
+    const uint8_t b0 = static_cast<uint8_t>(s[pos++]);
+    if ((b0 & 0x80U) == 0U) {
+        cp = b0;
+        return true;
+    }
+    if ((b0 & 0xE0U) == 0xC0U) {
+        if (pos >= s.size()) {
+            cp = '?';
+            return true;
+        }
+        const uint8_t b1 = static_cast<uint8_t>(s[pos++]);
+        if ((b1 & 0xC0U) != 0x80U) {
+            cp = '?';
+            return true;
+        }
+        cp = (static_cast<uint32_t>(b0 & 0x1FU) << 6U) |
+             static_cast<uint32_t>(b1 & 0x3FU);
+        return true;
+    }
+    if ((b0 & 0xF0U) == 0xE0U) {
+        if (pos + 1U >= s.size()) {
+            cp = '?';
+            pos = s.size();
+            return true;
+        }
+        const uint8_t b1 = static_cast<uint8_t>(s[pos++]);
+        const uint8_t b2 = static_cast<uint8_t>(s[pos++]);
+        if ((b1 & 0xC0U) != 0x80U || (b2 & 0xC0U) != 0x80U) {
+            cp = '?';
+            return true;
+        }
+        cp = (static_cast<uint32_t>(b0 & 0x0FU) << 12U) |
+             (static_cast<uint32_t>(b1 & 0x3FU) << 6U) |
+             static_cast<uint32_t>(b2 & 0x3FU);
+        return true;
+    }
+    if ((b0 & 0xF8U) == 0xF0U) {
+        if (pos + 2U >= s.size()) {
+            cp = '?';
+            pos = s.size();
+            return true;
+        }
+        const uint8_t b1 = static_cast<uint8_t>(s[pos++]);
+        const uint8_t b2 = static_cast<uint8_t>(s[pos++]);
+        const uint8_t b3 = static_cast<uint8_t>(s[pos++]);
+        if ((b1 & 0xC0U) != 0x80U ||
+            (b2 & 0xC0U) != 0x80U ||
+            (b3 & 0xC0U) != 0x80U) {
+            cp = '?';
+            return true;
+        }
+        cp = (static_cast<uint32_t>(b0 & 0x07U) << 18U) |
+             (static_cast<uint32_t>(b1 & 0x3FU) << 12U) |
+             (static_cast<uint32_t>(b2 & 0x3FU) << 6U) |
+             static_cast<uint32_t>(b3 & 0x3FU);
+        return true;
+    }
+    cp = '?';
+    return true;
+}
+
+uint32_t asciiFallbackCp(uint32_t cp) noexcept {
+    switch (cp) {
+        case 0x25B6U: // ▶
+        case 0x25BAU: // ►
+        case 0x25B8U: // ▸
+            return static_cast<uint32_t>('>');
+        case 0x25C0U: // ◀
+        case 0x25C4U: // ◄
+        case 0x25C2U: // ◂
+            return static_cast<uint32_t>('<');
+        case 0x25CBU: // ○
+        case 0x25E6U: // ◦
+        case 0x25EFU: // ◯
+            return static_cast<uint32_t>('o');
+        default:
+            return cp;
+    }
+}
+
+std::vector<std::string> resolveUnicodeFallbackFontPaths(std::string_view cwd,
+                                                          std::string_view primaryPath) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> out{};
+    auto pushIfExists = [&](std::string_view spec) {
+        if (spec.empty()) {
+            return;
+        }
+        const auto candidates = buildAssetPathCandidates(spec, cwd, false);
+        for (const std::string& c : candidates) {
+            if (!hasFontExt(c)) {
+                continue;
+            }
+            std::error_code ec{};
+            const fs::path p(c);
+            if (!fs::exists(p, ec) || ec) {
+                continue;
+            }
+            const std::string norm = p.lexically_normal().string();
+            if (!primaryPath.empty() && norm == std::string(primaryPath)) {
+                continue;
+            }
+            if (std::find(out.begin(), out.end(), norm) == out.end()) {
+                out.push_back(norm);
+            }
+        }
+    };
+
+    // Сначала пытаемся найти fallback в ассетах проекта, затем системные.
+    pushIfExists("assets/fonts/NotoSansSymbols2-Regular.ttf");
+    pushIfExists("assets/fonts/NotoSans-Regular.ttf");
+    pushIfExists("assets/fonts/DejaVuSans.ttf");
+
+    pushIfExists("/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf");
+    pushIfExists("/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf");
+    pushIfExists("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+    pushIfExists("/usr/share/fonts/truetype/freefont/FreeSans.ttf");
+    pushIfExists("/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf");
+
+    return out;
+}
+
+const std::vector<std::string>& cachedUnicodeFallbackFontPaths(std::string_view cwd,
+                                                                std::string_view primaryPath) {
+    static std::unordered_map<std::string, std::vector<std::string>> cache{};
+    const std::string key = std::string(cwd) + "|" + std::string(primaryPath);
+    if (auto it = cache.find(key); it != cache.end()) {
+        return it->second;
+    }
+    return cache.emplace(key, resolveUnicodeFallbackFontPaths(cwd, primaryPath)).first->second;
+}
+
+FT_Face findFaceForCodepoint(FT_Face primary,
+                             const std::vector<FT_Face>& fallbacks,
+                             uint32_t cp) noexcept {
+    if (primary && FT_Get_Char_Index(primary, cp) != 0U) {
+        return primary;
+    }
+    for (FT_Face fb : fallbacks) {
+        if (fb && FT_Get_Char_Index(fb, cp) != 0U) {
+            return fb;
+        }
+    }
+    return nullptr;
+}
+
+int measureTextFt(FT_Face face,
+                  std::string_view text,
+                  const std::vector<FT_Face>* fallbacks = nullptr) {
     if (!face) {
         return 0;
     }
+
     int penX = 0;
-    for (char c : text) {
-        if (c == '\n') {
+    std::size_t pos = 0U;
+    while (pos < text.size()) {
+        uint32_t cp = 0U;
+        if (!readUtf8Codepoint(text, pos, cp)) {
             break;
         }
-        if (FT_Load_Char(face, static_cast<unsigned char>(c), FT_LOAD_RENDER) != 0) {
+        if (cp == static_cast<uint32_t>('\n')) {
+            break;
+        }
+
+        uint32_t renderCp = cp;
+        FT_Face drawFace = (fallbacks ? findFaceForCodepoint(face, *fallbacks, renderCp) : face);
+        if (!drawFace) {
+            const uint32_t alt = asciiFallbackCp(renderCp);
+            if (alt != renderCp) {
+                renderCp = alt;
+                drawFace = (fallbacks ? findFaceForCodepoint(face, *fallbacks, renderCp) : face);
+            }
+        }
+        if (!drawFace) {
             continue;
         }
-        penX += static_cast<int>(face->glyph->advance.x >> 6);
+        if (FT_Load_Char(drawFace, renderCp, FT_LOAD_RENDER) != 0) {
+            continue;
+        }
+        penX += static_cast<int>(drawFace->glyph->advance.x >> 6);
     }
     return penX;
 }
@@ -560,17 +731,46 @@ bool drawTextFt(RpiPixelCanvas& canvas,
         return false;
     }
 
-    const int ascent = static_cast<int>(face->size->metrics.ascender >> 6);
+    std::vector<FT_Face> fallbackFaces{};
+    for (const std::string& fbPath : cachedUnicodeFallbackFontPaths(cwd, path)) {
+        if (FT_Face fb = rt.face(fbPath, std::max(6, pixelSize)); fb) {
+            fallbackFaces.push_back(fb);
+        }
+    }
+
+    int ascent = static_cast<int>(face->size->metrics.ascender >> 6);
+    for (FT_Face fb : fallbackFaces) {
+        ascent = std::max(ascent, static_cast<int>(fb->size->metrics.ascender >> 6));
+    }
     int penX = x;
     const int baselineY = yTop + ascent;
-    for (char c : text) {
-        if (c == '\n') {
+
+    std::size_t pos = 0U;
+    while (pos < text.size()) {
+        uint32_t cp = 0U;
+        if (!readUtf8Codepoint(text, pos, cp)) {
             break;
         }
-        if (FT_Load_Char(face, static_cast<unsigned char>(c), FT_LOAD_RENDER) != 0) {
+        if (cp == static_cast<uint32_t>('\n')) {
+            break;
+        }
+
+        uint32_t renderCp = cp;
+        FT_Face drawFace = findFaceForCodepoint(face, fallbackFaces, renderCp);
+        if (!drawFace) {
+            const uint32_t alt = asciiFallbackCp(renderCp);
+            if (alt != renderCp) {
+                renderCp = alt;
+                drawFace = findFaceForCodepoint(face, fallbackFaces, renderCp);
+            }
+        }
+        if (!drawFace) {
             continue;
         }
-        FT_GlyphSlot g = face->glyph;
+        if (FT_Load_Char(drawFace, renderCp, FT_LOAD_RENDER) != 0) {
+            continue;
+        }
+        FT_GlyphSlot g = drawFace->glyph;
         const int gx = penX + g->bitmap_left;
         const int gy = baselineY - g->bitmap_top;
         for (int row = 0; row < static_cast<int>(g->bitmap.rows); ++row) {
@@ -1074,16 +1274,20 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
     RpiPixelCanvas& canvas = *ctx.canvas;
     canvas.clear(kBgMain);
 
+    // Для физического RPi-дисплея масштабируем UI на весь доступный framebuffer,
+    // без внешнего margin/letterbox. Так кадр не оставляет "поля" с текстом консоли.
+    const float canvasW = static_cast<float>(canvas.width());
+    const float canvasH = static_cast<float>(canvas.height());
     const render::UiFrameMetrics metrics = render::computeFrameMetrics(
         prepared,
-        static_cast<float>(canvas.width()),
-        static_cast<float>(canvas.height()),
-        10.0f,
-        16.0f,
-        10.0f,
-        80.0f,
-        4.0f,
-        8.0f);
+        canvasW,
+        canvasH,
+        std::max(1.0f, canvasW),
+        std::max(1.0f, canvasH),
+        0.0f,
+        1.0f,
+        1.0f,
+        1.0f);
 
     const UiLayoutNode* rootNode = &prepared.layoutTemplate->root;
     const RpiRgba defaultText = resolveColor(rootNode ? rootNode->defaultTextColor : "", kText);
@@ -1131,7 +1335,13 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 std::string path{};
                 if (resolveFontFilePath(fontSpec, ctx.cwd, path)) {
                     if (FT_Face face = rt.face(path, std::max(6, pixelSize)); face) {
-                        const int w = measureTextFt(face, text);
+                        std::vector<FT_Face> fallbackFaces{};
+                        for (const std::string& fbPath : cachedUnicodeFallbackFontPaths(ctx.cwd, path)) {
+                            if (FT_Face fb = rt.face(fbPath, std::max(6, pixelSize)); fb) {
+                                fallbackFaces.push_back(fb);
+                            }
+                        }
+                        const int w = measureTextFt(face, text, &fallbackFaces);
                         if (w > 0) {
                             return w;
                         }

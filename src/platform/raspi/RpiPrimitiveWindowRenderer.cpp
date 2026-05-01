@@ -155,6 +155,16 @@ public:
             }
         };
 
+        const bool coversFull = ((rotation == 0U || rotation == 180U) && w == width_ && h == height_) ||
+                                ((rotation == 90U || rotation == 270U) && w == height_ && h == width_);
+        if (!coversFull) {
+            for (uint16_t y = 0; y < height_; ++y) {
+                for (uint16_t x = 0; x < width_; ++x) {
+                    writePixel(x, y, 0U, 0U, 0U);
+                }
+            }
+        }
+
         for (uint16_t sy = 0; sy < h; ++sy) {
             const std::size_t srcRow = static_cast<std::size_t>(sy) * static_cast<std::size_t>(canvas.width());
             for (uint16_t sx = 0; sx < w; ++sx) {
