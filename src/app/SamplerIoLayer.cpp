@@ -47,8 +47,10 @@ bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) 
         rpiRenderer_ = std::make_unique<raspi::RpiPrimitiveWindowRenderer>();
         rpiInput_ = std::make_unique<raspi::RpiPrimitiveWindowInput>();
         raspi::RpiUiConfig rpiCfg{};
-        rpiCfg.width = 640;
-        rpiCfg.height = 480;
+        // Для физического framebuffer используем нативное разрешение панели.
+        // 0 => auto (xres/yres из /dev/fb0).
+        rpiCfg.width = 0;
+        rpiCfg.height = 0;
         rpiCfg.rotateDeg = config.rpiRotateDeg;
         rpiCfg.headless = false;
         rpiCfg.inputDevice = config.rpiInputDevice;

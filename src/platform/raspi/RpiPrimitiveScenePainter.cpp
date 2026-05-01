@@ -2,6 +2,7 @@
 
 #include "platform/render/PreparedLayoutUtils.h"
 #include "platform/render/RenderGeometry.h"
+#include "platform/render/VisualFxProcessor.h"
 #include "service/ui/layout/UiLayoutEngine.h"
 #include "app/AppDiagnostics.h"
 
@@ -9,6 +10,7 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 #include <filesystem>
 #include <optional>
@@ -188,6 +190,12 @@ std::string toLowerAscii(std::string s) {
         return static_cast<char>(std::tolower(c));
     });
     return s;
+}
+
+float textHashToValue01(std::string_view text) {
+    const std::size_t h = std::hash<std::string_view>{}(text);
+    const uint16_t bucket = static_cast<uint16_t>(h & 0xFFFFU);
+    return static_cast<float>(bucket) / 65535.0f;
 }
 
 [[maybe_unused]] bool hasImageExt(std::string_view path) {
@@ -814,6 +822,219 @@ std::string formatAnimFrameLabel(const UiAnimSlotComponent& anim, uint64_t tick)
     return std::string(buf);
 }
 
+const std::vector<UiLayoutNode::EffectSpec>& nodeEffectSpecs(const UiLayoutNode* node,
+                                                             const IUiComponent* component) {
+    static const std::vector<UiLayoutNode::EffectSpec> kEmpty{};
+    if (!node) {
+        return kEmpty;
+    }
+    if (const UiLayoutNode::StateSpec* st = resolveNodeState(node, component); st && !st->effects.empty()) {
+        return st->effects;
+    }
+    return node->effects;
+}
+
+std::vector<VisualFxRequest> buildNodeFxRequests(const UiLayoutNode* node,
+                                                 const IUiComponent* component,
+                                                 uint64_t nowMs,
+                                                 std::string_view nodeText) {
+    std::vector<VisualFxRequest> out{};
+    if (!node) {
+        return out;
+    }
+    const auto& specs = nodeEffectSpecs(node, component);
+    if (specs.empty()) {
+        return out;
+    }
+    out.reserve(specs.size());
+
+    VisualFxRequest base{};
+    base.nodeId = node->id;
+    base.instanceKey = component ? std::string(component->id()) : node->id;
+    base.nodeText = nodeText.empty() ? node->text : std::string(nodeText);
+    base.nowMs = nowMs;
+
+    if (const auto* knob = dynamic_cast<const UiKnobComponent*>(component)) {
+        base.hasValue01 = true;
+        base.value01 = std::clamp(knob->value01, 0.0f, 1.0f);
+        if (!knob->label.empty()) {
+            base.nodeText = knob->label;
+        }
+    } else if (const auto* sw = dynamic_cast<const UiSwitchComponent*>(component)) {
+        const uint16_t denom = std::max<uint16_t>(
+            1U,
+            static_cast<uint16_t>(sw->options.size() > 1U ? sw->options.size() - 1U : 1U));
+        base.hasValue01 = true;
+        base.value01 = static_cast<float>(sw->selectedIndex) / static_cast<float>(denom);
+        if (!sw->label.empty()) {
+            base.nodeText = sw->label;
+        }
+    } else if (const auto* anim = dynamic_cast<const UiAnimSlotComponent*>(component)) {
+        base.hasValue01 = true;
+        base.value01 = std::clamp(anim->intensity01, 0.0f, 1.0f);
+        if (!anim->label.empty()) {
+            base.nodeText = anim->label;
+        }
+    } else if (const auto* icon = dynamic_cast<const UiIconComponent*>(component)) {
+        if (!icon->path.empty()) {
+            base.hasValue01 = true;
+            base.value01 = textHashToValue01(icon->path);
+            base.nodeText = icon->path;
+        }
+    } else if (const auto* text = dynamic_cast<const UiTextComponent*>(component)) {
+        if (!text->text.empty()) {
+            base.hasValue01 = true;
+            base.value01 = textHashToValue01(text->text);
+            base.nodeText = text->text;
+        }
+    } else if (const auto* status = dynamic_cast<const UiStatusBarComponent*>(component)) {
+        if (!status->text.empty()) {
+            base.hasValue01 = true;
+            base.value01 = textHashToValue01(status->text);
+            base.nodeText = status->text;
+        }
+    }
+
+    for (const UiLayoutNode::EffectSpec& spec : specs) {
+        if (spec.type.empty()) {
+            continue;
+        }
+        VisualFxRequest req = base;
+        req.effect = spec.type;
+        req.effectColor = spec.effectColor;
+        req.effectTrigger = spec.effectTrigger;
+        req.effectTransition = spec.effectTransition;
+        req.effectTriggerOutMs = spec.effectTriggerOutMs;
+        req.effectIntervalMs = spec.effectIntervalMs;
+        req.effectAmount = spec.effectAmount;
+        req.effectSpeed = spec.effectSpeed;
+        out.push_back(std::move(req));
+    }
+    return out;
+}
+
+std::vector<VisualFxRequest> buildFxRequestsFromSpecs(const std::vector<UiLayoutNode::EffectSpec>& specs,
+                                                      std::string_view nodeId,
+                                                      std::string_view instanceKey,
+                                                      std::string_view nodeText,
+                                                      uint64_t nowMs) {
+    std::vector<VisualFxRequest> out{};
+    if (specs.empty()) {
+        return out;
+    }
+    out.reserve(specs.size());
+    for (const UiLayoutNode::EffectSpec& spec : specs) {
+        if (spec.type.empty()) {
+            continue;
+        }
+        VisualFxRequest req{};
+        req.nodeId = std::string(nodeId);
+        req.instanceKey = std::string(instanceKey);
+        req.nodeText = std::string(nodeText);
+        req.effect = spec.type;
+        req.effectColor = spec.effectColor;
+        req.effectTrigger = spec.effectTrigger;
+        req.effectTransition = spec.effectTransition;
+        req.effectTriggerOutMs = spec.effectTriggerOutMs;
+        req.effectIntervalMs = spec.effectIntervalMs;
+        req.effectAmount = spec.effectAmount;
+        req.effectSpeed = spec.effectSpeed;
+        req.nowMs = nowMs;
+        if (!nodeText.empty()) {
+            req.hasValue01 = true;
+            req.value01 = textHashToValue01(nodeText);
+        }
+        out.push_back(std::move(req));
+    }
+    return out;
+}
+
+bool isTypingEffect(const VisualFxRequest& req) {
+    return toLowerAscii(req.effect) == "typing";
+}
+
+float resolveTypingReveal01(VisualFxProcessor* visualFx, const std::vector<VisualFxRequest>& requests) {
+    if (!visualFx || requests.empty()) {
+        return 1.0f;
+    }
+    float reveal = 1.0f;
+    for (const VisualFxRequest& req : requests) {
+        if (!isTypingEffect(req)) {
+            continue;
+        }
+        const VisualFxTextRevealStyle style = visualFx->resolveTextRevealStyle(req);
+        if (style.active) {
+            reveal = std::min(reveal, std::clamp(style.reveal01, 0.0f, 1.0f));
+        }
+    }
+    return std::clamp(reveal, 0.0f, 1.0f);
+}
+
+void applyFxRequestsToRect(RpiPixelCanvas& canvas,
+                           const RpiRectI& rect,
+                           const std::vector<VisualFxRequest>& requests,
+                           VisualFxProcessor* visualFx) {
+    if (!visualFx || requests.empty() || rect.w <= 0 || rect.h <= 0) {
+        return;
+    }
+
+    const int x0 = std::max(0, rect.x);
+    const int y0 = std::max(0, rect.y);
+    const int x1 = std::min<int>(static_cast<int>(canvas.width()), rect.x + rect.w);
+    const int y1 = std::min<int>(static_cast<int>(canvas.height()), rect.y + rect.h);
+    const int w = x1 - x0;
+    const int h = y1 - y0;
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+
+    const auto& srcPixels = canvas.pixels();
+    std::vector<uint8_t> roi(static_cast<std::size_t>(w) * static_cast<std::size_t>(h) * 4U, 0U);
+    for (int yy = 0; yy < h; ++yy) {
+        const std::size_t srcRow = static_cast<std::size_t>(y0 + yy) * static_cast<std::size_t>(canvas.width());
+        const std::size_t dstRow = static_cast<std::size_t>(yy) * static_cast<std::size_t>(w) * 4U;
+        for (int xx = 0; xx < w; ++xx) {
+            const uint32_t px = srcPixels[srcRow + static_cast<std::size_t>(x0 + xx)];
+            const std::size_t d = dstRow + static_cast<std::size_t>(xx) * 4U;
+            roi[d + 0U] = static_cast<uint8_t>((px >> 24U) & 0xFFU);
+            roi[d + 1U] = static_cast<uint8_t>((px >> 16U) & 0xFFU);
+            roi[d + 2U] = static_cast<uint8_t>((px >> 8U) & 0xFFU);
+            roi[d + 3U] = static_cast<uint8_t>(px & 0xFFU);
+        }
+    }
+
+    VisualFxRgbaView view{};
+    view.pixels = roi.data();
+    view.width = static_cast<uint16_t>(std::min<int>(w, 65535));
+    view.height = static_cast<uint16_t>(std::min<int>(h, 65535));
+    view.strideBytes = static_cast<uint32_t>(static_cast<std::size_t>(w) * 4U);
+
+    bool changed = false;
+    for (const VisualFxRequest& req : requests) {
+        if (isTypingEffect(req)) {
+            continue;
+        }
+        changed = visualFx->applyRgba(view, req) || changed;
+    }
+    if (!changed) {
+        return;
+    }
+
+    auto& dstPixels = canvas.mutablePixels();
+    for (int yy = 0; yy < h; ++yy) {
+        const std::size_t dstRow = static_cast<std::size_t>(y0 + yy) * static_cast<std::size_t>(canvas.width());
+        const std::size_t srcRow = static_cast<std::size_t>(yy) * static_cast<std::size_t>(w) * 4U;
+        for (int xx = 0; xx < w; ++xx) {
+            const std::size_t s = srcRow + static_cast<std::size_t>(xx) * 4U;
+            const uint32_t packed = (static_cast<uint32_t>(roi[s + 0U]) << 24U) |
+                                    (static_cast<uint32_t>(roi[s + 1U]) << 16U) |
+                                    (static_cast<uint32_t>(roi[s + 2U]) << 8U) |
+                                    static_cast<uint32_t>(roi[s + 3U]);
+            dstPixels[dstRow + static_cast<std::size_t>(x0 + xx)] = packed;
+        }
+    }
+}
+
 } // namespace
 
 void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
@@ -848,6 +1069,24 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
     const uint16_t innerW = static_cast<uint16_t>(std::max<int>(1, static_cast<int>(metrics.frameWidthChars) - 2));
     const UiLayoutEngine::Result layout = UiLayoutEngine::arrange(prepared.layoutTemplate->root, innerW, metrics.innerHeightChars);
     const render::UiComponentIndex byId = render::buildComponentIndex(prepared);
+    const uint64_t nowMs = (ctx.nowMs > 0U)
+                               ? ctx.nowMs
+                               : static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                           std::chrono::steady_clock::now().time_since_epoch())
+                                                           .count());
+
+    auto buildFxForNode = [&](const UiLayoutNode* node,
+                              const IUiComponent* component,
+                              std::string_view nodeText) {
+        return buildNodeFxRequests(node, component, nowMs, nodeText);
+    };
+    auto applyNodeFx = [&](const UiLayoutNode* node,
+                           const IUiComponent* component,
+                           const RpiRectI& area,
+                           std::string_view nodeText) {
+        const std::vector<VisualFxRequest> requests = buildFxForNode(node, component, nodeText);
+        applyFxRequestsToRect(canvas, area, requests, ctx.visualFx);
+    };
 
     auto measureTextWidth = [&](std::string_view text,
                                 std::string_view fontSpec,
@@ -1073,7 +1312,15 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 } else {
                     text = node->text;
                 }
-                drawTextInRect(RpiRectI{rect.x + 2, rect.y, std::max(0, rect.w - 4), rect.h},
+                const RpiRectI textRect{rect.x + 2, rect.y, std::max(0, rect.w - 4), rect.h};
+                const std::vector<VisualFxRequest> requests = buildFxForNode(node, component, text);
+                const float reveal01 = resolveTypingReveal01(ctx.visualFx, requests);
+                if (reveal01 < 0.999f && !text.empty()) {
+                    const std::size_t keep = static_cast<std::size_t>(
+                        std::floor(static_cast<double>(text.size()) * static_cast<double>(reveal01) + 1e-6));
+                    text.resize(std::min<std::size_t>(text.size(), keep));
+                }
+                drawTextInRect(textRect,
                                text,
                                fontSpec,
                                fontPx,
@@ -1083,6 +1330,7 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                                textColor,
                                nodeOpacity,
                                wrap);
+                applyFxRequestsToRect(canvas, textRect, requests, ctx.visualFx);
             } break;
 
             case UiLayoutNodeType::Separator: {
@@ -1117,6 +1365,7 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                                    false);
                     y += lineH;
                 }
+                applyNodeFx(node, component, rect, node->text);
             } break;
 
             case UiLayoutNodeType::Knob: {
@@ -1150,6 +1399,7 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 if (knob->selected) {
                     canvas.strokeRect(RpiRectI{rect.x + 1, rect.y + 1, rect.w - 2, rect.h - 2}, kAccent, 1, nodeOpacity);
                 }
+                applyNodeFx(node, component, rect, knob->label);
             } break;
 
             case UiLayoutNodeType::Switch: {
@@ -1165,10 +1415,11 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                                std::max(1, textScale - 1),
                                UiLayoutAlign::Start,
                                UiLayoutJustify::Start,
-                               textColor,
-                               nodeOpacity,
-                               true);
+                                   textColor,
+                                   nodeOpacity,
+                                   true);
                 canvas.strokeRect(rect, borderColor, 1, nodeOpacity);
+                applyNodeFx(node, component, rect, text);
             } break;
 
             case UiLayoutNodeType::Icon: {
@@ -1193,6 +1444,7 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                     canvas.line(iconRect.x, iconRect.y, iconRect.x + iconRect.w - 1, iconRect.y + iconRect.h - 1, borderColor, nodeOpacity);
                     canvas.line(iconRect.x + iconRect.w - 1, iconRect.y, iconRect.x, iconRect.y + iconRect.h - 1, borderColor, nodeOpacity);
                 }
+                applyNodeFx(node, component, iconRect, path);
             } break;
 
             case UiLayoutNodeType::AnimSlot: {
@@ -1244,6 +1496,7 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                                    nodeOpacity,
                                    false);
                 }
+                applyNodeFx(node, component, slot, anim->label);
             } break;
 
             case UiLayoutNodeType::Waveform: {
@@ -1287,6 +1540,7 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                                             std::clamp(wave->playhead01, 0.0f, 1.0f) *
                                             static_cast<float>(std::max(1, area.w - 1))));
                 canvas.line(px, area.y, px, area.y + area.h - 1, kAccent, nodeOpacity);
+                applyNodeFx(node, component, area, node->text);
             } break;
 
             case UiLayoutNodeType::TrackView:
@@ -1328,7 +1582,7 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
             hudRect.y = cy - hudRect.h / 2;
         }
 
-        const RpiRgba hudText = resolveColor(hud.textColor, defaultText);
+        const RpiRgba hudTextColor = resolveColor(hud.textColor, defaultText);
         const RpiRgba hudBorder = resolveColor(hud.borderColor, frameBorder);
         const RpiRgba hudBg = resolveColor(hud.backgroundColor, kBgPanel);
         const float baseOpacity = std::clamp(hud.opacity, 0.0f, 1.0f);
@@ -1340,19 +1594,34 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
             static_cast<int>(std::lround((hud.fontSize > 0.0f ? hud.fontSize : 14.0f) / 7.0f)),
             1,
             5);
-        drawTextInRect(RpiRectI{hudRect.x + static_cast<int>(hud.padding),
-                                 hudRect.y + static_cast<int>(hud.padding),
-                                 std::max(1, hudRect.w - static_cast<int>(hud.padding) * 2),
-                                 std::max(1, hudRect.h - static_cast<int>(hud.padding) * 2)},
-                       hud.text,
+        const RpiRectI hudTextRect{hudRect.x + static_cast<int>(hud.padding),
+                                   hudRect.y + static_cast<int>(hud.padding),
+                                   std::max(1, hudRect.w - static_cast<int>(hud.padding) * 2),
+                                   std::max(1, hudRect.h - static_cast<int>(hud.padding) * 2)};
+        std::vector<VisualFxRequest> hudFxRequests = buildFxRequestsFromSpecs(
+            hud.textEffects,
+            "hud_overlay",
+            std::string("hud#") + std::to_string(hud.fxInstanceId),
+            hud.text,
+            nowMs);
+        std::string hudText = hud.text;
+        const float hudReveal01 = resolveTypingReveal01(ctx.visualFx, hudFxRequests);
+        if (hudReveal01 < 0.999f && !hudText.empty()) {
+            const std::size_t keep = static_cast<std::size_t>(
+                std::floor(static_cast<double>(hudText.size()) * static_cast<double>(hudReveal01) + 1e-6));
+            hudText.resize(std::min<std::size_t>(hudText.size(), keep));
+        }
+        drawTextInRect(hudTextRect,
+                       hudText,
                        resolveFontSpec(hud.font),
                        hud.fontSize,
                        hudScale,
                        hud.align,
                        hud.justify,
-                       hudText,
+                       hudTextColor,
                        baseOpacity,
                        hud.textWrap);
+        applyFxRequestsToRect(canvas, hudTextRect, hudFxRequests, ctx.visualFx);
     }
 }
 

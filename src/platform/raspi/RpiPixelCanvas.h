@@ -26,6 +26,7 @@ public:
     [[nodiscard]] uint16_t width() const noexcept { return width_; }
     [[nodiscard]] uint16_t height() const noexcept { return height_; }
     [[nodiscard]] const std::vector<uint32_t>& pixels() const noexcept { return pixels_; }
+    [[nodiscard]] std::vector<uint32_t>& mutablePixels() noexcept { return pixels_; }
 
     void clear(RpiRgba color);
     void fillRect(const RpiRectI& rect, RpiRgba color, float alpha01 = 1.0f);
@@ -48,4 +49,3 @@ private:
 };
 
 } // namespace avantgarde::raspi
-

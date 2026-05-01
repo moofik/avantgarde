@@ -1,6 +1,7 @@
 #include "platform/raspi/RpiPrimitiveWindowRenderer.h"
 
 #include "app/AppDiagnostics.h"
+#include "platform/render/VisualFxProcessor.h"
 #include "platform/raspi/RpiPrimitiveScenePainter.h"
 
 #include <algorithm>
@@ -72,10 +73,13 @@ public:
         }
 
         AppDiagnostics::logf(AppLogLevel::Info,
-                             "RpiPrimitiveWindowRenderer: framebuffer ready (%ux%u, bpp=%u)",
+                             "RpiPrimitiveWindowRenderer: framebuffer ready (mode=%ux%u, target=%ux%u, bpp=%u, line=%u)",
+                             static_cast<unsigned>(var_.xres),
+                             static_cast<unsigned>(var_.yres),
                              static_cast<unsigned>(width_),
                              static_cast<unsigned>(height_),
-                             static_cast<unsigned>(var_.bits_per_pixel));
+                             static_cast<unsigned>(var_.bits_per_pixel),
+                             static_cast<unsigned>(fix_.line_length));
         return true;
     }
 
@@ -116,7 +120,9 @@ public:
                 return;
             }
             uint8_t* dstRow = fbMem_ + static_cast<std::size_t>(dy) * static_cast<std::size_t>(fix_.line_length);
-            if (var_.bits_per_pixel == 16) {
+            const uint8_t bpp = static_cast<uint8_t>(var_.bits_per_pixel);
+            const uint8_t bytesPerPixel = static_cast<uint8_t>(bpp / 8U);
+            if (bpp == 16U) {
                 const uint16_t rr =
                     static_cast<uint16_t>((static_cast<uint32_t>(r) * ((1U << var_.red.length) - 1U)) / 255U);
                 const uint16_t gg = static_cast<uint16_t>(
@@ -137,7 +143,15 @@ public:
                     (static_cast<uint32_t>(b) * ((1U << var_.blue.length) - 1U) / 255U) << var_.blue.offset;
                 const uint32_t aa =
                     (var_.transp.length > 0U) ? (((1U << var_.transp.length) - 1U) << var_.transp.offset) : 0U;
-                reinterpret_cast<uint32_t*>(dstRow)[dx] = rr | gg | bb | aa;
+                const uint32_t packed = rr | gg | bb | aa;
+                uint8_t* dst = dstRow + static_cast<std::size_t>(dx) * static_cast<std::size_t>(bytesPerPixel);
+                if (bytesPerPixel >= 4U) {
+                    std::memcpy(dst, &packed, 4U);
+                } else if (bytesPerPixel == 3U) {
+                    dst[0] = static_cast<uint8_t>(packed & 0xFFU);
+                    dst[1] = static_cast<uint8_t>((packed >> 8U) & 0xFFU);
+                    dst[2] = static_cast<uint8_t>((packed >> 16U) & 0xFFU);
+                }
             }
         };
 
@@ -188,6 +202,7 @@ private:
 struct RpiPrimitiveWindowRenderer::Impl {
     RpiUiConfig config{};
     RpiPixelCanvas canvas{};
+    VisualFxProcessor visualFx{};
     std::string cwd{};
     bool initialized{false};
     bool warnedFallback{false};
@@ -267,7 +282,11 @@ void RpiPrimitiveWindowRenderer::renderPreparedLayout(const UiPreparedLayout& pr
 
     RpiPrimitiveScenePaintContext ctx{};
     ctx.canvas = &impl_->canvas;
+    ctx.visualFx = &impl_->visualFx;
     ctx.frameTick = impl_->frameTick;
+    ctx.nowMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
     ctx.startTs = impl_->startTs;
     ctx.cwd = impl_->cwd;
     renderPreparedLayoutScene(ctx, prepared);
