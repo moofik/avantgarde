@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 
 #if defined(__linux__)
 #include <fcntl.h>
@@ -101,46 +102,72 @@ public:
     [[nodiscard]] uint16_t width() const noexcept { return width_; }
     [[nodiscard]] uint16_t height() const noexcept { return height_; }
 
-    void present(const RpiPixelCanvas& canvas) noexcept {
+    void present(const RpiPixelCanvas& canvas, uint16_t rotateDeg) noexcept {
         if (!ready()) {
             return;
         }
-        const uint16_t w = std::min<uint16_t>(canvas.width(), width_);
-        const uint16_t h = std::min<uint16_t>(canvas.height(), height_);
+        const uint16_t rotation = static_cast<uint16_t>(rotateDeg % 360U);
+        const uint16_t w = std::min<uint16_t>(canvas.width(), (rotation == 90U || rotation == 270U) ? height_ : width_);
+        const uint16_t h = std::min<uint16_t>(canvas.height(), (rotation == 90U || rotation == 270U) ? width_ : height_);
         const auto& src = canvas.pixels();
 
-        for (uint16_t y = 0; y < h; ++y) {
-            uint8_t* dstRow = fbMem_ + static_cast<std::size_t>(y) * static_cast<std::size_t>(fix_.line_length);
-            const std::size_t srcRow = static_cast<std::size_t>(y) * static_cast<std::size_t>(canvas.width());
-            for (uint16_t x = 0; x < w; ++x) {
-                const uint32_t px = src[srcRow + static_cast<std::size_t>(x)];
+        auto writePixel = [&](uint16_t dx, uint16_t dy, uint8_t r, uint8_t g, uint8_t b) {
+            if (dx >= width_ || dy >= height_) {
+                return;
+            }
+            uint8_t* dstRow = fbMem_ + static_cast<std::size_t>(dy) * static_cast<std::size_t>(fix_.line_length);
+            if (var_.bits_per_pixel == 16) {
+                const uint16_t rr =
+                    static_cast<uint16_t>((static_cast<uint32_t>(r) * ((1U << var_.red.length) - 1U)) / 255U);
+                const uint16_t gg = static_cast<uint16_t>(
+                    (static_cast<uint32_t>(g) * ((1U << var_.green.length) - 1U)) / 255U);
+                const uint16_t bb = static_cast<uint16_t>(
+                    (static_cast<uint32_t>(b) * ((1U << var_.blue.length) - 1U)) / 255U);
+                const uint16_t packed = static_cast<uint16_t>(
+                    (rr << var_.red.offset) |
+                    (gg << var_.green.offset) |
+                    (bb << var_.blue.offset));
+                reinterpret_cast<uint16_t*>(dstRow)[dx] = packed;
+            } else {
+                const uint32_t rr =
+                    (static_cast<uint32_t>(r) * ((1U << var_.red.length) - 1U) / 255U) << var_.red.offset;
+                const uint32_t gg =
+                    (static_cast<uint32_t>(g) * ((1U << var_.green.length) - 1U) / 255U) << var_.green.offset;
+                const uint32_t bb =
+                    (static_cast<uint32_t>(b) * ((1U << var_.blue.length) - 1U) / 255U) << var_.blue.offset;
+                const uint32_t aa =
+                    (var_.transp.length > 0U) ? (((1U << var_.transp.length) - 1U) << var_.transp.offset) : 0U;
+                reinterpret_cast<uint32_t*>(dstRow)[dx] = rr | gg | bb | aa;
+            }
+        };
+
+        for (uint16_t sy = 0; sy < h; ++sy) {
+            const std::size_t srcRow = static_cast<std::size_t>(sy) * static_cast<std::size_t>(canvas.width());
+            for (uint16_t sx = 0; sx < w; ++sx) {
+                const uint32_t px = src[srcRow + static_cast<std::size_t>(sx)];
                 const uint8_t r = static_cast<uint8_t>((px >> 24U) & 0xFFU);
                 const uint8_t g = static_cast<uint8_t>((px >> 16U) & 0xFFU);
                 const uint8_t b = static_cast<uint8_t>((px >> 8U) & 0xFFU);
-
-                if (var_.bits_per_pixel == 16) {
-                    const uint16_t rr =
-                        static_cast<uint16_t>((static_cast<uint32_t>(r) * ((1U << var_.red.length) - 1U)) / 255U);
-                    const uint16_t gg = static_cast<uint16_t>(
-                        (static_cast<uint32_t>(g) * ((1U << var_.green.length) - 1U)) / 255U);
-                    const uint16_t bb = static_cast<uint16_t>(
-                        (static_cast<uint32_t>(b) * ((1U << var_.blue.length) - 1U)) / 255U);
-                    const uint16_t packed = static_cast<uint16_t>(
-                        (rr << var_.red.offset) |
-                        (gg << var_.green.offset) |
-                        (bb << var_.blue.offset));
-                    reinterpret_cast<uint16_t*>(dstRow)[x] = packed;
-                } else {
-                    const uint32_t rr =
-                        (static_cast<uint32_t>(r) * ((1U << var_.red.length) - 1U) / 255U) << var_.red.offset;
-                    const uint32_t gg =
-                        (static_cast<uint32_t>(g) * ((1U << var_.green.length) - 1U) / 255U) << var_.green.offset;
-                    const uint32_t bb =
-                        (static_cast<uint32_t>(b) * ((1U << var_.blue.length) - 1U) / 255U) << var_.blue.offset;
-                    const uint32_t aa =
-                        (var_.transp.length > 0U) ? (((1U << var_.transp.length) - 1U) << var_.transp.offset) : 0U;
-                    reinterpret_cast<uint32_t*>(dstRow)[x] = rr | gg | bb | aa;
+                uint16_t dx = sx;
+                uint16_t dy = sy;
+                switch (rotation) {
+                    case 90U:
+                        dx = static_cast<uint16_t>(height_ - 1U - sy);
+                        dy = sx;
+                        break;
+                    case 180U:
+                        dx = static_cast<uint16_t>(width_ - 1U - sx);
+                        dy = static_cast<uint16_t>(height_ - 1U - sy);
+                        break;
+                    case 270U:
+                        dx = sy;
+                        dy = static_cast<uint16_t>(width_ - 1U - sx);
+                        break;
+                    case 0U:
+                    default:
+                        break;
                 }
+                writePixel(dx, dy, r, g, b);
             }
         }
     }
@@ -161,6 +188,7 @@ private:
 struct RpiPrimitiveWindowRenderer::Impl {
     RpiUiConfig config{};
     RpiPixelCanvas canvas{};
+    std::string cwd{};
     bool initialized{false};
     bool warnedFallback{false};
     uint64_t frameTick{0U};
@@ -184,6 +212,11 @@ bool RpiPrimitiveWindowRenderer::init(const RpiUiConfig& config, std::string& er
     impl_->frameTick = 0U;
     impl_->startTs = std::chrono::steady_clock::now();
     impl_->warnedFallback = false;
+    try {
+        impl_->cwd = std::filesystem::current_path().string();
+    } catch (...) {
+        impl_->cwd.clear();
+    }
 
     if (config.headless) {
         impl_->canvas.resize(config.width, config.height);
@@ -201,7 +234,9 @@ bool RpiPrimitiveWindowRenderer::init(const RpiUiConfig& config, std::string& er
         impl_->initialized = false;
         return false;
     }
-    impl_->canvas.resize(impl_->fb.width(), impl_->fb.height());
+    const bool swapAxes = (config.rotateDeg == 90U || config.rotateDeg == 270U);
+    impl_->canvas.resize(swapAxes ? impl_->fb.height() : impl_->fb.width(),
+                         swapAxes ? impl_->fb.width() : impl_->fb.height());
     impl_->initialized = true;
     return true;
 #else
@@ -234,11 +269,12 @@ void RpiPrimitiveWindowRenderer::renderPreparedLayout(const UiPreparedLayout& pr
     ctx.canvas = &impl_->canvas;
     ctx.frameTick = impl_->frameTick;
     ctx.startTs = impl_->startTs;
+    ctx.cwd = impl_->cwd;
     renderPreparedLayoutScene(ctx, prepared);
 
 #if defined(__linux__)
     if (!impl_->config.headless) {
-        impl_->fb.present(impl_->canvas);
+        impl_->fb.present(impl_->canvas, impl_->config.rotateDeg);
     }
 #endif
 }

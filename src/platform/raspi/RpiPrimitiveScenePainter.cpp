@@ -6,11 +6,24 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
+
+#if defined(AVANTGARDE_HAS_LIBPNG)
+#include <png.h>
+#endif
+
+#if defined(AVANTGARDE_HAS_FREETYPE)
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#endif
 
 namespace avantgarde::raspi {
 namespace {
@@ -168,6 +181,375 @@ float resolveNodeOpacity(const UiLayoutNode* node, const IUiComponent* component
     }
     return std::clamp(out, 0.0f, 1.0f);
 }
+
+std::string toLowerAscii(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+    return s;
+}
+
+[[maybe_unused]] bool hasImageExt(std::string_view path) {
+    namespace fs = std::filesystem;
+    std::string ext = toLowerAscii(fs::path(path).extension().string());
+    return ext == ".png";
+}
+
+[[maybe_unused]] bool hasFontExt(std::string_view path) {
+    namespace fs = std::filesystem;
+    std::string ext = toLowerAscii(fs::path(path).extension().string());
+    return ext == ".ttf" || ext == ".otf" || ext == ".ttc" || ext == ".otc";
+}
+
+[[maybe_unused]] std::vector<std::string> buildAssetPathCandidates(std::string_view spec, std::string_view cwd, bool imageMode) {
+    namespace fs = std::filesystem;
+    std::vector<std::string> out{};
+    if (spec.empty()) {
+        return out;
+    }
+    auto pushUnique = [&out](const fs::path& p) {
+        const std::string s = p.lexically_normal().string();
+        if (s.empty()) {
+            return;
+        }
+        if (std::find(out.begin(), out.end(), s) == out.end()) {
+            out.push_back(s);
+        }
+    };
+
+    const fs::path specPath(spec);
+    const fs::path cwdPath(cwd);
+
+    if (specPath.is_absolute()) {
+        pushUnique(specPath);
+    } else {
+        pushUnique(cwdPath / specPath);
+    }
+
+    if (specPath.parent_path().empty()) {
+        pushUnique(cwdPath / "assets" / (imageMode ? "images" : "fonts") / specPath);
+        if (imageMode) {
+            pushUnique(cwdPath / "assets" / "sprites" / specPath);
+        }
+    }
+
+    if (imageMode && std::string(spec).rfind("images/", 0) == 0U) {
+        pushUnique(cwdPath / "assets" / specPath);
+    }
+    if (imageMode && std::string(spec).rfind("sprites/", 0) == 0U) {
+        pushUnique(cwdPath / "assets" / specPath);
+    }
+    if (!imageMode && std::string(spec).rfind("fonts/", 0) == 0U) {
+        pushUnique(cwdPath / "assets" / specPath);
+    }
+    return out;
+}
+
+std::string resolveFontSpec(std::string_view raw) {
+    const std::string low = toLowerAscii(std::string(raw));
+    if (low == "gothic") {
+        return "assets/fonts/gothic-pixel-font.ttf";
+    }
+    if (low == "medieval" || low == "medieval_ui") {
+        return "assets/fonts/MedievalTimes-AL7l6.ttf";
+    }
+    if (low == "default" || low == "body" || low == "mono") {
+        return {};
+    }
+    return std::string(raw);
+}
+
+std::string nodeFontSpec(const UiLayoutNode* node, const IUiComponent* component) {
+    if (!node) {
+        return {};
+    }
+    if (const UiLayoutNode::StateSpec* st = resolveNodeState(node, component); st && !st->font.empty()) {
+        return st->font;
+    }
+    return node->font;
+}
+
+float nodeFontSize(const UiLayoutNode* node, const IUiComponent* component, float fallbackPx) {
+    if (!node) {
+        return fallbackPx;
+    }
+    if (const UiLayoutNode::StateSpec* st = resolveNodeState(node, component); st && st->fontSize > 0.0f) {
+        return st->fontSize;
+    }
+    if (node->fontSize > 0.0f) {
+        return node->fontSize;
+    }
+    return fallbackPx;
+}
+
+struct RpiImage {
+    int w{0};
+    int h{0};
+    std::vector<RpiRgba> pixels{};
+};
+
+#if defined(AVANTGARDE_HAS_LIBPNG)
+bool loadPngRgba(const std::string& path, RpiImage& out) {
+    FILE* fp = std::fopen(path.c_str(), "rb");
+    if (!fp) {
+        return false;
+    }
+    png_structp png = png_create_read_struct(PNG_LIBPNG_VER_STRING, nullptr, nullptr, nullptr);
+    if (!png) {
+        std::fclose(fp);
+        return false;
+    }
+    png_infop info = png_create_info_struct(png);
+    if (!info) {
+        png_destroy_read_struct(&png, nullptr, nullptr);
+        std::fclose(fp);
+        return false;
+    }
+    if (setjmp(png_jmpbuf(png))) {
+        png_destroy_read_struct(&png, &info, nullptr);
+        std::fclose(fp);
+        return false;
+    }
+
+    png_init_io(png, fp);
+    png_read_info(png, info);
+
+    png_uint_32 width = 0;
+    png_uint_32 height = 0;
+    int bitDepth = 0;
+    int colorType = 0;
+    png_get_IHDR(png, info, &width, &height, &bitDepth, &colorType, nullptr, nullptr, nullptr);
+
+    if (bitDepth == 16) png_set_strip_16(png);
+    if (colorType == PNG_COLOR_TYPE_PALETTE) png_set_palette_to_rgb(png);
+    if (colorType == PNG_COLOR_TYPE_GRAY && bitDepth < 8) png_set_expand_gray_1_2_4_to_8(png);
+    if (png_get_valid(png, info, PNG_INFO_tRNS)) png_set_tRNS_to_alpha(png);
+    if (colorType == PNG_COLOR_TYPE_RGB ||
+        colorType == PNG_COLOR_TYPE_GRAY ||
+        colorType == PNG_COLOR_TYPE_PALETTE) {
+        png_set_filler(png, 0xFF, PNG_FILLER_AFTER);
+    }
+    if (colorType == PNG_COLOR_TYPE_GRAY || colorType == PNG_COLOR_TYPE_GRAY_ALPHA) {
+        png_set_gray_to_rgb(png);
+    }
+
+    png_read_update_info(png, info);
+    const png_size_t rowBytes = png_get_rowbytes(png, info);
+    std::vector<uint8_t> raw(rowBytes * static_cast<std::size_t>(height));
+    std::vector<png_bytep> rows(static_cast<std::size_t>(height));
+    for (std::size_t y = 0; y < static_cast<std::size_t>(height); ++y) {
+        rows[y] = raw.data() + y * rowBytes;
+    }
+    png_read_image(png, rows.data());
+
+    png_destroy_read_struct(&png, &info, nullptr);
+    std::fclose(fp);
+
+    out.w = static_cast<int>(width);
+    out.h = static_cast<int>(height);
+    out.pixels.resize(static_cast<std::size_t>(out.w) * static_cast<std::size_t>(out.h));
+    for (int y = 0; y < out.h; ++y) {
+        const uint8_t* row = raw.data() + static_cast<std::size_t>(y) * rowBytes;
+        for (int x = 0; x < out.w; ++x) {
+            const std::size_t idx = static_cast<std::size_t>(x) * 4U;
+            out.pixels[static_cast<std::size_t>(y) * static_cast<std::size_t>(out.w) + static_cast<std::size_t>(x)] =
+                RpiRgba{row[idx + 0], row[idx + 1], row[idx + 2], row[idx + 3]};
+        }
+    }
+    return true;
+}
+#endif
+
+const RpiImage* loadImageCached(std::string_view spec, std::string_view cwd) {
+    static std::unordered_map<std::string, RpiImage> cache{};
+    static std::unordered_map<std::string, bool> failed{};
+    (void)cwd;
+    const std::string raw(spec);
+    if (raw.empty()) {
+        return nullptr;
+    }
+    if (auto it = cache.find(raw); it != cache.end()) {
+        return &it->second;
+    }
+    if (failed.find(raw) != failed.end()) {
+        return nullptr;
+    }
+#if defined(AVANTGARDE_HAS_LIBPNG)
+    const std::vector<std::string> candidates = buildAssetPathCandidates(raw, cwd, true);
+    for (const std::string& c : candidates) {
+        if (!hasImageExt(c)) {
+            continue;
+        }
+        RpiImage img{};
+        if (loadPngRgba(c, img) && img.w > 0 && img.h > 0) {
+            cache.emplace(raw, std::move(img));
+            return &cache.find(raw)->second;
+        }
+    }
+#endif
+    failed.emplace(raw, true);
+    return nullptr;
+}
+
+void drawImageFit(RpiPixelCanvas& canvas, const RpiRectI& target, const RpiImage& img, float alpha01) {
+    if (target.w <= 0 || target.h <= 0 || img.w <= 0 || img.h <= 0) {
+        return;
+    }
+    const float sx = static_cast<float>(target.w) / static_cast<float>(img.w);
+    const float sy = static_cast<float>(target.h) / static_cast<float>(img.h);
+    const float scale = std::min(sx, sy);
+    const int drawW = std::max(1, static_cast<int>(std::floor(static_cast<float>(img.w) * scale)));
+    const int drawH = std::max(1, static_cast<int>(std::floor(static_cast<float>(img.h) * scale)));
+    const int offX = target.x + (target.w - drawW) / 2;
+    const int offY = target.y + (target.h - drawH) / 2;
+
+    for (int y = 0; y < drawH; ++y) {
+        const int srcY = std::clamp(static_cast<int>((static_cast<float>(y) / static_cast<float>(drawH)) * img.h), 0, img.h - 1);
+        for (int x = 0; x < drawW; ++x) {
+            const int srcX = std::clamp(static_cast<int>((static_cast<float>(x) / static_cast<float>(drawW)) * img.w), 0, img.w - 1);
+            const RpiRgba px = img.pixels[static_cast<std::size_t>(srcY) * static_cast<std::size_t>(img.w) + static_cast<std::size_t>(srcX)];
+            canvas.fillRect(RpiRectI{offX + x, offY + y, 1, 1}, px, alpha01);
+        }
+    }
+}
+
+#if defined(AVANTGARDE_HAS_FREETYPE)
+class FreetypeRuntime final {
+public:
+    FreetypeRuntime() {
+        if (FT_Init_FreeType(&lib_) == 0) {
+            ok_ = true;
+        }
+    }
+
+    ~FreetypeRuntime() {
+        for (auto& kv : faces_) {
+            if (kv.second) {
+                FT_Done_Face(kv.second);
+            }
+        }
+        faces_.clear();
+        if (ok_) {
+            FT_Done_FreeType(lib_);
+        }
+    }
+
+    bool ok() const noexcept { return ok_; }
+
+    FT_Face face(const std::string& path, int pixelSize) {
+        if (!ok_ || path.empty() || pixelSize <= 0) {
+            return nullptr;
+        }
+        const std::string key = path + "#" + std::to_string(pixelSize);
+        if (auto it = faces_.find(key); it != faces_.end()) {
+            return it->second;
+        }
+        FT_Face face = nullptr;
+        if (FT_New_Face(lib_, path.c_str(), 0, &face) != 0 || !face) {
+            return nullptr;
+        }
+        if (FT_Set_Pixel_Sizes(face, 0, static_cast<FT_UInt>(pixelSize)) != 0) {
+            FT_Done_Face(face);
+            return nullptr;
+        }
+        faces_.emplace(key, face);
+        return face;
+    }
+
+private:
+    FT_Library lib_{};
+    bool ok_{false};
+    std::unordered_map<std::string, FT_Face> faces_{};
+};
+
+FreetypeRuntime& freetypeRuntime() {
+    static FreetypeRuntime rt{};
+    return rt;
+}
+
+bool resolveFontFilePath(std::string_view spec, std::string_view cwd, std::string& outPath) {
+    outPath.clear();
+    const std::string resolved = resolveFontSpec(spec);
+    if (resolved.empty()) {
+        return false;
+    }
+    const auto candidates = buildAssetPathCandidates(resolved, cwd, false);
+    for (const std::string& c : candidates) {
+        if (hasFontExt(c)) {
+            outPath = c;
+            return true;
+        }
+    }
+    return false;
+}
+
+int measureTextFt(FT_Face face, std::string_view text) {
+    if (!face) {
+        return 0;
+    }
+    int penX = 0;
+    for (char c : text) {
+        if (c == '\n') {
+            break;
+        }
+        if (FT_Load_Char(face, static_cast<unsigned char>(c), FT_LOAD_RENDER) != 0) {
+            continue;
+        }
+        penX += static_cast<int>(face->glyph->advance.x >> 6);
+    }
+    return penX;
+}
+
+bool drawTextFt(RpiPixelCanvas& canvas,
+                int x,
+                int yTop,
+                std::string_view text,
+                std::string_view fontSpec,
+                int pixelSize,
+                RpiRgba color,
+                float alpha01,
+                std::string_view cwd) {
+    FreetypeRuntime& rt = freetypeRuntime();
+    if (!rt.ok()) {
+        return false;
+    }
+    std::string path{};
+    if (!resolveFontFilePath(fontSpec, cwd, path)) {
+        return false;
+    }
+    FT_Face face = rt.face(path, std::max(6, pixelSize));
+    if (!face) {
+        return false;
+    }
+
+    const int ascent = static_cast<int>(face->size->metrics.ascender >> 6);
+    int penX = x;
+    const int baselineY = yTop + ascent;
+    for (char c : text) {
+        if (c == '\n') {
+            break;
+        }
+        if (FT_Load_Char(face, static_cast<unsigned char>(c), FT_LOAD_RENDER) != 0) {
+            continue;
+        }
+        FT_GlyphSlot g = face->glyph;
+        const int gx = penX + g->bitmap_left;
+        const int gy = baselineY - g->bitmap_top;
+        for (int row = 0; row < static_cast<int>(g->bitmap.rows); ++row) {
+            for (int col = 0; col < static_cast<int>(g->bitmap.width); ++col) {
+                const uint8_t a = g->bitmap.buffer[row * g->bitmap.pitch + col];
+                if (a == 0) {
+                    continue;
+                }
+                const float a01 = (static_cast<float>(a) / 255.0f) * alpha01;
+                canvas.fillRect(RpiRectI{gx + col, gy + row, 1, 1}, color, a01);
+            }
+        }
+        penX += static_cast<int>(g->advance.x >> 6);
+    }
+    return true;
+}
+#endif
 
 struct Glyph3x5 {
     std::array<uint8_t, 5> rows{};
@@ -375,9 +757,9 @@ std::string composeSwitchText(const UiSwitchComponent& sw) {
     return out;
 }
 
-std::string formatAnimFrameLabel(const UiAnimSlotComponent& anim, uint64_t tick) {
+std::size_t selectAnimFrameIndex(const UiAnimSlotComponent& anim, uint64_t tick) noexcept {
     if (anim.frames.empty()) {
-        return "anim";
+        return 0U;
     }
     std::size_t idx = 0;
     if (anim.playbackMode == UiAnimSlotComponent::PlaybackMode::Scrub) {
@@ -389,6 +771,14 @@ std::string formatAnimFrameLabel(const UiAnimSlotComponent& anim, uint64_t tick)
     } else {
         idx = static_cast<std::size_t>(tick % static_cast<uint64_t>(anim.frames.size()));
     }
+    return idx;
+}
+
+std::string formatAnimFrameLabel(const UiAnimSlotComponent& anim, uint64_t tick) {
+    if (anim.frames.empty()) {
+        return "anim";
+    }
+    const std::size_t idx = selectAnimFrameIndex(anim, tick);
     char buf[32]{};
     std::snprintf(buf, sizeof(buf), "frame:%u", static_cast<unsigned>(idx + 1U));
     return std::string(buf);
@@ -429,20 +819,146 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
     const UiLayoutEngine::Result layout = UiLayoutEngine::arrange(prepared.layoutTemplate->root, innerW, metrics.innerHeightChars);
     const render::UiComponentIndex byId = render::buildComponentIndex(prepared);
 
+    auto measureTextWidth = [&](std::string_view text,
+                                std::string_view fontSpec,
+                                int pixelSize,
+                                int fallbackScale) -> int {
+        if (text.empty()) {
+            return 0;
+        }
+#if defined(AVANTGARDE_HAS_FREETYPE)
+        if (!fontSpec.empty()) {
+            FreetypeRuntime& rt = freetypeRuntime();
+            if (rt.ok()) {
+                std::string path{};
+                if (resolveFontFilePath(fontSpec, ctx.cwd, path)) {
+                    if (FT_Face face = rt.face(path, std::max(6, pixelSize)); face) {
+                        const int w = measureTextFt(face, text);
+                        if (w > 0) {
+                            return w;
+                        }
+                    }
+                }
+            }
+        }
+#else
+        (void)fontSpec;
+        (void)pixelSize;
+#endif
+        return TinyFontPainter::textWidth(text, fallbackScale);
+    };
+
+    auto drawTextLine = [&](int x,
+                            int y,
+                            std::string_view text,
+                            std::string_view fontSpec,
+                            int pixelSize,
+                            int fallbackScale,
+                            RpiRgba color,
+                            float opacity01) {
+#if defined(AVANTGARDE_HAS_FREETYPE)
+        if (!fontSpec.empty()) {
+            if (drawTextFt(canvas, x, y, text, fontSpec, pixelSize, color, opacity01, ctx.cwd)) {
+                return;
+            }
+        }
+#else
+        (void)fontSpec;
+        (void)pixelSize;
+#endif
+        TinyFontPainter::drawText(canvas, x, y, text, fallbackScale, color, opacity01);
+    };
+
     auto drawTextInRect = [&](const RpiRectI& rect,
                               std::string_view text,
-                              int scale,
+                              std::string_view fontSpec,
+                              float fontPx,
+                              int fallbackScale,
                               UiLayoutAlign align,
+                              UiLayoutJustify justify,
                               RpiRgba color,
                               float opacity01,
                               bool wrap) {
         if (rect.w <= 0 || rect.h <= 0 || text.empty()) {
             return;
         }
-        const int lineH = TinyFontPainter::lineHeight(scale);
-        const int y = rect.y + std::max(0, (rect.h - lineH) / 2);
+        const int px = (fontPx > 0.0f) ? static_cast<int>(std::lround(fontPx)) : (fallbackScale * 7);
+        const int lineH = std::max(
+            TinyFontPainter::lineHeight(fallbackScale),
+            std::max(6, px + std::max(1, px / 5)));
+
+        std::vector<std::string> lines{};
         if (!wrap) {
-            const int textW = TinyFontPainter::textWidth(text, scale);
+            lines.emplace_back(text);
+        } else {
+            std::size_t start = 0U;
+            while (start < text.size()) {
+                while (start < text.size() && text[start] == ' ') {
+                    ++start;
+                }
+                if (start >= text.size()) {
+                    break;
+                }
+                std::size_t end = start;
+                std::size_t fitEnd = start;
+                int fitWidth = 0;
+                while (end < text.size()) {
+                    std::size_t next = text.find(' ', end);
+                    if (next == std::string_view::npos) {
+                        next = text.size();
+                    }
+                    const std::string_view chunk = text.substr(start, next - start);
+                    const int chunkW = measureTextWidth(chunk, fontSpec, px, fallbackScale);
+                    if (chunkW > rect.w && fitEnd > start) {
+                        break;
+                    }
+                    if (chunkW > rect.w && fitEnd == start) {
+                        fitEnd = next;
+                        fitWidth = chunkW;
+                        break;
+                    }
+                    fitEnd = next;
+                    fitWidth = chunkW;
+                    if (next >= text.size()) {
+                        break;
+                    }
+                    end = next + 1U;
+                    if (fitWidth >= rect.w) {
+                        break;
+                    }
+                }
+                if (fitEnd <= start) {
+                    break;
+                }
+                lines.emplace_back(text.substr(start, fitEnd - start));
+                start = fitEnd;
+            }
+        }
+        if (lines.empty()) {
+            return;
+        }
+
+        const std::size_t maxLines = static_cast<std::size_t>(std::max(1, rect.h / lineH));
+        if (lines.size() > maxLines) {
+            lines.resize(maxLines);
+        }
+        const int blockH = lineH * static_cast<int>(lines.size());
+        int y = rect.y;
+        switch (justify) {
+            case UiLayoutJustify::Center:
+                y = rect.y + std::max(0, (rect.h - blockH) / 2);
+                break;
+            case UiLayoutJustify::End:
+            case UiLayoutJustify::SpaceBetween:
+                y = rect.y + std::max(0, rect.h - blockH);
+                break;
+            case UiLayoutJustify::Start:
+            default:
+                break;
+        }
+
+        for (const std::string& line : lines) {
+            const int textW = measureTextWidth(line, fontSpec, px, fallbackScale);
             int x = rect.x;
             switch (align) {
                 case UiLayoutAlign::Center:
@@ -455,63 +971,11 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 default:
                     break;
             }
-            TinyFontPainter::drawText(canvas, x, y, text, scale, color, opacity01);
-            return;
-        }
-
-        std::size_t start = 0U;
-        int lineY = y;
-        while (start < text.size() && lineY + lineH <= rect.y + rect.h) {
-            std::size_t end = start;
-            std::size_t fitEnd = start;
-            int fitWidth = 0;
-            while (end < text.size()) {
-                std::size_t next = text.find(' ', end);
-                if (next == std::string_view::npos) {
-                    next = text.size();
-                }
-                const std::string_view chunk = text.substr(start, next - start);
-                const int chunkW = TinyFontPainter::textWidth(chunk, scale);
-                if (chunkW > rect.w && fitEnd > start) {
-                    break;
-                }
-                if (chunkW > rect.w && fitEnd == start) {
-                    fitEnd = next;
-                    fitWidth = chunkW;
-                    break;
-                }
-                fitEnd = next;
-                fitWidth = chunkW;
-                if (next >= text.size()) {
-                    break;
-                }
-                end = next + 1U;
-                if (fitWidth >= rect.w) {
-                    break;
-                }
-            }
-            if (fitEnd <= start) {
+            drawTextLine(x, y, line, fontSpec, px, fallbackScale, color, opacity01);
+            y += lineH;
+            if (y + lineH > rect.y + rect.h + 1) {
                 break;
             }
-            const std::string_view line = text.substr(start, fitEnd - start);
-            int x = rect.x;
-            switch (align) {
-                case UiLayoutAlign::Center:
-                    x = rect.x + std::max(0, (rect.w - fitWidth) / 2);
-                    break;
-                case UiLayoutAlign::End:
-                    x = rect.x + std::max(0, rect.w - fitWidth - 1);
-                    break;
-                case UiLayoutAlign::Start:
-                default:
-                    break;
-            }
-            TinyFontPainter::drawText(canvas, x, lineY, line, scale, color, opacity01);
-            start = fitEnd;
-            while (start < text.size() && text[start] == ' ') {
-                ++start;
-            }
-            lineY += lineH;
         }
     };
 
@@ -552,6 +1016,8 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
         const RpiRgba textColor = nodeTextColor(node, component, defaultText);
         const RpiRgba borderColor = nodeBorderColor(node, component, frameBorder);
         const int textScale = fontScaleFromNode(node);
+        const std::string fontSpec = resolveFontSpec(nodeFontSpec(node, component));
+        const float fontPx = nodeFontSize(node, component, 0.0f);
 
         switch (node->type) {
             case UiLayoutNodeType::StatusBar:
@@ -575,8 +1041,11 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 }
                 drawTextInRect(RpiRectI{rect.x + 2, rect.y, std::max(0, rect.w - 4), rect.h},
                                text,
+                               fontSpec,
+                               fontPx,
                                textScale,
                                align,
+                               node->justify,
                                textColor,
                                nodeOpacity,
                                wrap);
@@ -604,8 +1073,11 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                     const RpiRgba rowColor = selected ? kAccent : textColor;
                     drawTextInRect(RpiRectI{rect.x + 2, y, std::max(0, rect.w - 4), lineH},
                                    row,
+                                   fontSpec,
+                                   (fontPx > 0.0f) ? std::max(6.0f, fontPx * 0.86f) : 0.0f,
                                    std::max(1, textScale - 1),
                                    UiLayoutAlign::Start,
+                                   UiLayoutJustify::Start,
                                    rowColor,
                                    nodeOpacity,
                                    false);
@@ -622,8 +1094,11 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 if (!knob->label.empty()) {
                     drawTextInRect(RpiRectI{rect.x, rect.y, rect.w, labelH},
                                    knob->label,
+                                   fontSpec,
+                                   (fontPx > 0.0f) ? std::max(6.0f, fontPx * 0.86f) : 0.0f,
                                    std::max(1, textScale - 1),
                                    node->align,
+                                   UiLayoutJustify::Start,
                                    textColor,
                                    nodeOpacity,
                                    false);
@@ -651,8 +1126,11 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 const std::string text = composeSwitchText(*sw);
                 drawTextInRect(RpiRectI{rect.x + 1, rect.y + 1, std::max(0, rect.w - 2), std::max(0, rect.h - 2)},
                                text,
+                               fontSpec,
+                               (fontPx > 0.0f) ? std::max(6.0f, fontPx * 0.86f) : 0.0f,
                                std::max(1, textScale - 1),
                                UiLayoutAlign::Start,
+                               UiLayoutJustify::Start,
                                textColor,
                                nodeOpacity,
                                true);
@@ -661,18 +1139,25 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
 
             case UiLayoutNodeType::Icon: {
                 const auto* icon = dynamic_cast<const UiIconComponent*>(component);
-                const RpiRectI iconRect{rect.x + 2, rect.y + 2, std::max(4, rect.w - 4), std::max(4, rect.h - 4)};
-                canvas.strokeRect(iconRect, borderColor, 1, nodeOpacity);
-                canvas.line(iconRect.x, iconRect.y, iconRect.x + iconRect.w - 1, iconRect.y + iconRect.h - 1, borderColor, nodeOpacity);
-                canvas.line(iconRect.x + iconRect.w - 1, iconRect.y, iconRect.x, iconRect.y + iconRect.h - 1, borderColor, nodeOpacity);
+                const int pad = std::max(0, static_cast<int>(node->padding));
+                const RpiRectI iconRect{
+                    rect.x + 2 + pad,
+                    rect.y + 2 + pad,
+                    std::max(4, rect.w - 4 - pad * 2),
+                    std::max(4, rect.h - 4 - pad * 2)};
+                std::string path{};
                 if (icon && !icon->path.empty()) {
-                    drawTextInRect(RpiRectI{iconRect.x, iconRect.y + iconRect.h + 1, iconRect.w, TinyFontPainter::lineHeight(1)},
-                                   "ICON",
-                                   1,
-                                   UiLayoutAlign::Center,
-                                   textColor,
-                                   nodeOpacity,
-                                   false);
+                    path = icon->path;
+                } else if (!node->assetPath.empty()) {
+                    path = node->assetPath;
+                }
+                const RpiImage* image = loadImageCached(path, ctx.cwd);
+                if (image) {
+                    drawImageFit(canvas, iconRect, *image, nodeOpacity);
+                } else {
+                    canvas.strokeRect(iconRect, borderColor, 1, nodeOpacity);
+                    canvas.line(iconRect.x, iconRect.y, iconRect.x + iconRect.w - 1, iconRect.y + iconRect.h - 1, borderColor, nodeOpacity);
+                    canvas.line(iconRect.x + iconRect.w - 1, iconRect.y, iconRect.x, iconRect.y + iconRect.h - 1, borderColor, nodeOpacity);
                 }
             } break;
 
@@ -681,12 +1166,21 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 if (!anim) {
                     break;
                 }
-                const RpiRectI slot{
-                    rect.x + 2,
-                    rect.y + 2,
-                    std::max(10, std::min(128, rect.w - 4)),
-                    std::max(10, std::min(128, rect.h - 4))};
-                canvas.strokeRect(slot, borderColor, 1, nodeOpacity);
+                const int pad = std::max(0, static_cast<int>(node->padding));
+                RpiRectI slot{
+                    rect.x + 2 + pad,
+                    rect.y + 2 + pad,
+                    std::max(10, std::min(128, rect.w - 4 - pad * 2)),
+                    std::max(10, std::min(128, rect.h - 4 - pad * 2))};
+                if (node->animShowFrame) {
+                    const int frameW = std::max(1, static_cast<int>(std::lround(node->animFrameWidth)));
+                    canvas.strokeRect(slot, borderColor, frameW, nodeOpacity);
+                    const int inset = std::max(2, frameW + 1);
+                    slot.x += inset;
+                    slot.y += inset;
+                    slot.w = std::max(1, slot.w - inset * 2);
+                    slot.h = std::max(1, slot.h - inset * 2);
+                }
                 const uint64_t ms = static_cast<uint64_t>(
                     std::chrono::duration_cast<std::chrono::milliseconds>(
                         std::chrono::steady_clock::now() - ctx.startTs)
@@ -694,14 +1188,28 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                 const float fps = std::max(0.1f, anim->fps);
                 const uint64_t tick = static_cast<uint64_t>(
                     std::floor(static_cast<double>(ms) * static_cast<double>(fps) / 1000.0));
-                const std::string animLabel = formatAnimFrameLabel(*anim, tick);
-                drawTextInRect(RpiRectI{slot.x, slot.y + slot.h / 2 - TinyFontPainter::lineHeight(1) / 2, slot.w, TinyFontPainter::lineHeight(1)},
-                               animLabel,
-                               1,
-                               UiLayoutAlign::Center,
-                               textColor,
-                               nodeOpacity,
-                               false);
+                bool drawn = false;
+                if (!anim->frames.empty()) {
+                    const std::size_t idx = selectAnimFrameIndex(*anim, tick);
+                    const std::string& framePath = anim->frames[idx];
+                    if (const RpiImage* img = loadImageCached(framePath, ctx.cwd)) {
+                        drawImageFit(canvas, slot, *img, nodeOpacity);
+                        drawn = true;
+                    }
+                }
+                if (!drawn) {
+                    const std::string animLabel = formatAnimFrameLabel(*anim, tick);
+                    drawTextInRect(RpiRectI{slot.x, slot.y, slot.w, slot.h},
+                                   animLabel,
+                                   fontSpec,
+                                   (fontPx > 0.0f) ? std::max(6.0f, fontPx * 0.86f) : 0.0f,
+                                   1,
+                                   UiLayoutAlign::Center,
+                                   UiLayoutJustify::Center,
+                                   textColor,
+                                   nodeOpacity,
+                                   false);
+                }
             } break;
 
             case UiLayoutNodeType::Waveform: {
@@ -803,8 +1311,11 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                                  std::max(1, hudRect.w - static_cast<int>(hud.padding) * 2),
                                  std::max(1, hudRect.h - static_cast<int>(hud.padding) * 2)},
                        hud.text,
+                       resolveFontSpec(hud.font),
+                       hud.fontSize,
                        hudScale,
                        hud.align,
+                       hud.justify,
                        hudText,
                        baseOpacity,
                        hud.textWrap);
@@ -812,4 +1323,3 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
 }
 
 } // namespace avantgarde::raspi
-

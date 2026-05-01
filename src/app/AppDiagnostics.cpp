@@ -31,6 +31,7 @@ namespace {
 std::mutex gLogMutex{};
 std::atomic<int> gLogFd{-1};
 std::atomic<bool> gHandlersInstalled{false};
+std::atomic<bool> gStderrEnabled{true};
 
 const char* levelToString(AppLogLevel level) noexcept {
     switch (level) {
@@ -54,7 +55,9 @@ void writeRawLine(int fd, std::string_view text) noexcept {
 void writeRawLineBoth(std::string_view text) noexcept {
     const int fd = gLogFd.load(std::memory_order_acquire);
     writeRawLine(fd, text);
-    writeRawLine(STDERR_FILENO, text);
+    if (gStderrEnabled.load(std::memory_order_acquire)) {
+        writeRawLine(STDERR_FILENO, text);
+    }
 }
 
 std::string timestampNow() {
@@ -206,7 +209,9 @@ void AppDiagnostics::log(AppLogLevel level, std::string_view message) noexcept {
     if (fd >= 0) {
         writeRawLine(fd, line);
     }
-    writeRawLine(STDERR_FILENO, line);
+    if (gStderrEnabled.load(std::memory_order_acquire)) {
+        writeRawLine(STDERR_FILENO, line);
+    }
 }
 
 void AppDiagnostics::logf(AppLogLevel level, const char* fmt, ...) noexcept {
@@ -219,6 +224,10 @@ void AppDiagnostics::logf(AppLogLevel level, const char* fmt, ...) noexcept {
     std::vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
     log(level, buffer);
+}
+
+void AppDiagnostics::setStderrEnabled(bool enabled) noexcept {
+    gStderrEnabled.store(enabled, std::memory_order_release);
 }
 
 } // namespace avantgarde

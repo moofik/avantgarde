@@ -49,6 +49,7 @@ bool SamplerIoLayer::init(const SamplerIoConfig& config, std::string& errorOut) 
         raspi::RpiUiConfig rpiCfg{};
         rpiCfg.width = 640;
         rpiCfg.height = 480;
+        rpiCfg.rotateDeg = config.rpiRotateDeg;
         rpiCfg.headless = false;
         rpiCfg.inputDevice = config.rpiInputDevice;
         if (!rpiRenderer_->init(rpiCfg, errorOut)) {

@@ -13,16 +13,12 @@
 using namespace avantgarde;
 
 int main(int argc, char** argv) {
-    const char* logPathEnv = std::getenv("AVANTGARDE_LOG_PATH");
-    (void)AppDiagnostics::init(logPathEnv ? logPathEnv : "logs/avantgarde.log");
-    AppDiagnostics::installCrashHandlers();
-    AppDiagnostics::logf(AppLogLevel::Info, "main start argc=%d", argc);
-
     SamplerUiMode uiMode = SamplerUiMode::GbWindow;
     UiTheme uiTheme = UiTheme::Default;
     bool uiThemeProvided = false;
     uint8_t trackCount = 4;
     std::string rpiInputDevice = "/dev/input/event0";
+    uint16_t rpiRotateDeg = 0;
 
     int argi = 1;
     while (argi < argc) {
@@ -93,6 +89,28 @@ int main(int argc, char** argv) {
             argi += 2;
             continue;
         }
+        if (arg.rfind("--rpi-rotate=", 0) == 0) {
+            char* end = nullptr;
+            const long parsed = std::strtol(arg.c_str() + 13, &end, 10);
+            if (!end || *end != '\0' || (parsed != 0 && parsed != 90 && parsed != 180 && parsed != 270)) {
+                std::printf("Invalid --rpi-rotate value: %s (expected 0|90|180|270)\n", arg.c_str());
+                return 1;
+            }
+            rpiRotateDeg = static_cast<uint16_t>(parsed);
+            ++argi;
+            continue;
+        }
+        if (arg == "--rpi-rotate" && (argi + 1) < argc) {
+            char* end = nullptr;
+            const long parsed = std::strtol(argv[argi + 1], &end, 10);
+            if (!end || *end != '\0' || (parsed != 0 && parsed != 90 && parsed != 180 && parsed != 270)) {
+                std::printf("Invalid --rpi-rotate value: %s (expected 0|90|180|270)\n", argv[argi + 1]);
+                return 1;
+            }
+            rpiRotateDeg = static_cast<uint16_t>(parsed);
+            argi += 2;
+            continue;
+        }
         if (arg == "--ui") {
             std::printf("Missing value for --ui (expected: gb-window|window|rpi-wrapper)\n");
             return 1;
@@ -109,6 +127,10 @@ int main(int argc, char** argv) {
             std::printf("Missing value for --rpi-input (expected: /dev/input/eventX or empty)\n");
             return 1;
         }
+        if (arg == "--rpi-rotate") {
+            std::printf("Missing value for --rpi-rotate (expected: 0|90|180|270)\n");
+            return 1;
+        }
         if (arg.rfind("--", 0) == 0) {
             std::printf("Unknown option: %s\n", arg.c_str());
             return 1;
@@ -116,11 +138,26 @@ int main(int argc, char** argv) {
         break;
     }
 
+    // В framebuffer-режиме лог в stderr визуально конфликтует с кадром на /dev/fb0.
+    // По умолчанию для rpi-wrapper оставляем только файловый лог.
+    // Можно форсировать stderr обратно через AVANTGARDE_LOG_STDERR=1.
+    if (uiMode == SamplerUiMode::RpiWrapper) {
+        const char* stderrEnv = std::getenv("AVANTGARDE_LOG_STDERR");
+        const bool keepStderr = (stderrEnv && std::string_view(stderrEnv) == "1");
+        AppDiagnostics::setStderrEnabled(keepStderr);
+    }
+
+    const char* logPathEnv = std::getenv("AVANTGARDE_LOG_PATH");
+    (void)AppDiagnostics::init(logPathEnv ? logPathEnv : "logs/avantgarde.log");
+    AppDiagnostics::installCrashHandlers();
+    AppDiagnostics::logf(AppLogLevel::Info, "main start argc=%d", argc);
+
     SamplerAppConfig config{};
     config.io.mode = uiMode;
     config.io.theme = uiTheme;
     config.io.themeProvided = uiThemeProvided;
     config.io.rpiInputDevice = rpiInputDevice;
+    config.io.rpiRotateDeg = rpiRotateDeg;
     config.engine.trackCount = trackCount;
     config.audioHost = createDefaultAudioHost();
     if (!config.audioHost) {

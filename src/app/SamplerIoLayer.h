@@ -45,6 +45,8 @@ struct SamplerIoConfig {
     // Linux evdev устройство для Raspberry wrapper (например /dev/input/event0).
     // Пустая строка отключает физический ввод в rpi-wrapper.
     std::string rpiInputDevice{"/dev/input/event0"};
+    // Поворот rpi framebuffer кадра: 0/90/180/270.
+    uint16_t rpiRotateDeg{0};
 };
 
 // Слой ввода/вывода:

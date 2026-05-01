@@ -35,7 +35,11 @@ public:
 
     // Форматированная запись.
     static void logf(AppLogLevel level, const char* fmt, ...) noexcept;
+
+    // Включить/выключить дублирование логов в STDERR.
+    // Полезно для framebuffer-режима (rpi-wrapper), где вывод в консоль
+    // визуально конфликтует с отрисовкой на /dev/fb0.
+    static void setStderrEnabled(bool enabled) noexcept;
 };
 
 } // namespace avantgarde
-

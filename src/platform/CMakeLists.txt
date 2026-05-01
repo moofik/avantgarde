@@ -68,4 +68,19 @@ endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(ALSA REQUIRED)
     target_link_libraries(avantgarde_platform PRIVATE ALSA::ALSA)
+
+    # Опциональные зависимости для "богатого" rpi-render:
+    # - PNG: декод иконок/спрайтов в icon + anim_slot
+    # - FreeType: рендер TTF шрифтов на framebuffer
+    find_package(PNG)
+    if(PNG_FOUND)
+        target_link_libraries(avantgarde_platform PRIVATE PNG::PNG)
+        target_compile_definitions(avantgarde_platform PRIVATE AVANTGARDE_HAS_LIBPNG=1)
+    endif()
+
+    find_package(Freetype)
+    if(Freetype_FOUND)
+        target_link_libraries(avantgarde_platform PRIVATE Freetype::Freetype)
+        target_compile_definitions(avantgarde_platform PRIVATE AVANTGARDE_HAS_FREETYPE=1)
+    endif()
 endif()

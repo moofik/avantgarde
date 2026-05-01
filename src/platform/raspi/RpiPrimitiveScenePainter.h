@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <chrono>
+#include <string>
 
 #include "contracts/UiPreparedLayout.h"
 #include "platform/raspi/RpiPixelCanvas.h"
@@ -13,6 +14,7 @@ struct RpiPrimitiveScenePaintContext {
     RpiPixelCanvas* canvas{nullptr};
     uint64_t frameTick{0U};
     std::chrono::steady_clock::time_point startTs{};
+    std::string cwd{};
 };
 
 // Полная отрисовка prepared-layout кадра в пиксельный canvas.
@@ -20,4 +22,3 @@ void renderPreparedLayoutScene(const RpiPrimitiveScenePaintContext& ctx,
                                const UiPreparedLayout& prepared);
 
 } // namespace avantgarde::raspi
-
